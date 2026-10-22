@@ -32,7 +32,7 @@ The game is Australian Powerball's, as the Starfall spec asks: 7 numbers from 35
 
 ## The nine divisions and the prize pool
 
-The divisions and the pool allocation are Australian Powerball's. The allocation is the one The Lott publishes for draws from 1410 on; the no-winner rules are from the SA Lotteries Powerball Rules (an unwon Division 1 jackpots; an unwon Division 2–8 goes to the next lower division; rounding surplus goes to the Division 1 pool).
+The divisions and the pool allocation are Australian Powerball's. The allocation is the one [The Lott publishes](https://www.thelott.com/about/prize-pool) for draws from 1410 (25 May 2023) on; the no-winner rules are the Australian Powerball rules' (e.g. [WA Lotteries Commission (Powerball) Rules, rr. 22–24](https://www.legislation.wa.gov.au/legislation/prod/filestore.nsf/FileURL/mrdoc_29235.htm/$FILE/Lotteries%20Commission%20(Powerball)%20Rules%201996%20-%20%5B04-c0-01%5D.html), and the same in the SA rules): an unwon Division 1 jackpots; an unwon lower division goes to the next lower division with a winner; rounding surplus adjusts the Division 1 pool.
 
 | Division | Winning combination | Share of the pool |
 |---|---|---|
