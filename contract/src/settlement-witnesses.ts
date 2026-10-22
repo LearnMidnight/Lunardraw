@@ -11,6 +11,7 @@ import { emptyTicket, randomScalar } from './settlement-tickets.js';
  * - A player buying a ticket sets `pendingTicket` (one game) or
  *   `pendingTickets` (up to `maxGames()` games in one transaction), and
  *   optionally `sealingRandomness` (fresh randomness is drawn otherwise).
+ * - A syndicate's creator sets `creatorSecret` (for `buySyndicateTickets`).
  * - The settler sets `settling`: a draw's tickets, decrypted from the chain
  *   with the settlement secret, in index order (see `decryptDrawTickets`).
  * - Anyone else (finalising, paying, voiding, refunding) needs nothing.
@@ -24,6 +25,7 @@ export type SettlementPrivateState = {
   readonly pendingTicket?: TicketPreimage;
   readonly pendingTickets?: readonly TicketPreimage[];
   readonly sealingRandomness?: bigint;
+  readonly creatorSecret?: Uint8Array;
   readonly settling?: { readonly drawId: bigint; readonly tickets: readonly TicketPreimage[] };
 };
 
@@ -38,6 +40,11 @@ export const settlementWitnesses = {
   organiserSecret({ privateState }: Ctx): [SettlementPrivateState, Uint8Array] {
     if (privateState.organiserSecret === undefined) throw new Error('Starfall: no organiser secret in private state');
     return [privateState, privateState.organiserSecret];
+  },
+
+  creatorSecret({ privateState }: Ctx): [SettlementPrivateState, Uint8Array] {
+    if (privateState.creatorSecret === undefined) throw new Error('Starfall: no syndicate creator secret in private state');
+    return [privateState, privateState.creatorSecret];
   },
 
   newTicket({ privateState }: Ctx): [SettlementPrivateState, TicketPreimage] {

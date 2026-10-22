@@ -13,10 +13,17 @@ export const MAX_PAYEES = 3;
 /** Shares are in basis points: 10000 is the whole prize. */
 export const WHOLE = 10_000;
 
-/** A payee as plain values: a 32-byte unshielded address and a share in basis points. */
-export type PlainPayee = { address: Uint8Array; share: number };
+/**
+ * A payee as plain values: a 32-byte unshielded address, or a syndicate id,
+ * with a share in basis points.
+ */
+export type PlainPayee = { address?: Uint8Array; syndicate?: number | bigint; share: number };
 
-const NO_PAYEE: Payee = { address: { bytes: new Uint8Array(32) }, share: 0n };
+const ZERO_ADDRESS = new Uint8Array(32);
+const NO_PAYEE: Payee = { address: { bytes: ZERO_ADDRESS }, share: 0n, syndicate: 0n };
+
+/** The payees of a syndicate's own ticket: the syndicate, for all of it. */
+export const syndicatePayees = (syndicate: number | bigint): PlainPayee[] => [{ syndicate, share: WHOLE }];
 
 /**
  * Build a Starfall ticket (one line) for draw `drawId`, paid to `payees`: a
@@ -37,10 +44,16 @@ export const makeTicket = (
   if (list.length < 1 || list.length > MAX_PAYEES) throw new Error(`a ticket has 1 to ${MAX_PAYEES} payees`);
   for (const p of list) {
     if (!Number.isInteger(p.share) || p.share < 1 || p.share > WHOLE) throw new Error('each share is 1..10000 basis points');
-    if (p.address.length !== 32) throw new Error('an address is 32 bytes');
+    if (p.syndicate !== undefined && p.syndicate !== 0 && p.syndicate !== 0n) {
+      if (p.address !== undefined) throw new Error('a syndicate payee has no address');
+    } else if (p.address === undefined || p.address.length !== 32) throw new Error('an address is 32 bytes');
   }
   if (list.reduce((a, p) => a + p.share, 0) !== WHOLE) throw new Error('shares must add up to 10000');
-  const out: Payee[] = list.map((p) => ({ address: { bytes: p.address }, share: BigInt(p.share) }));
+  const out: Payee[] = list.map((p) => ({
+    address: { bytes: p.address ?? ZERO_ADDRESS },
+    share: BigInt(p.share),
+    syndicate: BigInt(p.syndicate ?? 0),
+  }));
   while (out.length < MAX_PAYEES) out.push(NO_PAYEE);
   return {
     drawId: BigInt(drawId),
@@ -148,7 +161,7 @@ export type ExpectedSettlement = {
   prizes: bigint[];
   /** Rollover after this draw (into the next draw's jackpot). */
   carry: bigint;
-  /** Total owed to each payee address (hex), over all winning tickets. */
+  /** Total owed to each payee address (hex) or syndicate ("syndicate:<id>"), over all winning tickets. */
   payouts: Map<string, bigint>;
   /** Division of each ticket, in index order (0 for no prize). */
   divisions: number[];
@@ -178,9 +191,13 @@ export const expectedSettlement = (
     const amounts = splitPrize(prizes[divisions[i] - 1], t.payees.map((p) => p.share));
     t.payees.forEach((p, j) => {
       if (amounts[j] === 0n) return;
-      const k = hex(p.address.bytes);
+      // A syndicate's part is keyed "syndicate:<id>"; its members' shares are worked out separately.
+      const k = p.syndicate !== 0n ? `syndicate:${p.syndicate}` : hex(p.address.bytes);
       payouts.set(k, (payouts.get(k) ?? 0n) + amounts[j]);
     });
   });
   return { winners, sales, fee, pool, prizes, carry, payouts, divisions };
 };
+
+/** A member's part of an amount owed to its syndicate: floor(amount x shares / totalShares), as the contract pays it. */
+export const memberPart = (amount: bigint, shares: bigint, totalShares: bigint): bigint => (amount * shares) / totalShares;

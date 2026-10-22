@@ -236,6 +236,70 @@ export class SettlementSimulator {
     return txs;
   }
 
+  /** Open a syndicate for draw `n`; returns its id. */
+  createSyndicate(
+    n: bigint,
+    creatorSecret: Uint8Array,
+    sharePrice: bigint,
+    totalShares: bigint,
+    games: bigint,
+    joinDeadline: bigint,
+  ): bigint {
+    return this.run(this.anyone, (ctx) =>
+      this.contract.impureCircuits.createSyndicate(
+        ctx,
+        n,
+        pureCircuits.creatorCommitmentOf(creatorSecret),
+        sharePrice,
+        totalShares,
+        games,
+        joinDeadline,
+      ),
+    );
+  }
+
+  /** Buy shares in a syndicate, paid to `payTo`; returns the member's index. */
+  joinSyndicate(syndicate: bigint, shares: bigint, payTo: Uint8Array): bigint {
+    return this.run(this.anyone, (ctx) => this.contract.impureCircuits.joinSyndicate(ctx, syndicate, shares, { bytes: payTo }));
+  }
+
+  /** The creator buys games for the syndicate (at most `maxGames()` per call). */
+  buySyndicateTickets(syndicate: bigint, creatorSecret: Uint8Array, ts: readonly TicketPreimage[]): bigint {
+    return this.run({ creatorSecret, pendingTickets: ts }, (ctx) =>
+      this.contract.impureCircuits.buySyndicateTickets(ctx, syndicate, BigInt(ts.length)),
+    );
+  }
+
+  paySyndicateMember(entitlement: Uint8Array, payee: bigint, member: bigint): bigint {
+    return this.run(this.anyone, (ctx) => this.contract.impureCircuits.paySyndicateMember(ctx, entitlement, payee, member));
+  }
+
+  refundSyndicateUnspent(syndicate: bigint, member: bigint): bigint {
+    return this.run(this.anyone, (ctx) => this.contract.impureCircuits.refundSyndicateUnspent(ctx, syndicate, member));
+  }
+
+  refundSyndicateVoid(syndicate: bigint, member: bigint): bigint {
+    return this.run(this.anyone, (ctx) => this.contract.impureCircuits.refundSyndicateVoid(ctx, syndicate, member));
+  }
+
+  /** Pay every member of every syndicate owed from the paid entitlements of draw `n`; returns the payments made. */
+  payAllSyndicateMembers(n: bigint): number {
+    const l = this.getLedger();
+    let paid = 0;
+    for (const [id, e] of l.entitlements) {
+      if (e.drawId !== n || !e.paid) continue;
+      e.payees.forEach((p, j) => {
+        if (p.syndicate === 0n || !l.syndicatePots.member(pureCircuits.potId(id, BigInt(j)))) return;
+        const sy = l.syndicates.lookup(p.syndicate);
+        for (let m = 0n; m < sy.members; m++) {
+          this.paySyndicateMember(id, BigInt(j), m);
+          paid++;
+        }
+      });
+    }
+    return paid;
+  }
+
   requestDraw(n: bigint, seed: Uint8Array, as: SettlementPrivateState = this.organiser): void {
     const none = { is_some: false, value: { salesClose: 0n, seedCommitment: new Uint8Array(32) } };
     this.run(as, (ctx) => this.contract.impureCircuits.requestDraw(ctx, n, seed, none));
@@ -287,8 +351,8 @@ export class SettlementSimulator {
 
   /**
    * What the settlement engine does after a draw's numbers are in: decrypt
-   * every ticket, settle them batch by batch, finalise, and pay every
-   * entitlement. Returns the number of batches it took.
+   * every ticket, settle them batch by batch, finalise, pay every
+   * entitlement and every syndicate member. Returns the number of batches it took.
    */
   settleAll(n: bigint): number {
     const tickets = this.decryptDrawTickets(n);
@@ -299,6 +363,7 @@ export class SettlementSimulator {
     }
     this.finaliseDraw(n);
     for (const id of this.entitlementsOf(n)) this.payEntitlement(id);
+    this.payAllSyndicateMembers(n);
     return batches;
   }
 }

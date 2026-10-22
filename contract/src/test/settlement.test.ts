@@ -2,15 +2,17 @@ import { webcrypto } from 'node:crypto';
 import { describe, it, expect } from 'vitest';
 import { generateOracleSecretKey, generateOperatorSecret, pureCircuits as nightcast } from '@nightcast/contract';
 import { combineDrawSeed, drawStarfall, seedCommitment } from '@nightcast/sdk';
-import { DrawStatus, pureCircuits, type TicketPreimage } from '../managed/settlement/contract/index.js';
+import { DrawStatus, pureCircuits, SyndicateStatus, type TicketPreimage } from '../managed/settlement/contract/index.js';
 import { SettlementSimulator } from '../settlement-simulator.js';
 import {
   expectedSettlement,
   makeTicket,
   POWERBALL_SHARES_BP,
   prizesByPowerballRules,
+  memberPart,
   QUICK_PICK_PACKAGES,
   quickPickPackage,
+  syndicatePayees,
   randomScalar,
   splitPrize,
   WHOLE,
@@ -129,7 +131,7 @@ describe('sealed tickets', () => {
 
     // Nothing public carries the numbers: the record holds the commitment, the
     // ciphertext and the refund address only.
-    expect(Object.keys(rec).sort()).toEqual(['cipher', 'commitment', 'refundTo', 'refunded']);
+    expect(Object.keys(rec).sort()).toEqual(['cipher', 'commitment', 'refundTo', 'refunded', 'syndicate']);
   });
 
   it('rejects invalid tickets and duplicates, and closes with sales', () => {
@@ -145,7 +147,11 @@ describe('sealed tickets', () => {
     expect(() => sim.buyTicket(badShares, me)).toThrow(/invalid ticket/);
 
     const untidy = makeTicket(n, quickPick(), me);
-    untidy.payees = [untidy.payees[0], { address: { bytes: randomAddress() }, share: 0n }, untidy.payees[2]];
+    untidy.payees = [untidy.payees[0], { address: { bytes: randomAddress() }, share: 0n, syndicate: 0n }, untidy.payees[2]];
+    expect(() => sim.buyTicket(untidy, me)).toThrow(/invalid ticket/);
+    // An ordinary purchase can't name a syndicate as payee.
+    const synd = makeTicket(n, quickPick(), [{ syndicate: 1, share: 10_000 }]);
+    expect(() => sim.buyTicket(synd, me)).toThrow(/invalid ticket/);
     expect(() => sim.buyTicket(untidy, me)).toThrow(/invalid ticket/);
 
     const badLine = makeTicket(n, quickPick(), me);
@@ -366,7 +372,7 @@ describe('settlement fails safely', () => {
     expect(() => sim.settleBatch(n, forged)).toThrow(/does not match its commitment/);
     // Paying the forger instead doesn't work either.
     const redirected = tickets.map((t) => ({ ...t }));
-    redirected[5] = { ...redirected[5], payees: [{ address: { bytes: randomAddress() }, share: 10_000n }, ...redirected[5].payees.slice(1)] };
+    redirected[5] = { ...redirected[5], payees: [{ address: { bytes: randomAddress() }, share: 10_000n, syndicate: 0n }, ...redirected[5].payees.slice(1)] };
     expect(() => sim.settleBatch(n, redirected)).toThrow(/does not match its commitment/);
     expect(sim.getLedger().progress.lookup(n).next).toBe(0n);
   });
@@ -465,6 +471,150 @@ describe('settlement fails safely', () => {
     sim.advance(Number(SETTLE) + 1);
     expect(() => sim.voidDraw(b.n)).toThrow(/can't be voided/);
     expect(() => sim.refundTicket(b.n, 0n)).toThrow(/not void/);
+  });
+});
+
+describe('syndicates', () => {
+  const CREATOR = bytes('syndicate creator secret');
+  /** A syndicate of 20 shares at 10 tickets' worth, for 200 games: funding = 200 x price. */
+  const open = (sim: SettlementSimulator, n: bigint, games = 200n, shares = 20n) => {
+    const sharePrice = (PRICE * games) / shares;
+    return {
+      sid: sim.createSyndicate(n, CREATOR, sharePrice, shares, games, BigInt(sim.now + SALES / 2)),
+      sharePrice,
+    };
+  };
+  const memberSet = () => [
+    { who: 'human A', payTo: randomAddress(), shares: 5n },
+    { who: 'human B', payTo: randomAddress(), shares: 3n },
+    { who: 'agent A', payTo: randomAddress(), shares: 4n },
+    { who: 'agent B', payTo: randomAddress(), shares: 2n },
+    { who: 'others', payTo: randomAddress(), shares: 6n },
+  ];
+
+  it('fills, buys its games from its own funds, and pays members in proportion to their shares', () => {
+    const { sim, oracleSecretKey } = setup();
+    const { n, seed, draw } = openWithSeed(sim, oracleSecretKey);
+    const { sid, sharePrice } = open(sim, n, 8n, 20n);
+    const ms = memberSet();
+    sim.payments = sim.payments === undefined ? undefined : [];
+    ms.forEach((m, i) => expect(sim.joinSyndicate(sid, m.shares, m.payTo)).toBe(BigInt(i)));
+    const sy = sim.getLedger().syndicates.lookup(sid);
+    expect(sy.status).toBe(SyndicateStatus.funded);
+    expect(sy.sold).toBe(20n);
+    expect(sy.members).toBe(5n);
+
+    // Only the creator buys, only for the syndicate, only as many games as it funded.
+    const games = [
+      makeTicket(n, lineHitting(draw.numbers, draw.moonball, 7, true), syndicatePayees(sid)), // the jackpot
+      makeTicket(n, lineHitting(draw.numbers, draw.moonball, 3, true), syndicatePayees(sid)),
+      ...Array.from({ length: 6 }, () => makeTicket(n, losingLine(draw.numbers, draw.moonball), syndicatePayees(sid))),
+    ];
+    expect(() => sim.buySyndicateTickets(sid, bytes('impostor'), games.slice(0, 4))).toThrow(/not the syndicate's creator/);
+    const own = makeTicket(n, quickPick(), randomAddress());
+    expect(() => sim.buySyndicateTickets(sid, CREATOR, [own])).toThrow(/invalid syndicate ticket/);
+    expect(sim.buySyndicateTickets(sid, CREATOR, games.slice(0, 4))).toBe(4n);
+    expect(sim.buySyndicateTickets(sid, CREATOR, games.slice(4, 8))).toBe(4n);
+    expect(() => sim.buySyndicateTickets(sid, CREATOR, [games[0]])).toThrow(/more games than the syndicate funded/);
+    expect(sim.ticketsSold(n)).toBe(8n);
+    // Buying took no money: the members' contributions paid for the games.
+    if (sim.payments !== undefined) expect(sim.payments).toEqual([]);
+    for (const [, r] of sim.getLedger().tickets) expect(r.syndicate).toBe(sid);
+
+    // A few outside tickets, then the draw and settlement.
+    const others = Array.from({ length: 12 }, () => makeTicket(n, quickPick(), randomAddress()));
+    buyAll(sim, others);
+    drawIt(sim, n, seed);
+    sim.payments = sim.payments === undefined ? undefined : [];
+    sim.settleAll(n);
+
+    const expected = expectedSettlement([...games, ...others], draw.numbers, draw.moonball, PRICE, FEE, 0n);
+    const owed = expected.payouts.get(`syndicate:${sid}`) ?? 0n;
+    expect(owed).toBeGreaterThan(0n);
+    expect(owed).toBe(expected.prizes[0] + expected.prizes[7]); // jackpot + division 8, unless a quick pick shared them
+    // Each member got floor(owed x shares / 20) per entitlement, to its own address.
+    if (sim.payments !== undefined) {
+      const got = totals(sim.payments);
+      const pots = [expected.prizes[0], expected.prizes[7]].filter((p) => p > 0n);
+      for (const m of ms) {
+        const want = pots.reduce((a, pot) => a + memberPart(pot, m.shares, 20n), 0n);
+        expect(got.get(hex(m.payTo)), m.who).toBe(want);
+      }
+      // No payment went to the syndicate's zero address.
+      expect(got.get(hex(new Uint8Array(32)))).toBeUndefined();
+    }
+    // Paying a member twice, or someone who isn't one, fails.
+    const eid = sim.entitlementsOf(n).find((id) => sim.getLedger().entitlements.lookup(id).payees[0].syndicate === sid)!;
+    expect(() => sim.paySyndicateMember(eid, 0n, 0n)).toThrow(/already paid/);
+    expect(() => sim.paySyndicateMember(eid, 0n, 5n)).toThrow(/unknown member/);
+    expect(() => sim.paySyndicateMember(eid, 1n, 0n)).toThrow(/not a syndicate/);
+    // Nothing unspent to refund once sales have closed and every game was bought.
+    expect(sim.refundSyndicateUnspent(sid, 0n)).toBe(0n);
+    expect(sharePrice * 20n).toBe(PRICE * 8n);
+  });
+
+  it('refunds every contribution when the shares do not all sell by the deadline', () => {
+    const { sim, oracleSecretKey } = setup();
+    const { n } = openWithSeed(sim, oracleSecretKey);
+    const { sid, sharePrice } = open(sim, n, 200n, 20n);
+    const ms = memberSet().slice(0, 4); // 14 of 20 shares
+    ms.forEach((m) => sim.joinSyndicate(sid, m.shares, m.payTo));
+    expect(() => sim.joinSyndicate(sid, 7n, randomAddress())).toThrow(/not that many shares left/);
+    expect(() => sim.refundSyndicateUnspent(sid, 0n)).toThrow(/still filling/);
+    const game = makeTicket(n, quickPick(), syndicatePayees(sid));
+    expect(() => sim.buySyndicateTickets(sid, CREATOR, [game])).toThrow(/not funded/);
+    sim.advance(SALES / 2 + 1);
+    expect(() => sim.joinSyndicate(sid, 1n, randomAddress())).toThrow(/join deadline has passed/);
+    sim.payments = sim.payments === undefined ? undefined : [];
+    ms.forEach((m, i) => expect(sim.refundSyndicateUnspent(sid, BigInt(i))).toBe(sharePrice * m.shares));
+    expect(() => sim.refundSyndicateUnspent(sid, 0n)).toThrow(/already refunded/);
+    if (sim.payments !== undefined) {
+      expect(sortedEntries(totals(sim.payments))).toEqual(sortedEntries(new Map(ms.map((m) => [hex(m.payTo), sharePrice * m.shares]))));
+    }
+  });
+
+  it("refunds what the creator didn't spend, and everything spent if the draw is void", () => {
+    const { sim, oracleSecretKey } = setup();
+    const { n, seed } = openWithSeed(sim, oracleSecretKey);
+    const { sid, sharePrice } = open(sim, n, 8n, 20n);
+    const ms = memberSet();
+    ms.forEach((m) => sim.joinSyndicate(sid, m.shares, m.payTo));
+    // The creator buys only 6 of the 8 games.
+    const games = Array.from({ length: 6 }, () => makeTicket(n, quickPick(), syndicatePayees(sid)));
+    sim.buySyndicateTickets(sid, CREATOR, games.slice(0, 4));
+    sim.buySyndicateTickets(sid, CREATOR, games.slice(4));
+    expect(() => sim.refundSyndicateUnspent(sid, 0n)).toThrow(/still filling or buying/);
+    // The draw runs, but nobody settles it in time.
+    drawIt(sim, n, seed);
+    // Unspent funds (2 games' worth) are refundable now that sales have closed.
+    const unspent = PRICE * 2n;
+    ms.forEach((m, i) => expect(sim.refundSyndicateUnspent(sid, BigInt(i))).toBe(memberPart(unspent, m.shares, 20n)));
+    expect(() => sim.refundSyndicateVoid(sid, 0n)).toThrow(/not void/);
+    sim.advance(Number(SETTLE) + 1);
+    sim.voidDraw(n);
+    // The syndicate's tickets are marked refunded but their price stays for the members.
+    sim.payments = sim.payments === undefined ? undefined : [];
+    for (let i = 0n; i < 6n; i++) sim.refundTicket(n, i);
+    if (sim.payments !== undefined) expect(sim.payments).toEqual([]);
+    const spent = PRICE * 6n;
+    ms.forEach((m, i) => expect(sim.refundSyndicateVoid(sid, BigInt(i))).toBe(memberPart(spent, m.shares, 20n)));
+    expect(() => sim.refundSyndicateVoid(sid, 0n)).toThrow(/already refunded/);
+    // Altogether each member got back its contribution, less rounding dust.
+    for (const m of ms) {
+      const back = memberPart(unspent, m.shares, 20n) + memberPart(spent, m.shares, 20n);
+      expect(sharePrice * m.shares - back).toBeLessThan(2n);
+    }
+  });
+
+  it('checks the funding arithmetic and the join deadline when a syndicate is created', () => {
+    const { sim, oracleSecretKey } = setup();
+    const { n } = openWithSeed(sim, oracleSecretKey);
+    expect(() => sim.createSyndicate(n, CREATOR, PRICE, 20n, 19n, BigInt(sim.now + 60))).toThrow(/must equal games x ticket price/);
+    expect(() => sim.createSyndicate(n, CREATOR, PRICE, 20n, 20n, BigInt(sim.now + SALES + 1))).toThrow(/before sales close/);
+    expect(() => sim.createSyndicate(n, CREATOR, PRICE, 20n, 20n, BigInt(sim.now - 1))).toThrow(/join deadline has passed/);
+    expect(() => sim.createSyndicate(n, CREATOR, PRICE, 0n, 0n, BigInt(sim.now + 60))).toThrow(/at least one share/);
+    expect(sim.createSyndicate(n, CREATOR, PRICE, 20n, 20n, BigInt(sim.now + 60))).toBe(1n);
+    expect(sim.createSyndicate(n, CREATOR, PRICE * 2n, 10n, 20n, BigInt(sim.now + 60))).toBe(2n);
   });
 });
 
