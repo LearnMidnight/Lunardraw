@@ -21,12 +21,14 @@ The full design, including the trust that remains, is in [docs/DESIGN.md](docs/D
 
 Where Starfall is heading: no claim button, and no ticket's numbers ever made public. `contract/src/settlement.compact` is a second contract built on the same draw, in which:
 
-- every ticket is published as a commitment plus the ticket encrypted to a settlement key;
+- the game is Australian Powerball's: 7 from 35 plus a Moonball from 20, nine divisions, Powerball's prize-pool allocation, jackpot rollover and no-winner rules, a 2% operator fee (a modelling assumption);
+- every ticket is published as a commitment plus the ticket encrypted to a settlement key; up to 4 games per transaction, with QuickPick packages from Single (1) to Maxi (50);
 - a settler works through every ticket in order, 25 per proof, and the contract checks that each one matches its commitment, so no ticket can be left out, counted twice or altered;
-- prizes (with syndicate splits, an operator fee and rollover) are then paid automatically by anyone;
+- prizes are then paid automatically by anyone;
+- syndicates own ordinary tickets together: shares are locked before sales close, all shares must sell or everyone is refunded, only the creator can buy the agreed games from the pooled funds, and winnings are paid to members in proportion;
 - if settlement misses its deadline, every ticket is refunded.
 
-It's tested in the simulator with 100 private tickets and every failure case. Design, guarantees and the privacy that remains: [docs/SETTLEMENT.md](docs/SETTLEMENT.md).
+It's tested in the simulator with 100 private tickets, the spec's 20-share syndicate, and every failure case. Design, guarantees and the privacy that remains: [docs/SETTLEMENT.md](docs/SETTLEMENT.md).
 
 ## Repository
 
