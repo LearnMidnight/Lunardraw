@@ -1,0 +1,34 @@
+{
+  "name": "@lunardraw/contract",
+  "version": "0.1.0",
+  "description": "Lunardraw's Starfall contract (7 from 35 + a Moonball from 20) for Midnight, with Nightcast's VRF embedded, plus an in-memory simulator.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "compact": "compact compile src/lunardraw.compact src/managed/lunardraw",
+    "compact:fast": "compact compile --skip-zk src/lunardraw.compact src/managed/lunardraw",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && cp -R src/managed dist/managed && cp src/*.compact dist/",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@midnight-ntwrk/compact-runtime": "0.16.0",
+    "@nightcast/contract": "0.1.0"
+  },
+  "devDependencies": {
+    "@nightcast/sdk": "0.1.0"
+  }
+}
