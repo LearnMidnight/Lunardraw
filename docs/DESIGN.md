@@ -1,6 +1,6 @@
 # Lunardraw contract: v0 design
 
-Status: design, 22 Oct 2026 (#7). A Starfall lottery (7 from 35 + Moonball) on Preprod with verifiable draws, using Nightcast's VRF embedded in the contract (SPEC §5.1).
+Status: design, 22 Oct 2026 (started as [Nightcast #7](https://github.com/LearnMidnight/Nightcast/issues/7)). A Starfall lottery (7 from 35 + Moonball) on Preprod with verifiable draws, using [Nightcast](https://github.com/LearnMidnight/Nightcast)'s VRF embedded in the contract ([Nightcast SPEC §5.1](https://github.com/LearnMidnight/Nightcast/blob/main/docs/SPEC.md#51-on-chain-consumers-embed-dont-call-decision-22-oct-2026)).
 
 ## Choices for v0
 
@@ -28,11 +28,11 @@ open ── sales close ──▶ requested ── oracle ──▶ drawn ──
 2. **Buy.** Before sales close, a player sends `price × lines` tNIGHT with a ticket commitment and the number of lines. The commitment binds the draw number, every line and a random salt, so it reveals nothing and can't be reused for another draw.
 3. **Request.** After sales close, the organiser calls `requestDraw(n, seed)`. The contract checks the seed against the commitment and fixes the VRF input `alpha = H(contract, n, seed)` and its curve point. From here, nobody can change what the draw will be. In the same transaction the organiser can open the next draw, giving its sales-close time and seed commitment, so closing one draw starts the next. If the organiser doesn't reveal by the reveal deadline, the draw is void.
 
-   Only the organiser may do this. Compact doesn't guarantee that in-circuit `hashToCurve` has a single valid output (SPEC §2). The organiser can't evaluate the VRF, so that freedom is useless to it; the oracle could use it to pick an outcome. (Issue #7 originally said "anyone can trigger the request"; the security review changed this.)
+   Only the organiser may do this. Compact doesn't guarantee that in-circuit `hashToCurve` has a single valid output ([Nightcast SPEC §2](https://github.com/LearnMidnight/Nightcast/blob/main/docs/SPEC.md#2-construction)). The organiser can't evaluate the VRF, so that freedom is useless to it; the oracle could use it to pick an outcome. (Nightcast issue #7 originally said "anyone can trigger the request"; the security review changed this.)
 4. **Draw.** The oracle proves `gamma = H·sk` in-circuit before the draw deadline; the contract stores the output. Then anyone runs `computeNumbers`, which works out the numbers with the site's rule (below). The claim window starts then, so a late computation never shortens it.
 5. **Claim.** During the claim window, a winner proves one of their lines matches enough numbers, without revealing the others, and names where to pay. Each line can be registered once; the contract counts winners per division.
 6. **Settle.** After the window, the pool is split by division shares and each registered line is paid its division's share. Draws settle in order: a draw can settle only once the one before it is settled or void, and then all the rollover so far joins its pool. Divisions nobody won, and rounding remainders, roll over to the next draw that settles. So the rollover always goes to the next draw in line, and nobody can steer it into a draw of their choosing.
-7. **Void.** If the seed isn't revealed by the reveal deadline, the oracle misses the draw deadline, or nobody computes the numbers before the deadline for that, anyone can void the draw. Computing and voiding are never possible at the same moment, so nobody can choose between "finish the draw" and "cancel it" once the outcome is public. Every ticket is then refunded in full; the rollover isn't touched and goes to the next draw that settles. **A void draw is never redrawn** (SPEC §4.2).
+7. **Void.** If the seed isn't revealed by the reveal deadline, the oracle misses the draw deadline, or nobody computes the numbers before the deadline for that, anyone can void the draw. Computing and voiding are never possible at the same moment, so nobody can choose between "finish the draw" and "cancel it" once the outcome is public. Every ticket is then refunded in full; the rollover isn't touched and goes to the next draw that settles. **A void draw is never redrawn** ([Nightcast SPEC §4.2](https://github.com/LearnMidnight/Nightcast/blob/main/docs/SPEC.md#42-withholding-and-aborts)).
 
 Neither the organiser (no oracle key) nor the oracle (no seed until sales close) can know the numbers while tickets are on sale. Each can still abort; aborting only triggers refunds.
 
@@ -100,7 +100,7 @@ Deployed locked like Nightcast (no maintenance authority), with its own publishe
 
 From the security review (22 Oct 2026). The contract can't fix these by itself:
 
-- **The oracle sees the output first and can stay silent.** The draw is then void and refunded. If the oracle or a friend holds tickets, that's a free option to skip draws it doesn't like. Mitigation: an independent oracle, a public record of its missed draws, and deposits it loses for missing one (Phase 3, #9).
+- **The oracle sees the output first and can stay silent.** The draw is then void and refunded. If the oracle or a friend holds tickets, that's a free option to skip draws it doesn't like. Mitigation: an independent oracle, a public record of its missed draws, and deposits it loses for missing one (Nightcast Phase 3, [#9](https://github.com/LearnMidnight/Nightcast/issues/9)).
 - **An organiser and oracle working together know the numbers during sales.** Keep them independent: the keeper bot (organiser) and the oracle should run on separate machines, under separate people, with separate keys.
 - **Only the keeper opens new draws.** If it stops, the current draw voids and is refunded, and no new draw opens until someone with the organiser secret starts it again.
 - **A lost ticket preimage can't be refunded**, and nothing sweeps the money. Players (and agents) must back up their private state.

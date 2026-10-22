@@ -1,0 +1,3 @@
+[submodule "nightcast"]
+	path = nightcast
+	url = https://github.com/LearnMidnight/Nightcast

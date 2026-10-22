@@ -16,7 +16,7 @@ import {
   type TicketPreimage,
   ledger,
   pureCircuits,
-} from './managed/lotto/contract/index.js';
+} from './managed/lunardraw/contract/index.js';
 import { type LottoPrivateState, witnesses } from './witnesses.js';
 
 const COIN_PUBLIC_KEY = '0'.repeat(64);

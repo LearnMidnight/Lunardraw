@@ -1,7 +1,7 @@
-// Nightcast's VRF (docs/SPEC.md §2), for contracts that embed it instead of
-// calling Nightcast (SPEC §5.1: cross-contract calls aren't available on
+// Nightcast's VRF (Nightcast SPEC §2), for contracts that embed it instead of
+// calling Nightcast (Nightcast SPEC §5.1: cross-contract calls aren't available on
 // ledger 8). Same construction and domain separators as
-// contract/src/nightcast.compact, so for the same key and input point it gives
+// nightcast/contract/src/nightcast.compact, so for the same key and input point it gives
 // exactly the output Nightcast would.
 //
 //     H      = hashToCurve(["nightcast:h2c:v0", alpha])

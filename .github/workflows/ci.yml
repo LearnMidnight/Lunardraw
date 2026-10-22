@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Versions from Midnight's support matrix (Preview, Preprod and Mainnet, ledger 8).
+  COMPACT_TOOLCHAIN: 0.31.1
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: true
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Install Compact toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf https://github.com/midnightntwrk/compact/releases/latest/download/compact-installer.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Select compiler ${{ env.COMPACT_TOOLCHAIN }}
+        run: |
+          compact update "$COMPACT_TOOLCHAIN"
+          compact compile --version
+
+      - name: Nightcast version
+        run: echo "::notice title=Nightcast::$(git -C nightcast log -1 --format='%h %s')"
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Compile contracts
+        run: npm run compact
+
+      - name: Build
+        run: npm run build
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test the Lunardraw contract
+        working-directory: contract
+        run: npx vitest run --reporter=default --reporter=github-actions --reporter=json --outputFile.json=../reports/contract.json
+
+      - name: Summarise tests
+        if: always()
+        run: |
+          for f in reports/*.json; do
+            [ -f "$f" ] || continue
+            node -e '
+              const r = require(process.argv[1]);
+              const name = process.argv[1].split("/").pop().replace(".json", "");
+              console.log(`::notice title=${name} tests::${r.numPassedTests} passed, ${r.numFailedTests} failed, ${r.numTotalTests} total`);
+            ' "$PWD/$f"
+          done
+
+  # Generates the proving keys and reports each circuit's size and build
+  # time. Informational until the contract is deployed.
+  keys:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Compact toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf https://github.com/midnightntwrk/compact/releases/latest/download/compact-installer.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Select compiler ${{ env.COMPACT_TOOLCHAIN }}
+        run: compact update "$COMPACT_TOOLCHAIN"
+
+      - name: Compile with proving keys
+        working-directory: contract
+        shell: bash
+        run: |
+          start=$SECONDS
+          compact compile src/lunardraw.compact src/managed/lunardraw 2>&1 | tee keys.log
+          echo "::notice title=keys::built in $((SECONDS - start))s"
+          for f in src/managed/lunardraw/keys/*.prover; do
+            c=$(basename "$f" .prover)
+            p=$(stat -c %s "$f"); v=$(stat -c %s "src/managed/lunardraw/keys/$c.verifier")
+            echo "::notice title=circuit $c::prover key $((p / 1024)) KiB, verifier key $v bytes"
+          done

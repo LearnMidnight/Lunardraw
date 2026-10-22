@@ -1,5 +1,5 @@
 // Lunardraw v0: Starfall (7 from 35 + a Moonball from 20) on Midnight, with draws from
-// Nightcast's VRF embedded in the contract (docs/LOTTO.md, SPEC §5.1).
+// Nightcast's VRF embedded in the contract (docs/DESIGN.md; Nightcast SPEC §5.1).
 //
 // Draws are numbered 1, 2, 3, ... Each goes open -> requested -> fulfilled
 // -> drawn -> settled, or ends voided (everyone refunded, never redrawn) if
@@ -364,7 +364,7 @@ export circuit buyTicket(): Bytes<32> {
 // After sales close, the organiser reveals its seed, fixing the draw's VRF
 // input, and can open the next draw in the same transaction. Only the
 // organiser may reveal: it can't evaluate the VRF, so it gains nothing from
-// the freedom Compact's in-circuit hashToCurve may allow (SPEC §2), whereas
+// the freedom Compact's in-circuit hashToCurve may allow (Nightcast SPEC §2), whereas
 // the oracle could use that freedom to pick an outcome.
 export circuit requestDraw(n: Uint<32>, seed: Bytes<32>, next: Maybe<NextDraw>): [] {
   assertOrganiser();

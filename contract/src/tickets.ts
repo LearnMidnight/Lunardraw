@@ -1,5 +1,5 @@
 import { webcrypto } from 'node:crypto';
-import type { Line, TicketPreimage } from './managed/lotto/contract/index.js';
+import type { Line, TicketPreimage } from './managed/lunardraw/contract/index.js';
 
 export const MAX_LINES = 5;
 export const MAIN_PICK = 7;

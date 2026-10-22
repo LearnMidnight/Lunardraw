@@ -6,7 +6,7 @@ import {
   pureCircuits as nightcast,
 } from '@nightcast/contract';
 import { combineDrawSeed, drawStarfall, seedCommitment } from '@nightcast/sdk';
-import { DrawStatus, pureCircuits } from '../managed/lotto/contract/index.js';
+import { DrawStatus, pureCircuits } from '../managed/lunardraw/contract/index.js';
 import { LottoSimulator } from '../simulator.js';
 import { divisionFor, makeTicket, prizesFor, quickPick, SHARES_BP, type PlainLine } from '../tickets.js';
 

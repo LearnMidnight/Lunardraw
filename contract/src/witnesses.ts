@@ -1,5 +1,5 @@
 import type { WitnessContext } from '@midnight-ntwrk/compact-runtime';
-import type { Ledger, TicketPreimage } from './managed/lotto/contract/index.js';
+import type { Ledger, TicketPreimage } from './managed/lunardraw/contract/index.js';
 
 /**
  * Private state of whoever runs a Lunardraw circuit.
