@@ -1003,8 +1003,11 @@ circuit memberFor(sid: Uint<32>, index: Uint<32>): Member {
 
 // floor(amount x shares / totalShares): a member's part of something owed to
 // the syndicate. Any rounding dust stays in the contract.
+// A member's part of an amount owed to its syndicate: in proportion to the
+// shares sold (all of them, once the syndicate is funded), so an unfilled
+// syndicate's members get back exactly what they paid.
 circuit memberPart(amount: Uint<128>, m: Member, sy: Syndicate): Uint<128> {
-  return quotient((amount as Field) * (m.shares as Field), sy.totalShares as Uint<128>);
+  return quotient((amount as Field) * (m.shares as Field), sy.sold as Uint<128>);
 }
 
 // Pay a member its part of a prize owed to the syndicate (one entitlement

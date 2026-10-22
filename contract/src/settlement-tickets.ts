@@ -199,5 +199,9 @@ export const expectedSettlement = (
   return { winners, sales, fee, pool, prizes, carry, payouts, divisions };
 };
 
-/** A member's part of an amount owed to its syndicate: floor(amount x shares / totalShares), as the contract pays it. */
-export const memberPart = (amount: bigint, shares: bigint, totalShares: bigint): bigint => (amount * shares) / totalShares;
+/**
+ * A member's part of an amount owed to its syndicate, as the contract pays
+ * it: floor(amount x shares / sold), where `sold` is the shares actually
+ * sold (all of them once the syndicate is funded).
+ */
+export const memberPart = (amount: bigint, shares: bigint, sold: bigint): bigint => (amount * shares) / sold;

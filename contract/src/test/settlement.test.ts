@@ -566,6 +566,7 @@ describe('syndicates', () => {
     sim.advance(SALES / 2 + 1);
     expect(() => sim.joinSyndicate(sid, 1n, randomAddress())).toThrow(/join deadline has passed/);
     sim.payments = sim.payments === undefined ? undefined : [];
+    // Every contribution comes back in full: the refund is shared by shares sold, not shares advertised.
     ms.forEach((m, i) => expect(sim.refundSyndicateUnspent(sid, BigInt(i))).toBe(sharePrice * m.shares));
     expect(() => sim.refundSyndicateUnspent(sid, 0n)).toThrow(/already refunded/);
     if (sim.payments !== undefined) {
