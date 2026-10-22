@@ -4,7 +4,17 @@ import { generateOracleSecretKey, generateOperatorSecret, pureCircuits as nightc
 import { combineDrawSeed, drawStarfall, seedCommitment } from '@nightcast/sdk';
 import { DrawStatus, pureCircuits, type TicketPreimage } from '../managed/settlement/contract/index.js';
 import { SettlementSimulator } from '../settlement-simulator.js';
-import { expectedSettlement, makeTicket, randomScalar, splitPrize, WHOLE } from '../settlement-tickets.js';
+import {
+  expectedSettlement,
+  makeTicket,
+  POWERBALL_SHARES_BP,
+  prizesByPowerballRules,
+  QUICK_PICK_PACKAGES,
+  quickPickPackage,
+  randomScalar,
+  splitPrize,
+  WHOLE,
+} from '../settlement-tickets.js';
 import { quickPick, type PlainLine } from '../tickets.js';
 
 const hex = (b: Uint8Array): string => Buffer.from(b).toString('hex');
@@ -17,7 +27,7 @@ const bytes = (label: string): Uint8Array => {
 const randomAddress = (): Uint8Array => webcrypto.getRandomValues(new Uint8Array(32));
 
 const PRICE = 1_000_000n; // 1 tNIGHT
-const FEE = 500n; // 5%
+const FEE = 200n; // 2%
 const SETTLE = 86_400n;
 const SALES = 3_600;
 const BATCH = Number(pureCircuits.batchSize());
@@ -153,6 +163,44 @@ describe('sealed tickets', () => {
   });
 });
 
+describe('multi-game purchases', () => {
+  it('buys a QuickPick package four games at a time, each game a ticket of its own', () => {
+    const { sim, oracleSecretKey, settlementSecret } = setup();
+    const { n } = openWithSeed(sim, oracleSecretKey);
+    const me = randomAddress();
+    const games = quickPickPackage(n, 'regular', me);
+    expect(games.length).toBe(12);
+    expect(sim.buyPackage(games, me)).toBe(3);
+    expect(sim.ticketsSold(n)).toBe(12n);
+    const opened = sim.decryptDrawTickets(n, settlementSecret);
+    expect(opened.map((t) => hex(sim.commitmentOf(t)))).toEqual(games.map((t) => hex(sim.commitmentOf(t))));
+    for (const [, r] of sim.getLedger().tickets) expect(hex(r.refundTo.bytes)).toBe(hex(me));
+
+    // Mixed with single purchases, indexes stay sequential.
+    sim.buyTicket(makeTicket(n, quickPick(), me), me);
+    expect(sim.buyTickets([makeTicket(n, quickPick(), me), makeTicket(n, quickPick(), me)], me)).toBe(2n);
+    expect(sim.ticketsSold(n)).toBe(15n);
+    expect(sim.decryptDrawTickets(n, settlementSecret).length).toBe(15);
+  });
+
+  it('rejects too many games, a bad game in the set, a duplicate, and a mixed draw', () => {
+    const { sim, oracleSecretKey } = setup();
+    const { n } = openWithSeed(sim, oracleSecretKey);
+    const me = randomAddress();
+    const five = Array.from({ length: 5 }, () => makeTicket(n, quickPick(), me));
+    expect(() => sim.buyTickets(five, me)).toThrow(/games per purchase/);
+    const bad = [makeTicket(n, quickPick(), me), makeTicket(n, quickPick(), me)];
+    bad[1] = { ...bad[1], line: { numbers: [1n, 1n, 2n, 3n, 4n, 5n, 6n], moonball: 1n } };
+    expect(() => sim.buyTickets(bad, me)).toThrow(/invalid ticket/);
+    const dup = makeTicket(n, quickPick(), me);
+    expect(() => sim.buyTickets([dup, dup], me)).toThrow(/already bought/);
+    const mixed = [makeTicket(n, quickPick(), me), makeTicket(n + 1n, quickPick(), me)];
+    expect(() => sim.buyTickets(mixed, me)).toThrow(/invalid ticket/);
+    expect(sim.ticketsSold(n)).toBe(0n);
+    expect(Object.keys(QUICK_PICK_PACKAGES)).toEqual(['single', 'starter', 'mini', 'regular', 'super', 'mega', 'jumbo', 'maxi']);
+  });
+});
+
 describe('settling 100 private tickets', () => {
   /**
    * 100 tickets: winners in every division (some shared with a syndicate, two
@@ -233,6 +281,10 @@ describe('settling 100 private tickets', () => {
     // Every STAR of sales is accounted for: fee + prizes paid + rollover.
     const paid = expected.prizes.reduce((a, prize, i) => a + prize * expected.winners[i], 0n);
     expect(expected.fee + paid + l.carry).toBe(expected.sales);
+    // With winners in every division nothing cascades: each prize is its division's share.
+    expected.prizes.forEach((prize, i) => {
+      expect(prize).toBe((expected.pool * BigInt(POWERBALL_SHARES_BP[i])) / 10_000n / expected.winners[i]);
+    });
 
     // The payments made match the reference to the STAR (when the runtime reports them).
     if (sim.payments !== undefined) {
@@ -462,6 +514,11 @@ describe('rolling draws', () => {
     const d2 = sim.getLedger().draws.lookup(second.n);
     expect(d2.carried).toBe(e1.pool);
     expect(d2.prizes).toEqual(e2.prizes);
+    // The rollover went to the jackpot alone: division 1 = its share + all of the rollover.
+    expect(d2.prizes[0]).toBe((e2.pool * 3350n) / 10_000n + e1.pool);
+    // Divisions 2..8 nobody won fell through to division 9's single winner.
+    const fallen = [185, 230, 200, 150, 940, 730, 1550, 2665].reduce((a, bp) => a + (e2.pool * BigInt(bp)) / 10_000n, 0n);
+    expect(d2.prizes[8]).toBe(fallen);
     expect(sim.getLedger().carry).toBe(e2.carry);
     expect(sim.getLedger().feesOwed).toBe(e1.fee + e2.fee);
   });
@@ -475,6 +532,30 @@ describe('rolling draws', () => {
     expect(d.status).toBe(DrawStatus.settled);
     expect(d.fee).toBe(0n);
     expect(sim.getLedger().carry).toBe(0n);
+  });
+});
+
+describe("Powerball's prize rules", () => {
+  it('allocates the pool by the published shares, jackpots division 1 and cascades unwon divisions', () => {
+    expect(POWERBALL_SHARES_BP.reduce((a, b) => a + b, 0)).toBe(10_000);
+    const pool = 1_000_000_000n;
+    // One winner in every division: each gets its share, and the rollover goes to division 1.
+    const all = prizesByPowerballRules(pool, 5_000n, [1n, 1n, 1n, 1n, 1n, 1n, 1n, 1n, 1n]);
+    expect(all.prizes).toEqual(POWERBALL_SHARES_BP.map((bp, i) => (pool * BigInt(bp)) / 10_000n + (i === 0 ? 5_000n : 0n)));
+    expect(all.carry).toBe(0n);
+    // Nobody wins 1..3; 4 has two winners: 2 and 3 fall into 4, 1 rolls over.
+    const some = prizesByPowerballRules(pool, 0n, [0n, 0n, 0n, 2n, 1n, 1n, 1n, 1n, 1n]);
+    expect(some.prizes[0]).toBe(0n);
+    expect(some.prizes[3]).toBe((pool * (185n + 230n + 200n)) / 10_000n / 2n);
+    expect(some.carry).toBe((pool * 3350n) / 10_000n + ((pool * (185n + 230n + 200n)) / 10_000n) % 2n);
+    // Nobody wins anything: everything rolls over.
+    const none = prizesByPowerballRules(pool, 7n, [0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n]);
+    expect(none.prizes.every((p) => p === 0n)).toBe(true);
+    expect(none.carry).toBe(pool + 7n);
+    // Remainders roll over: 3 winners share 10 units.
+    const odd = prizesByPowerballRules(10_000n, 0n, [0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 3n]);
+    expect(odd.prizes[8]).toBe((10_000n - 3_350n) / 3n);
+    expect(odd.carry).toBe(3_350n + ((10_000n - 3_350n) % 3n));
   });
 });
 

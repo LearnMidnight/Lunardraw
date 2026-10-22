@@ -1,6 +1,12 @@
 import { webcrypto } from 'node:crypto';
 import type { Payee, TicketPreimage } from './managed/settlement/contract/index.js';
-import { checkLine, divisionFor, SHARES_BP, type PlainLine } from './tickets.js';
+import { checkLine, divisionFor, quickPick, type PlainLine } from './tickets.js';
+
+/**
+ * Division shares of the prize pool in basis points (division 1 first):
+ * Australian Powerball's published allocation (The Lott, from draw 1410).
+ */
+export const POWERBALL_SHARES_BP = [3350, 185, 230, 200, 150, 940, 730, 1550, 2665] as const;
 
 /** Up to three payees per ticket (a syndicate). */
 export const MAX_PAYEES = 3;
@@ -44,6 +50,30 @@ export const makeTicket = (
   };
 };
 
+/**
+ * QuickPick packages: how many random games each buys. Powerball's six
+ * (Mini to Maxi) plus Single and Starter.
+ */
+export const QUICK_PICK_PACKAGES = {
+  single: 1,
+  starter: 4,
+  mini: 8,
+  regular: 12,
+  super: 18,
+  mega: 25,
+  jumbo: 36,
+  maxi: 50,
+} as const;
+
+export type QuickPickPackage = keyof typeof QUICK_PICK_PACKAGES;
+
+/** The games of a QuickPick package for draw `drawId`, all paid to `payees`. */
+export const quickPickPackage = (
+  drawId: number | bigint,
+  pkg: QuickPickPackage,
+  payees: Uint8Array | PlainPayee[],
+): TicketPreimage[] => Array.from({ length: QUICK_PICK_PACKAGES[pkg] }, () => makeTicket(drawId, quickPick(), payees));
+
 /** A ticket with every field zero: fills the unused slots of a draw's last settlement batch. */
 export const emptyTicket = (drawId: bigint): TicketPreimage => ({
   drawId,
@@ -72,16 +102,51 @@ export const splitPrize = (prize: bigint, shares: readonly bigint[]): bigint[] =
   return [prize - later.reduce((a, b) => a + b, 0n), ...later];
 };
 
+/**
+ * Prize per winning ticket per division, and the rollover, by Powerball's
+ * rules as `finaliseDraw` applies them: each division gets its share of the
+ * pool; the rollover joins division 1; an unwon division 2..8 falls to the
+ * next lower division with a winner; an unwon division 1 or 9 and rounding
+ * remainders roll over.
+ */
+export const prizesByPowerballRules = (
+  pool: bigint,
+  carryIn: bigint,
+  winners: readonly bigint[],
+): { prizes: bigint[]; carry: bigint } => {
+  const prizes: bigint[] = [];
+  let cascade = 0n;
+  let carry = 0n;
+  POWERBALL_SHARES_BP.forEach((bp, j) => {
+    const amount = (pool * BigInt(bp)) / BigInt(WHOLE) + (j === 0 ? carryIn : cascade);
+    const w = winners[j];
+    if (w > 0n) {
+      const per = amount / w;
+      prizes.push(per);
+      carry += amount - per * w;
+      cascade = 0n;
+    } else {
+      prizes.push(0n);
+      if (j === 0 || j === 8) {
+        carry += amount;
+        cascade = 0n;
+      } else cascade = amount;
+    }
+  });
+  return { prizes, carry };
+};
+
 /** What a draw's settlement must come to, worked out off-chain from the plain tickets. */
 export type ExpectedSettlement = {
   /** Winning tickets per division (division 1 first). */
   winners: bigint[];
   sales: bigint;
   fee: bigint;
+  /** Sales less the fee; the rollover is added to division 1 on top. */
   pool: bigint;
   /** Prize per winning ticket per division. */
   prizes: bigint[];
-  /** Rollover after this draw. */
+  /** Rollover after this draw (into the next draw's jackpot). */
   carry: bigint;
   /** Total owed to each payee address (hex), over all winning tickets. */
   payouts: Map<string, bigint>;
@@ -105,9 +170,8 @@ export const expectedSettlement = (
   const winners = [1, 2, 3, 4, 5, 6, 7, 8, 9].map((d) => BigInt(divisions.filter((x) => x === d).length));
   const sales = price * BigInt(tickets.length);
   const fee = (sales * feeShare) / BigInt(WHOLE);
-  const pool = sales - fee + carryIn;
-  const prizes = SHARES_BP.map((bp, i) => (winners[i] === 0n ? 0n : (pool * BigInt(bp)) / BigInt(WHOLE) / winners[i]));
-  const paid = prizes.reduce((acc, p, i) => acc + p * winners[i], 0n);
+  const pool = sales - fee;
+  const { prizes, carry } = prizesByPowerballRules(pool, carryIn, winners);
   const payouts = new Map<string, bigint>();
   tickets.forEach((t, i) => {
     if (divisions[i] === 0) return;
@@ -118,5 +182,5 @@ export const expectedSettlement = (
       payouts.set(k, (payouts.get(k) ?? 0n) + amounts[j]);
     });
   });
-  return { winners, sales, fee, pool, prizes, carry: pool - paid, payouts, divisions };
+  return { winners, sales, fee, pool, prizes, carry, payouts, divisions };
 };

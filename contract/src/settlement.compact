@@ -119,8 +119,9 @@ export struct Draw {
   output: Bytes<32>;
   numbers: Vector<7, Uint<8>>;
   moonball: Uint<8>;
-  // Rollover from earlier draws added to this draw's pool, and the operator's
-  // fee from its sales, both fixed when the draw is finalised.
+  // Rollover from earlier draws added to this draw's division 1 (the
+  // jackpot), and the operator's fee from its sales, both fixed when the draw
+  // is finalised.
   carried: Uint<128>;
   fee: Uint<128>;
   // Each division's prize per winning ticket, once finalised.
@@ -414,10 +415,22 @@ circuit quotient(n: Field, d: Uint<128>): Uint<128> {
   return qr[0];
 }
 
-// Division shares in basis points: a 30% jackpot, the rest in the site's
-// proportions (10/8/8/9/10/10/20/25) scaled to 70%.
+// Division shares of the prize pool in basis points: Australian Powerball's
+// published allocation (The Lott, from draw 1410, 25 May 2023):
+// 33.5% / 1.85 / 2.3 / 2.0 / 1.5 / 9.4 / 7.3 / 15.5 / 26.65%.
 pure circuit shares(): Vector<9, Uint<16>> {
-  return [3000, 700, 560, 560, 630, 700, 700, 1400, 1750];
+  return [3350, 185, 230, 200, 150, 940, 730, 1550, 2665];
+}
+
+// Running state while prizes are worked out division by division.
+struct PrizeCalc {
+  // Prize per winning ticket so far (division 1 first).
+  prizes: Vector<9, Uint<128>>;
+  // Money from unwon divisions 2..8 falling to the next lower division with a winner.
+  cascade: Uint<128>;
+  // What rolls over to the next draw: an unwon jackpot, an unwon division 9
+  // (plus anything cascading into it) and rounding remainders.
+  carry: Uint<128>;
 }
 
 pure circuit noWinners(): Vector<9, Uint<64>> {
@@ -516,6 +529,42 @@ export circuit buyTicket(refundTo: UserAddress): Bytes<32> {
   });
   ticketCount.insert(id, (index + 1) as Uint<64>);
   return c;
+}
+
+// Buy up to maxGames() tickets for an open draw in one transaction (a
+// QuickPick package or several chosen lines), paying the ticket price for
+// each. Each game is a ticket of its own, so it settles like any other.
+// Returns the number of tickets bought.
+export circuit buyTickets(count: Uint<8>, refundTo: UserAddress): Uint<8> {
+  const n = disclose(count);
+  assert(n >= 1 && n <= maxGames(), "1 to maxGames() games per purchase");
+  const ts = newTickets();
+  const rs = sealingRandomnessFor();
+  const id = disclose(ts[0].drawId);
+  const d = drawFor(id);
+  assert(d.status == DrawStatus.open, "draw is not open");
+  assert(blockTimeLt(d.salesClose), "sales have closed");
+  const first = ticketCount.lookup(id);
+  assert(first + (n as Uint<64>) <= 4294967295, "draw is full");
+  receiveUnshielded(nativeToken(), (ticketPrice * n) as Uint<128>);
+  const to = disclose(refundTo);
+  for (const j of gameSlots()) {
+    if (j < n) {
+      const t = ts[j];
+      assert(disclose(validTicket(t) && t.drawId == id), "invalid ticket");
+      const c = disclose(ticketCommitment(kernel.self(), t));
+      assert(!ticketCommitments.member(c), "ticket already bought");
+      ticketCommitments.insert(c);
+      tickets.insert(ticketKey(id, (first + (j as Uint<64>)) as Uint<64>), TicketRecord {
+        commitment: c,
+        refundTo: to,
+        cipher: disclose(sealTicket(settlementKey, rs[j], t)),
+        refunded: false
+      });
+    }
+  }
+  ticketCount.insert(id, (first + (n as Uint<64>)) as Uint<64>);
+  return n;
 }
 
 // After sales close, the organiser reveals its seed, fixing the draw's VRF
@@ -644,9 +693,8 @@ export circuit settleBatch(n: Uint<32>): Uint<64> {
 
 // Once every ticket is settled, anyone fixes each division's prize per
 // winning ticket. Draws are finalised in order: the previous draw must be
-// settled or void, and then all the rollover so far joins this draw's pool.
-// The operator fee comes off sales first; divisions nobody won, and rounding
-// remainders, roll over to the next draw that's finalised.
+// settled or void, and then all the rollover so far joins this draw's
+// jackpot. The operator fee comes off sales first.
 export circuit finaliseDraw(n: Uint<32>): [] {
   const id = disclose(n);
   const d = drawFor(id);
@@ -662,19 +710,30 @@ export circuit finaliseDraw(n: Uint<32>): [] {
   const carried = carry;
   const sales = (ticketPrice * total) as Uint<128>;
   const fee = quotient((sales as Field) * (feeShare as Field), 10000);
-  const net = (sales - fee) as Uint<128>;
-  const pool = (net + carried) as Uint<128>;
-  // Divide by 1, not 0, for a division nobody won, then drop the result.
-  const prizes = map((bp: Uint<16>, w: Uint<64>): Uint<128> => {
-                       const share = quotient((pool as Field) * (bp as Field), 10000);
-                       const perTicket = quotient(share as Field, w == 0 ? 1 : w);
-                       return w == 0 ? 0 : perTicket;
-                     }, shares(), p.winners);
-  const paid = fold((acc: Uint<128>, prize: Uint<128>, w: Uint<64>): Uint<128> => (acc + prize * w) as Uint<128>,
-                    0, prizes, p.winners);
-  carry = (pool - paid) as Uint<128>;
+  const pool = (sales - fee) as Uint<128>;
+  // Powerball's rules: each division gets its share of the pool; the rollover
+  // (jackpot) joins division 1 only; an unwon division 2..8 falls to the next
+  // lower division with a winner; an unwon division 1 or 9, and rounding
+  // remainders, roll over to the next draw. Divide by 1, not 0, for a
+  // division nobody won; the result is then dropped.
+  const calc = fold((acc: PrizeCalc, bp: Uint<16>, w: Uint<64>, j: Uint<8>): PrizeCalc => {
+    const share = quotient((pool as Field) * (bp as Field), 10000);
+    const amount = (share + (j == 0 ? carried : acc.cascade)) as Uint<128>;
+    const perTicket = quotient(amount as Field, w == 0 ? 1 : w);
+    const won = w != 0;
+    const remainder = won ? (amount - perTicket * w) as Uint<128> : 0;
+    const toCarry = (won || (j > 0 && j < 8)) ? remainder : amount;
+    return PrizeCalc {
+      prizes: map((x: Uint<128>, k: Uint<8>): Uint<128> => k == j ? (won ? perTicket : 0) : x,
+                  acc.prizes, [0, 1, 2, 3, 4, 5, 6, 7, 8]),
+      cascade: (won || j == 0 || j == 8) ? 0 : amount,
+      carry: (acc.carry + toCarry) as Uint<128>
+    };
+  }, PrizeCalc { prizes: [0, 0, 0, 0, 0, 0, 0, 0, 0], cascade: 0, carry: 0 },
+     shares(), p.winners, [0, 1, 2, 3, 4, 5, 6, 7, 8]);
+  carry = calc.carry;
   feesOwed = (feesOwed + fee) as Uint<128>;
-  draws.insert(id, Draw { ...d, status: DrawStatus.settled, carried: carried, fee: fee, prizes: prizes });
+  draws.insert(id, Draw { ...d, status: DrawStatus.settled, carried: carried, fee: fee, prizes: calc.prizes });
 }
 
 // Pay a winning ticket's prize to its payees. Anyone may call this (a keeper

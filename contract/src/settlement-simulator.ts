@@ -28,7 +28,7 @@ export type SettlementSimulatorOptions = {
   settlementSecret: bigint;
   /** Where operator fees go (32-byte unshielded address). */
   operator: Uint8Array;
-  /** Operator fee in basis points of sales (default 500 = 5%). */
+  /** Operator fee in basis points of sales (default 200 = 2%). */
   feeShare?: bigint;
   /** Price of one ticket (one line) in STAR (default 1 tNIGHT). */
   ticketPrice?: bigint;
@@ -117,7 +117,7 @@ export class SettlementSimulator {
       pureCircuits.organiserCommitmentOf(opts.organiserSecret),
       pureCircuits.settlementPublicKey(opts.settlementSecret),
       { bytes: opts.operator },
-      opts.feeShare ?? 500n,
+      opts.feeShare ?? 200n,
       opts.ticketPrice ?? 1_000_000n,
       opts.minSales ?? 600n,
       opts.maxSales ?? 2_592_000n,
@@ -212,6 +212,28 @@ export class SettlementSimulator {
     as: SettlementPrivateState = { pendingTicket: t },
   ): Uint8Array {
     return this.run(as, (ctx) => this.contract.impureCircuits.buyTicket(ctx, { bytes: refundTo }));
+  }
+
+  /**
+   * Buy several games in one transaction (at most `maxGames()`), refundable
+   * to `refundTo`; returns how many were bought. `buyPackage` handles bigger
+   * packages.
+   */
+  buyTickets(ts: readonly TicketPreimage[], refundTo: Uint8Array): bigint {
+    return this.run({ pendingTickets: ts }, (ctx) =>
+      this.contract.impureCircuits.buyTickets(ctx, BigInt(ts.length), { bytes: refundTo }),
+    );
+  }
+
+  /** Buy any number of games, `maxGames()` per transaction; returns the number of transactions. */
+  buyPackage(ts: readonly TicketPreimage[], refundTo: Uint8Array): number {
+    const max = Number(pureCircuits.maxGames());
+    let txs = 0;
+    for (let i = 0; i < ts.length; i += max) {
+      this.buyTickets(ts.slice(i, i + max), refundTo);
+      txs++;
+    }
+    return txs;
   }
 
   requestDraw(n: bigint, seed: Uint8Array, as: SettlementPrivateState = this.organiser): void {
