@@ -264,9 +264,11 @@ export sealed ledger organiser: Bytes<32>;
 // Public key the tickets are encrypted to: the settler's (stage 1), a TEE's
 // or an MPC committee's joint key later.
 export sealed ledger settlementKey: JubjubPoint;
-// Where the operator fee goes, and its size in basis points of sales.
+// Where the operator fee goes, and the fee per game (one line), in STAR: a
+// flat amount out of each game's price, so a ticket of several lines pays it
+// several times. The rest of the price is the prize pool's.
 export sealed ledger operator: UserAddress;
-export sealed ledger feeShare: Uint<16>;
+export sealed ledger feePerGame: Uint<128>;
 // Price of one ticket (one line), in STAR (1 tNIGHT = 1,000,000 STAR).
 export sealed ledger ticketPrice: Uint<128>;
 // Shortest and longest time a draw may sell tickets for, from when it opens.
@@ -291,11 +293,11 @@ witness divModWide(n: Field, d: Uint<128>): [Uint<128>, Uint<128>];
 // ----------------------------------------------------------- constructor
 
 constructor(key: JubjubPoint, organiserCommitment: Bytes<32>, sealingKey: JubjubPoint,
-            operatorAddress: UserAddress, fee: Uint<16>, price: Uint<128>,
+            operatorAddress: UserAddress, fee: Uint<128>, price: Uint<128>,
             salesMin: Uint<64>, salesMax: Uint<64>,
             reveal: Uint<64>, draw: Uint<64>, settle: Uint<64>) {
   assert(price > 0, "ticket price must be positive");
-  assert(fee <= 3000, "operator fee is at most 30%");
+  assert(fee < price, "operator fee per game must be below the ticket price");
   assert(!isIdentity(sealingKey), "identity settlement key not allowed");
   assert(salesMin >= 60 && salesMin < salesMax && salesMax <= 7776000, "sales period must be 60 seconds to 90 days");
   assert(reveal >= 60 && draw >= 60, "reveal and draw windows must be at least 60 seconds");
@@ -304,7 +306,7 @@ constructor(key: JubjubPoint, organiserCommitment: Bytes<32>, sealingKey: Jubjub
   organiser = disclose(organiserCommitment);
   settlementKey = disclose(sealingKey);
   operator = disclose(operatorAddress);
-  feeShare = disclose(fee);
+  feePerGame = disclose(fee);
   ticketPrice = disclose(price);
   minSales = disclose(salesMin);
   maxSales = disclose(salesMax);
@@ -818,7 +820,7 @@ export circuit settleBatch(n: Uint<32>): Uint<64> {
 // Once every ticket is settled, anyone fixes each division's prize per
 // winning ticket. Draws are finalised in order: the previous draw must be
 // settled or void, and then all the rollover so far joins this draw's
-// jackpot. The operator fee comes off sales first.
+// jackpot. The operator fee (feePerGame per ticket sold) comes off sales first.
 export circuit finaliseDraw(n: Uint<32>): [] {
   const id = disclose(n);
   const d = drawFor(id);
@@ -833,7 +835,7 @@ export circuit finaliseDraw(n: Uint<32>): [] {
   }
   const carried = carry;
   const sales = (ticketPrice * total) as Uint<128>;
-  const fee = quotient((sales as Field) * (feeShare as Field), 10000);
+  const fee = (feePerGame * total) as Uint<128>;
   const pool = (sales - fee) as Uint<128>;
   // Powerball's rules: each division gets its share of the pool; the rollover
   // (jackpot) joins division 1 only; an unwon division 2..8 falls to the next

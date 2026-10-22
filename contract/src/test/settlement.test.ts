@@ -29,13 +29,13 @@ const bytes = (label: string): Uint8Array => {
 const randomAddress = (): Uint8Array => webcrypto.getRandomValues(new Uint8Array(32));
 
 const PRICE = 1_000_000n; // 1 tNIGHT
-const FEE = 200n; // 2%
+const FEE = 200_000n; // 0.2 tNIGHT per game, out of the 1 tNIGHT price
 const SETTLE = 86_400n;
 const SALES = 3_600;
 const BATCH = Number(pureCircuits.batchSize());
 const OPERATOR = bytes('operator wallet');
 
-const setup = (opts: { feeShare?: bigint } = {}) => {
+const setup = (opts: { feePerGame?: bigint } = {}) => {
   const oracleSecretKey = generateOracleSecretKey();
   const settlementSecret = randomScalar();
   const sim = new SettlementSimulator({
@@ -43,7 +43,7 @@ const setup = (opts: { feeShare?: bigint } = {}) => {
     organiserSecret: generateOperatorSecret(),
     settlementSecret,
     operator: OPERATOR,
-    feeShare: opts.feeShare ?? FEE,
+    feePerGame: opts.feePerGame ?? FEE,
     ticketPrice: PRICE,
     minSales: 600n,
     maxSales: 30n * 86_400n,
@@ -711,9 +711,27 @@ describe("Powerball's prize rules", () => {
 });
 
 describe('the operator fee', () => {
-  it('is capped at 30% and can be zero', () => {
-    expect(() => setup({ feeShare: 3001n })).toThrow(/at most 30%/);
-    const { sim, oracleSecretKey } = setup({ feeShare: 0n });
+  it('is a flat amount per game, so a ticket of several lines pays it several times', () => {
+    const { sim, oracleSecretKey } = setup();
+    const { n, seed } = openWithSeed(sim, oracleSecretKey);
+    const me = randomAddress();
+    sim.buyTicket(makeTicket(n, quickPick(), me), me); // 1 line
+    sim.buyPackage(quickPickPackage(n, 'mini', me), me); // 8 lines
+    sim.buyTickets(Array.from({ length: 3 }, () => makeTicket(n, quickPick(), me)), me); // 3 lines
+    drawIt(sim, n, seed);
+    sim.settleAll(n);
+    const l = sim.getLedger();
+    const d = l.draws.lookup(n);
+    expect(d.fee).toBe(12n * FEE);
+    expect(sim.withdrawFees()).toBe(12n * FEE);
+    // The rest of every game's price is the pool: paid out or rolled over.
+    const paid = d.prizes.reduce((a, x, j) => a + x * l.progress.lookup(n).winners[j], 0n);
+    expect(paid + l.carry).toBe(12n * (PRICE - FEE));
+  });
+
+  it('must be below the ticket price, and can be zero', () => {
+    expect(() => setup({ feePerGame: PRICE })).toThrow(/below the ticket price/);
+    const { sim, oracleSecretKey } = setup({ feePerGame: 0n });
     const { n, seed } = openWithSeed(sim, oracleSecretKey);
     buyAll(sim, Array.from({ length: 5 }, () => makeTicket(n, quickPick(), randomAddress())));
     drawIt(sim, n, seed);

@@ -28,8 +28,8 @@ export type SettlementSimulatorOptions = {
   settlementSecret: bigint;
   /** Where operator fees go (32-byte unshielded address). */
   operator: Uint8Array;
-  /** Operator fee in basis points of sales (default 200 = 2%). */
-  feeShare?: bigint;
+  /** Operator fee per game in STAR, out of the ticket price (default 200,000 = 0.2 tNIGHT). */
+  feePerGame?: bigint;
   /** Price of one ticket (one line) in STAR (default 1 tNIGHT). */
   ticketPrice?: bigint;
   minSales?: bigint;
@@ -117,7 +117,7 @@ export class SettlementSimulator {
       pureCircuits.organiserCommitmentOf(opts.organiserSecret),
       pureCircuits.settlementPublicKey(opts.settlementSecret),
       { bytes: opts.operator },
-      opts.feeShare ?? 200n,
+      opts.feePerGame ?? 200_000n,
       opts.ticketPrice ?? 1_000_000n,
       opts.minSales ?? 600n,
       opts.maxSales ?? 2_592_000n,
