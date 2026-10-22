@@ -8,7 +8,7 @@ The goal is the rule at the centre of Lunardraw:
 
 v0 meets the privacy half by having winners **claim**: only a ticket's owner can prove it won. This contract removes the claim. A settler works through every ticket, and the contract checks each step, so nobody has to press a button and no ticket's numbers become public.
 
-The game is Australian Powerball's, as the Starfall spec asks: 7 numbers from 35 plus a Moonball from 20, nine divisions, Powerball's prize-pool allocation and rollover rules, QuickPick packages, and syndicates that split their winnings by locked shares. The operator's fee is a flat amount per game (0.2 tNIGHT in the prototype), so a ticket of several lines pays it once per line. Every game, bought alone, in a package or by a syndicate, is the same kind of ticket and goes through the same settlement.
+The game is Australian Powerball's, as the Starfall spec asks: 7 numbers from 35 plus a Moonball from 20, nine divisions, Powerball's prize-pool allocation and rollover rules, QuickPick packages, and syndicates that split their winnings by locked shares. A game costs 1.2 tNIGHT: 1 tNIGHT goes to the prize pool and 0.2 tNIGHT is the operator's fee, per game, so a ticket of several lines pays it once per line (a Mini QuickPick of 8 games costs 9.6 tNIGHT and pays 1.6 in fees). Every game, bought alone, in a package or by a syndicate, is the same kind of ticket and goes through the same settlement.
 
 ## What happens to a ticket
 
@@ -23,7 +23,7 @@ The game is Australian Powerball's, as the Starfall spec asks: 7 numbers from 35
 3. **Draw.** Same as v0: the organiser's sealed seed, the oracle's VRF and the site's number rule. The numbers end up in the ledger.
 4. **Settlement.** The settler decrypts every ticket with the settlement secret and calls `settleBatch` repeatedly. Each call covers the next 25 tickets in index order. For each ticket, the proof shows that the decrypted ticket hashes to the commitment stored at its index, then works out its division against the numbers stored in the ledger. Winning tickets become **entitlements** (division + payees) under the id `SHA-256(domain, C, salt)`. The salt is secret, so nobody can link an entitlement to a purchase.
 5. **Finalise.** When the last ticket is settled, anyone calls `finaliseDraw`, which:
-   - takes the operator fee off the sales to make the pool: `feePerGame` STAR for every ticket sold (0.2 tNIGHT per game in the prototype, out of the 1 tNIGHT price; the constructor requires it to be below the price);
+   - takes the operator fee off the sales to make the pool: `feePerGame` STAR for every ticket sold (0.2 tNIGHT of each 1.2 tNIGHT game, leaving 1 tNIGHT per game for prizes; the constructor requires the fee to be below the price);
    - gives each division its share of the pool, by Powerball's allocation (below), and adds the rollover to Division 1;
    - fixes each division's prize per winning ticket as `floor(division amount / winners)`;
    - applies Powerball's no-winner rules: an unwon Division 1 rolls over (the jackpot); an unwon Division 2–8 falls into the next lower division that has a winner; an unwon Division 9 and all rounding remainders roll over. Draws finalise in order.
@@ -50,7 +50,7 @@ Shares are stored in basis points (`shares()` in the contract, `POWERBALL_SHARES
 - **No guaranteed jackpot.** Powerball advertises a minimum Division 1; Starfall's jackpot is exactly 33.5% of the pool plus whatever rolled over, because the contract only pays what it holds. A guarantee would need a funded reserve.
 - **No jackpot cap.** Powerball must pay out Division 1 after 25 rollovers. The prototype rolls over indefinitely; a cap (pay the jackpot down to the next division with a winner) is a small change to `finaliseDraw` once the product rule is decided.
 
-The fee is a constructor parameter. A flat fee per game (decided 22 Oct 2026, replacing a 2% share of sales) means the operator's income scales with lines sold, not with the price, and a multi-line ticket pays it once per line. Whether 0.2 tNIGHT covers transaction fees and a keeper is still to be assessed.
+The fee is a constructor parameter. A flat fee per game (decided 22 Oct 2026, replacing a 2% share of sales) means the operator's income scales with lines sold, and a multi-line ticket pays it once per line: price 1.2 tNIGHT = 1 tNIGHT to the pool + 0.2 tNIGHT to the operator. Whether 0.2 tNIGHT covers transaction fees and a keeper is still to be assessed.
 
 ## Syndicates
 

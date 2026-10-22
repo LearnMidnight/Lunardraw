@@ -266,7 +266,9 @@ export sealed ledger organiser: Bytes<32>;
 export sealed ledger settlementKey: JubjubPoint;
 // Where the operator fee goes, and the fee per game (one line), in STAR: a
 // flat amount out of each game's price, so a ticket of several lines pays it
-// several times. The rest of the price is the prize pool's.
+// several times. The rest of the price is the prize pool's. Starfall's
+// numbers: a game costs 1.2 tNIGHT, 1 tNIGHT to the pool and 0.2 to the
+// operator.
 export sealed ledger operator: UserAddress;
 export sealed ledger feePerGame: Uint<128>;
 // Price of one ticket (one line), in STAR (1 tNIGHT = 1,000,000 STAR).

@@ -21,7 +21,7 @@ The full design, including the trust that remains, is in [docs/DESIGN.md](docs/D
 
 Where Starfall is heading: no claim button, and no ticket's numbers ever made public. `contract/src/settlement.compact` is a second contract built on the same draw, in which:
 
-- the game is Australian Powerball's: 7 from 35 plus a Moonball from 20, nine divisions, Powerball's prize-pool allocation, jackpot rollover and no-winner rules, a flat operator fee per game (0.2 tNIGHT per line in the prototype, so a multi-line ticket pays it per line);
+- the game is Australian Powerball's: 7 from 35 plus a Moonball from 20, nine divisions, Powerball's prize-pool allocation, jackpot rollover and no-winner rules, a game costs 1.2 tNIGHT, of which 1 tNIGHT goes to the prize pool and 0.2 tNIGHT to the operator, per line;
 - every ticket is published as a commitment plus the ticket encrypted to a settlement key; up to 4 games per transaction, with QuickPick packages from Single (1) to Maxi (50);
 - a settler works through every ticket in order, 25 per proof, and the contract checks that each one matches its commitment, so no ticket can be left out, counted twice or altered;
 - prizes are then paid automatically by anyone;

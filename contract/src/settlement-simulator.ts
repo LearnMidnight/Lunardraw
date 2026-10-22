@@ -30,7 +30,7 @@ export type SettlementSimulatorOptions = {
   operator: Uint8Array;
   /** Operator fee per game in STAR, out of the ticket price (default 200,000 = 0.2 tNIGHT). */
   feePerGame?: bigint;
-  /** Price of one ticket (one line) in STAR (default 1 tNIGHT). */
+  /** Price of one game (one line) in STAR (default 1.2 tNIGHT: 1 tNIGHT to the prize pool + the 0.2 tNIGHT fee). */
   ticketPrice?: bigint;
   minSales?: bigint;
   maxSales?: bigint;
@@ -118,7 +118,7 @@ export class SettlementSimulator {
       pureCircuits.settlementPublicKey(opts.settlementSecret),
       { bytes: opts.operator },
       opts.feePerGame ?? 200_000n,
-      opts.ticketPrice ?? 1_000_000n,
+      opts.ticketPrice ?? 1_200_000n,
       opts.minSales ?? 600n,
       opts.maxSales ?? 2_592_000n,
       opts.revealWindow ?? 3_600n,

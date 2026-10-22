@@ -28,8 +28,9 @@ const bytes = (label: string): Uint8Array => {
 };
 const randomAddress = (): Uint8Array => webcrypto.getRandomValues(new Uint8Array(32));
 
-const PRICE = 1_000_000n; // 1 tNIGHT
-const FEE = 200_000n; // 0.2 tNIGHT per game, out of the 1 tNIGHT price
+const FEE = 200_000n; // 0.2 tNIGHT per game, to the operator
+const PRIZE = 1_000_000n; // 1 tNIGHT per game, to the prize pool
+const PRICE = PRIZE + FEE; // 1.2 tNIGHT: what a player pays per game
 const SETTLE = 86_400n;
 const SALES = 3_600;
 const BATCH = Number(pureCircuits.batchSize());
@@ -722,11 +723,14 @@ describe('the operator fee', () => {
     sim.settleAll(n);
     const l = sim.getLedger();
     const d = l.draws.lookup(n);
+    // Of each 1.2 tNIGHT game, 0.2 goes to the operator ...
     expect(d.fee).toBe(12n * FEE);
     expect(sim.withdrawFees()).toBe(12n * FEE);
-    // The rest of every game's price is the pool: paid out or rolled over.
+    // ... and 1 tNIGHT is the pool: paid out or rolled over.
     const paid = d.prizes.reduce((a, x, j) => a + x * l.progress.lookup(n).winners[j], 0n);
-    expect(paid + l.carry).toBe(12n * (PRICE - FEE));
+    expect(paid + l.carry).toBe(12n * PRIZE);
+    // A QuickPick package costs its games x the price: a Mini is 9.6 tNIGHT.
+    expect(BigInt(QUICK_PICK_PACKAGES.mini) * PRICE).toBe(9_600_000n);
   });
 
   it('must be below the ticket price, and can be zero', () => {
