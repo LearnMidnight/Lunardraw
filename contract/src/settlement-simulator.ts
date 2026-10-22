@@ -50,6 +50,10 @@ export type Payment = { to: string; amount: bigint };
 
 const hex = (b: Uint8Array): string => Buffer.from(b).toString('hex');
 
+/** A compact description of an unknown value, for error messages. */
+const describe = (x: unknown): string =>
+  JSON.stringify(x, (_k, v) => (typeof v === 'bigint' ? `${v}n` : v instanceof Uint8Array ? `0x${hex(v)}` : v));
+
 /**
  * Pull the unshielded payments out of a circuit's effects, if the runtime
  * exposes them. Returns undefined if it doesn't (the ledger is then the only
@@ -70,16 +74,19 @@ const paymentsOf = (context: unknown): Payment[] | undefined => {
   const pairs: [unknown, bigint][] = entries instanceof Map ? [...entries.entries()] : Object.entries(entries);
   const out: Payment[] = [];
   for (const [k, amount] of pairs) {
-    // The key is (token type, recipient); the recipient is the last 32-byte value in it.
-    const found: Uint8Array[] = [];
+    // The key is (token type, recipient); the recipient is the last 32-byte
+    // value in it, as bytes or hex.
+    const found: string[] = [];
     const walk = (x: unknown): void => {
       if (x instanceof Uint8Array) {
-        if (x.length === 32) found.push(x);
+        if (x.length === 32) found.push(hex(x));
+      } else if (typeof x === 'string') {
+        if (/^[0-9a-f]{64}$/i.test(x)) found.push(x.toLowerCase());
       } else if (Array.isArray(x)) x.forEach(walk);
       else if (x !== null && typeof x === 'object') Object.values(x as Record<string, unknown>).forEach(walk);
     };
     walk(k);
-    const to = found.length > 0 ? hex(found[found.length - 1]) : String(k);
+    const to = found.length > 0 ? found[found.length - 1] : `unparsed ${describe(k)}`;
     out.push({ to, amount: BigInt(amount) });
   }
   return out;

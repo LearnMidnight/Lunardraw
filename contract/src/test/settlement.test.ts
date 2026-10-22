@@ -114,9 +114,8 @@ describe('sealed tickets', () => {
     expect(hex(opened.salt)).toBe(hex(t.salt));
     expect(hex(sim.commitmentOf(opened))).toBe(hex(c));
 
-    // Another key gets noise that doesn't match the commitment.
-    const wrong = pureCircuits.openTicket(randomScalar(), n, rec.cipher);
-    expect(hex(sim.commitmentOf(wrong))).not.toBe(hex(c));
+    // Another key gets noise: it doesn't even decode to a ticket.
+    expect(() => pureCircuits.openTicket(randomScalar(), n, rec.cipher)).toThrow(/range error/);
 
     // Nothing public carries the numbers: the record holds the commitment, the
     // ciphertext and the refund address only.
@@ -247,7 +246,7 @@ describe('settling 100 private tickets', () => {
   });
 
   it("splits a syndicate's prize by its shares, with the remainder to the first payee", () => {
-    expect(splitPrize(1_000_003n, [4000n, 3333n, 2667n])).toEqual([400_002n, 333_300n, 266_700n]);
+    expect(splitPrize(1_000_003n, [4000n, 3333n, 2667n])).toEqual([400_003n, 333_300n, 266_700n]);
     expect(splitPrize(7n, [9999n, 1n, 0n])).toEqual([7n, 0n, 0n]);
     for (const prize of [0n, 1n, 99_999n, 123_456_789n]) {
       const parts = splitPrize(prize, [4000n, 3333n, 2667n]);
@@ -341,7 +340,10 @@ describe('settlement fails safely', () => {
   it("a settler without the settlement key can't settle", () => {
     const { sim, n, seed } = ready();
     drawIt(sim, n, seed);
-    expect(() => sim.settleBatch(n, sim.decryptDrawTickets(n, randomScalar()))).toThrow(/does not match its commitment/);
+    expect(() => sim.decryptDrawTickets(n, randomScalar())).toThrow(/range error/);
+    // Guessing at the tickets instead doesn't help.
+    const guessed = Array.from({ length: 60 }, () => makeTicket(n, quickPick(), randomAddress()));
+    expect(() => sim.settleBatch(n, guessed)).toThrow(/does not match its commitment/);
   });
 
   it("can't finalise until every ticket is settled, or settle past the end", () => {
