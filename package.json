@@ -8,7 +8,8 @@
   "workspaces": [
     "nightcast/contract",
     "nightcast/sdk",
-    "contract"
+    "contract",
+    "keeper"
   ],
   "engines": {
     "node": ">=22"
@@ -16,9 +17,9 @@
   "scripts": {
     "compact": "npm run compact:fast -w @nightcast/contract && npm run compact:fast -w @lunardraw/contract",
     "compact:keys": "npm run compact -w @lunardraw/contract",
-    "build": "npm run build -w @nightcast/contract && npm run build -w @nightcast/sdk && npm run build -w @lunardraw/contract",
-    "typecheck": "npm run typecheck -w @lunardraw/contract",
-    "test": "npm test -w @lunardraw/contract"
+    "build": "npm run build -w @nightcast/contract && npm run build -w @nightcast/sdk && npm run build -w @lunardraw/contract && npm run build -w @lunardraw/keeper",
+    "typecheck": "npm run typecheck -w @lunardraw/contract && npm run typecheck -w @lunardraw/keeper",
+    "test": "npm test -w @lunardraw/contract && npm test -w @lunardraw/keeper"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
