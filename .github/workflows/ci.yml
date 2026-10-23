@@ -42,6 +42,9 @@ jobs:
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
+      - name: Dust fee-loop fix applied
+        run: node nightcast/deploy/scripts/patch-dust-fee-loop.mjs --check --root .
+
       - name: Compile contracts
         run: npm run compact
 
@@ -60,6 +63,11 @@ jobs:
         working-directory: keeper
         run: npx vitest run --reporter=default --reporter=github-actions --reporter=json --outputFile.json=../reports/keeper.json
 
+      - name: Test the CLI (offline)
+        if: ${{ !cancelled() }}
+        working-directory: cli
+        run: npx vitest run src/test/offline.test.ts --reporter=default --reporter=github-actions --reporter=json --outputFile.json=../reports/cli.json
+
       - name: Summarise tests
         if: always()
         run: |
@@ -72,14 +80,21 @@ jobs:
             ' "$PWD/$f"
           done
 
-  # Generates the proving keys and reports each circuit's size and build
-  # time. Informational until the contract is deployed.
-  keys:
+  # Builds the proving keys, then runs a real draw on a throwaway local
+  # Midnight network: deploy locked, activate the oracle key, and the keeper
+  # and the draw oracle open, reveal, answer and compute a draw.
+  e2e:
+    needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v5
+        with:
+          submodules: true
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
 
       - name: Install Compact toolchain
         run: |
@@ -89,15 +104,82 @@ jobs:
       - name: Select compiler ${{ env.COMPACT_TOOLCHAIN }}
         run: compact update "$COMPACT_TOOLCHAIN"
 
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
       - name: Compile with proving keys
-        working-directory: contract
         shell: bash
         run: |
           start=$SECONDS
-          compact compile src/lunardraw.compact src/managed/lunardraw 2>&1 | tee keys.log
+          npm run compact:keys
           echo "::notice title=keys::built in $((SECONDS - start))s"
-          for f in src/managed/lunardraw/keys/*.prover; do
+          for f in contract/src/managed/lunardraw/keys/*.prover; do
             c=$(basename "$f" .prover)
-            p=$(stat -c %s "$f"); v=$(stat -c %s "src/managed/lunardraw/keys/$c.verifier")
+            p=$(stat -c %s "$f"); v=$(stat -c %s "contract/src/managed/lunardraw/keys/$c.verifier")
             echo "::notice title=circuit $c::prover key $((p / 1024)) KiB, verifier key $v bytes"
+          done
+
+      - name: Build
+        run: npm run build
+
+      - name: Pull network images
+        run: |
+          status=0
+          for img in $(grep -o 'image: "[^"]*"' nightcast/deploy/docker/compose.yml nightcast/deploy/docker/proof-server.yml | sed 's/.*image: "//; s/"$//' | sort -u); do
+            if docker pull -q "$img" > /dev/null 2>pull-err.txt; then
+              echo "::notice title=image::$img pulled"
+            else
+              echo "::error title=image::$img: $(head -c 400 pull-err.txt | tr '\n' ' ')"
+              status=1
+            fi
+          done
+          exit $status
+
+      - name: End-to-end test on a local network
+        working-directory: cli
+        env:
+          LUNARDRAW_E2E: '1'
+          # Keep the network's containers after a failure, for the logs step.
+          TESTCONTAINERS_RYUK_DISABLED: 'true'
+        shell: bash
+        run: |
+          set -o pipefail
+          npx vitest run src/test/e2e.test.ts --reporter=default --reporter=github-actions --reporter=json --outputFile.json=../reports/e2e.json 2>&1 | tee ../e2e.log
+
+      - name: Summarise tests
+        if: always()
+        run: |
+          for f in reports/*.json; do
+            [ -f "$f" ] || continue
+            node -e '
+              const r = require(process.argv[1]);
+              const name = process.argv[1].split("/").pop().replace(".json", "");
+              console.log(`::notice title=${name} tests::${r.numPassedTests} passed, ${r.numFailedTests} failed, ${r.numTotalTests} total`);
+            ' "$PWD/$f"
+          done
+
+      - name: Test output
+        if: failure()
+        run: |
+          [ -f e2e.log ] || exit 0
+          sed 's/\x1b\[[0-9;]*m//g' e2e.log | grep -v '^\s*$' | grep -iE 'error|fail|exception|cause|at |✗|×|timeout|refused|unhealthy|exited|done:|could not' | head -60 > e2e-errors.txt || true
+          n=0
+          while [ $n -lt 4 ]; do
+            chunk=$(sed -n "$((n*15+1)),$((n*15+15))p" e2e-errors.txt | sed 's/%/%25/g' | awk 'BEGIN{ORS="%0A"} {print substr($0,1,300)}')
+            [ -n "$chunk" ] && echo "::error title=e2e output $n::$chunk"
+            n=$((n+1))
+          done
+
+      - name: Container logs
+        if: failure()
+        run: |
+          echo "::warning title=logs containers::$(docker ps -a --format '{{.Names}}: {{.Status}}' | awk 'BEGIN{ORS="%0A"} {print}')"
+          for c in $(docker ps -a --filter status=exited --format '{{.Names}}'); do
+            state=$(docker inspect --format 'exit {{.State.ExitCode}}, OOM killed {{.State.OOMKilled}}, finished {{.State.FinishedAt}} {{.State.Error}}' "$c")
+            errs=$(docker logs "$c" 2>&1 | grep -iE '"level":"(ERROR|WARN)"|panic|error' | tail -n 6 | cut -c1-600 | sed 's/%/%25/g' | awk 'BEGIN{ORS="%0A"} {print}')
+            echo "::warning title=logs $c stopped::$state%0A$errs"
+          done
+          for c in $(docker ps -a --format '{{.Names}}'); do
+            tail=$(docker logs --tail 25 "$c" 2>&1 | tail -c 2500 | sed 's/%/%25/g' | awk 'BEGIN{ORS="%0A"} {print}')
+            echo "::warning title=logs $c::$tail"
           done

@@ -13,6 +13,8 @@ export type DrawView = {
   drawDeadline: bigint;
   claimDeadline: bigint;
   seedCommitment: Uint8Array;
+  /** The oracle key the draw was requested with (meaningful once requested). */
+  oracleKey: { x: bigint; y: bigint };
 };
 
 export type WinView = { line: Uint8Array; drawId: bigint; paid: boolean };
@@ -56,12 +58,21 @@ export const viewOf = (l: Ledger): ChainView => ({
     drawDeadline: d.drawDeadline,
     claimDeadline: d.claimDeadline,
     seedCommitment: d.seedCommitment,
+    oracleKey: { x: d.oracleKey.x, y: d.oracleKey.y },
   })).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)),
   wins: Array.from(l.wins, ([line, w]) => ({ line, drawId: w.drawId, paid: w.paid })),
 });
 
-/** A {@link LottoSimulator} as a chain; the keeper acts as its organiser. */
-export class SimulatorChain implements LunardrawChain {
+/** What the draw oracle needs: the draws, the time, and `fulfilDraw`. */
+export interface DrawOracleChain {
+  view(): Promise<ChainView>;
+  now(): Promise<number>;
+  /** Oracle only (its secret key answers the witness). Resolves once on chain. */
+  fulfilDraw(n: bigint): Promise<void>;
+}
+
+/** A {@link LottoSimulator} as a chain: the keeper acts as its organiser, the oracle as its oracle. */
+export class SimulatorChain implements LunardrawChain, DrawOracleChain {
   constructor(readonly sim: LottoSimulator) {}
 
   async view(): Promise<ChainView> {
@@ -95,5 +106,9 @@ export class SimulatorChain implements LunardrawChain {
 
   async voidDraw(n: bigint): Promise<void> {
     this.sim.voidDraw(n);
+  }
+
+  async fulfilDraw(n: bigint): Promise<void> {
+    this.sim.fulfilDraw(n);
   }
 }
