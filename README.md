@@ -61,6 +61,8 @@ npm install && npm run compact:keys && npm run build
 ./lunardraw verify --network preview
 ```
 
+**Run your own proof server.** The organiser secret (keeper) and the oracle key (oracle) are sent to the proof server to build each proof, so each must use a proof server on its own machine; the tools start one in Docker that only that machine can reach. Never point them at a hosted or shared proof server.
+
 The defaults are the weekly Starfall: Thursdays 20:00 Brisbane, 1 tNIGHT a line. For a test network, deploy with shorter windows, for example `--min-sales 600 --reveal 600 --draw 900 --claim 3600`, and run the keeper with `--every 1800` for a draw every 30 minutes. The keeper keeps its sealed seeds in `~/lunardraw-secrets/seeds-<network>.json`: back it up and keep it private.
 
 ## Licence
