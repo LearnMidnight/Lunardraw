@@ -151,3 +151,6 @@ vite.config.ts.timestamp-*
 # Compact compiler output
 contract/src/managed/
 reports/
+
+# Never commit secrets (organiser, backup, oracle, wallet files)
+*.secret
