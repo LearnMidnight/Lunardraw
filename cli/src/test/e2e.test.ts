@@ -82,11 +82,15 @@ describe.runIf(enabled)('Lunardraw on a local Midnight network', () => {
   }, 15 * 60_000);
 
   it('runs a draw: the keeper opens and reveals it, the oracle answers, the keeper computes the numbers', async () => {
-    const organiser = await joinLunardraw(providers, address, { organiserSecret });
-    const keeperChain = new MidnightLunardrawChain(organiser, providers.publicDataProvider, address);
+    // Separate providers (and so separate private state) per role, as the
+    // keeper and the oracle are separate programs in real use.
+    const keeperProviders = lunardrawProviders(session, wallet);
+    const oracleProviders = lunardrawProviders(session, wallet);
+    const organiser = await joinLunardraw(keeperProviders, address, { organiserSecret });
+    const keeperChain = new MidnightLunardrawChain(organiser, keeperProviders.publicDataProvider, address);
     const keeper = new Keeper({ chain: keeperChain, seeds, schedule: soon, marginSecs: 20, logger: session.logger });
-    const oracleJoined = await joinLunardraw(providers, address, { oracleSecretKey });
-    const oracleChain = new MidnightLunardrawChain(oracleJoined, providers.publicDataProvider, address);
+    const oracleJoined = await joinLunardraw(oracleProviders, address, { oracleSecretKey });
+    const oracleChain = new MidnightLunardrawChain(oracleJoined, oracleProviders.publicDataProvider, address);
     const oracle = new DrawOracle({ chain: oracleChain, publicKey: params.oraclePublicKey, newRequestDelayMs: 0, logger: session.logger });
 
     // Open draw 1.

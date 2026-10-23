@@ -13,7 +13,7 @@
  */
 import { DrawStatus } from '@lunardraw/contract';
 import type { ChainView, DrawOracleChain } from './chain.js';
-import type { KeeperLogger } from './keeper.js';
+import { type KeeperLogger, reasonOf } from './keeper.js';
 
 export type DrawOracleOptions = {
   chain: DrawOracleChain;
@@ -115,7 +115,7 @@ export class DrawOracle {
         report.fulfilled.push(d.id);
         this.logger.info(`answered draw ${d.id}`);
       } catch (err) {
-        const error = err instanceof Error ? err.message.split('\n')[0] : String(err);
+        const error = reasonOf(err);
         const n = (failed?.failures ?? 0) + 1;
         const delay = Math.min(this.cfg.backoffMs * 2 ** (n - 1), this.cfg.maxBackoffMs);
         this.failures.set(d.id, { failures: n, nextTryAt: this.cfg.clock() + delay });
@@ -134,7 +134,7 @@ export class DrawOracle {
       try {
         await this.tick();
       } catch (err) {
-        this.logger.error(`could not read the contract: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`);
+        this.logger.error(`could not read the contract: ${reasonOf(err)}`);
       }
       if (this.running) this.timer = setTimeout(loop, this.cfg.pollMs);
     };

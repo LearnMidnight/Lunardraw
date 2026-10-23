@@ -39,6 +39,25 @@ export type PlanOptions = {
 const hex = (b: Uint8Array): string => Buffer.from(b).toString('hex');
 
 /**
+ * An error's message and its causes, one line, for logs. midnight-js wraps
+ * the reason a circuit failed (an assertion, a missing witness) as a cause.
+ */
+export const reasonOf = (err: unknown, max = 600): string => {
+  const parts: string[] = [];
+  const seen = new Set<unknown>();
+  let current: unknown = err;
+  while (current !== undefined && current !== null && !seen.has(current) && parts.length < 6) {
+    seen.add(current);
+    const message = current instanceof Error ? current.message : typeof current === 'string' ? current : JSON.stringify(current);
+    const line = String(message).split('\n')[0].trim();
+    if (line && !parts.includes(line)) parts.push(line);
+    current = current instanceof Error ? (current as Error & { cause?: unknown }).cause : undefined;
+  }
+  const text = parts.join(': ') || 'unknown error';
+  return text.length > max ? `${text.slice(0, max)}...` : text;
+};
+
+/**
  * The steps that are due, in the order to send them, for a view of the
  * contract at chain time `now` (seconds). Pure: the keeper and its tests both
  * use it.
@@ -239,7 +258,7 @@ export class Keeper {
         report.done.push(key);
         this.logger.info(`done: ${describeStep(step)}`);
       } catch (err) {
-        const error = err instanceof Error ? err.message.split('\n')[0] : String(err);
+        const error = reasonOf(err);
         const n = (failed?.failures ?? 0) + 1;
         const delay = Math.min(this.cfg.backoffMs * 2 ** (n - 1), this.cfg.maxBackoffMs);
         this.failures.set(key, { failures: n, nextTryAt: this.cfg.clock() + delay, error });
@@ -326,7 +345,7 @@ export class Keeper {
       try {
         await this.tick();
       } catch (err) {
-        this.logger.error(`could not read the contract: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`);
+        this.logger.error(`could not read the contract: ${reasonOf(err)}`);
       }
       if (this.running) this.timer = setTimeout(loop, this.cfg.pollMs);
     };
