@@ -245,6 +245,7 @@ describe('dueSteps', () => {
       drawDeadline: 3_000n,
       claimDeadline: 10_000n,
       seedCommitment: new Uint8Array(32),
+      oracleKey: { x: 0n, y: 1n },
       ...d,
     })),
   });
