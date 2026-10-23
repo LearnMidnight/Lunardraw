@@ -119,29 +119,92 @@ describe('the draw', () => {
     expect(() => sim.requestDraw(n, seed)).toThrow(/not open/);
   });
 
-  it('needs an accepted oracle key, and only that oracle can answer', () => {
+  it('needs an accepted oracle key before a draw can open, and only that oracle can answer', () => {
     const { sim, oracleSecretKey } = setup({ acceptKey: false });
-    const { n, seed } = openWithSeed(sim, oracleSecretKey);
-    closeSales(sim);
-    expect(() => sim.requestDraw(n, seed)).toThrow(/no active oracle key/);
+    expect(() => openWithSeed(sim, oracleSecretKey)).toThrow(/no active oracle key/);
     expect(() => sim.acceptOracleKey({ oracleSecretKey: generateOracleSecretKey() })).toThrow(/does not match/);
     sim.acceptOracleKey();
+    const { n, seed } = openWithSeed(sim, oracleSecretKey);
+    closeSales(sim);
     sim.requestDraw(n, seed);
     expect(() => sim.fulfilDraw(n, { oracleSecretKey: generateOracleSecretKey() })).toThrow(/not the oracle/);
     sim.fulfilDraw(n);
   });
 
-  it('lets the organiser rotate the oracle key; a requested draw keeps its key', () => {
+  it('binds a draw to the oracle key it opened with: a key change never reaches an open draw', () => {
     const { sim, oracleSecretKey } = setup();
     const { n, seed } = openWithSeed(sim, oracleSecretKey);
+    const key = oraclePublicKey(oracleSecretKey);
+    expect(sim.getLedger().draws.lookup(n).oracleKey).toEqual(key);
+    // The organiser proposes a key it made itself, and waits out the delay...
+    const own = generateOracleSecretKey();
+    expect(() => sim.proposeOracleKey(oraclePublicKey(own), sim.anyone)).toThrow();
+    sim.proposeOracleKey(oraclePublicKey(own));
+    sim.advance(Number(MAX_SALES + REVEAL) + 1);
+    sim.acceptOracleKey({ oracleSecretKey: own });
+    expect(sim.getLedger().oracleKey).toEqual(oraclePublicKey(own));
+    // ...but the draw that was selling still belongs to the old oracle. (The
+    // sales period is over by now, so this draw is void; the point is the key.)
+    expect(sim.getLedger().draws.lookup(n).oracleKey).toEqual(key);
+    sim.voidDraw(n);
+    // The next draw is bound to the new key.
+    const m = openWithSeed(sim, own).n;
+    expect(sim.getLedger().draws.lookup(m).oracleKey).toEqual(oraclePublicKey(own));
     closeSales(sim);
-    sim.requestDraw(n, seed);
+    sim.requestDraw(m, bytes(`seed ${m}`));
+    expect(() => sim.fulfilDraw(m)).toThrow(/not the oracle/);
+    sim.fulfilDraw(m, { oracleSecretKey: own });
+  });
+
+  it('makes a new oracle key wait longer than any draw sells for, unless the current oracle agrees', () => {
+    const { sim } = setup();
     const next = generateOracleSecretKey();
-    expect(() => sim.proposeOracleKey(oraclePublicKey(next), sim.anyone)).toThrow();
     sim.proposeOracleKey(oraclePublicKey(next));
+    const l = sim.getLedger();
+    expect(l.oracleKeyChangeAt).toBe(BigInt(sim.now) + MAX_SALES + REVEAL);
+    expect(() => sim.acceptOracleKey({ oracleSecretKey: next })).toThrow(/still waiting/);
+    sim.advance(Number(MAX_SALES + REVEAL) - 10);
+    expect(() => sim.acceptOracleKey({ oracleSecretKey: next })).toThrow(/still waiting/);
+    // Proposing again restarts the wait.
+    sim.proposeOracleKey(oraclePublicKey(next));
+    sim.advance(20);
+    expect(() => sim.acceptOracleKey({ oracleSecretKey: next })).toThrow(/still waiting/);
+    // The clock must be close to block time.
+    expect(() => sim.proposeOracleKey(oraclePublicKey(next), sim.organiser, BigInt(sim.now + 1_000))).toThrow(/clock/);
+    // The current oracle's approval lifts the wait; the new key's holder can't approve for itself.
+    expect(() => sim.approveOracleKey({ oracleSecretKey: next })).toThrow(/still waiting/);
+    sim.approveOracleKey();
     sim.acceptOracleKey({ oracleSecretKey: next });
-    expect(() => sim.fulfilDraw(n, { oracleSecretKey: next })).toThrow(/not the oracle/);
+    expect(sim.getLedger().oracleKey).toEqual(oraclePublicKey(next));
+    expect(sim.getLedger().proposedOracleKey.is_some).toBe(false);
+    expect(sim.getLedger().oracleKeyApproved).toBe(false);
+  });
+
+  it('lets the organiser hand over, and the backup organiser take over', () => {
+    const { sim, oracleSecretKey } = setup();
+    const { n, seed } = openWithSeed(sim, oracleSecretKey);
+    const successor = generateOperatorSecret();
+    const asSuccessor = { organiserSecret: successor };
+    expect(() => sim.proposeOrganiser(pureCircuits.organiserCommitmentOf(successor), sim.anyone)).toThrow();
+    // Nobody can take over without a proposal.
+    expect(() => sim.acceptOrganiser(asSuccessor)).toThrow(/not the organiser/);
+    sim.proposeOrganiser(pureCircuits.organiserCommitmentOf(successor));
+    expect(() => sim.acceptOrganiser({ organiserSecret: generateOperatorSecret() })).toThrow(/not the organiser/);
+    sim.acceptOrganiser(asSuccessor);
+    // The old organiser is out; the new one carries on with the open draw.
+    closeSales(sim);
+    expect(() => sim.requestDraw(n, seed)).toThrow(/not the organiser/);
+    sim.requestDraw(n, seed, asSuccessor);
+    // The backup replaces a lost organiser without a proposal, but never with itself.
+    const replacement = generateOperatorSecret();
+    expect(() => sim.recoverOrganiser(pureCircuits.organiserCommitmentOf(replacement), { organiserSecret: generateOperatorSecret() })).toThrow(/not the organiser/);
+    expect(() => sim.recoverOrganiser(pureCircuits.organiserCommitmentOf(sim.backupSecret))).toThrow(/can't be the organiser/);
+    expect(() => sim.proposeOrganiser(pureCircuits.organiserCommitmentOf(sim.backupSecret), asSuccessor)).toThrow(/can't be the organiser/);
+    sim.recoverOrganiser(pureCircuits.organiserCommitmentOf(replacement));
+    expect(() => openWithSeed(sim, oracleSecretKey)).toThrow(/not the organiser/);
     sim.fulfilDraw(n);
+    sim.computeNumbers(n);
+    expect(sim.getLedger().organiser).toEqual(pureCircuits.organiserCommitmentOf(replacement));
   });
 
   it('starts the claim window when the numbers are computed, within the clock tolerance', () => {

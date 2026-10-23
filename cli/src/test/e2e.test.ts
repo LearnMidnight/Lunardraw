@@ -8,6 +8,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { inspect } from 'node:util';
 import type { MidnightWalletProvider } from '@midnight-ntwrk/testkit-js';
 import { DrawStatus, ledger } from '@lunardraw/contract';
 import { DrawOracle, Keeper, MemorySeedStore, type Schedule } from '@lunardraw/keeper';
@@ -20,6 +21,12 @@ import { acceptOracleKey, deployLunardraw, type DeploymentRecord, organiserCommi
 const enabled = process.env.LUNARDRAW_E2E === '1';
 const hex = (b: Uint8Array) => Buffer.from(b).toString('hex');
 const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
+/** Everything an error carries (Effect wraps the real cause in symbol-keyed fields), so a rejected transaction says why. */
+const explain = (err: unknown): string => {
+  const text = inspect(err, { depth: 12, breakLength: Infinity, showHidden: true });
+  const lines = text.split('\n').filter((l) => !/^\s+at /.test(l));
+  return lines.join('\n').slice(0, 6000);
+};
 
 describe.runIf(enabled)('Lunardraw on a local Midnight network', () => {
   let session: Session;
@@ -28,10 +35,12 @@ describe.runIf(enabled)('Lunardraw on a local Midnight network', () => {
   let address: string;
   const oracleSecretKey = generateOracleSecretKey();
   const organiserSecret = generateOperatorSecret();
+  const backupSecret = generateOperatorSecret();
   const seeds = new MemorySeedStore();
   const params = {
     oraclePublicKey: oraclePublicKey(oracleSecretKey),
     organiserCommitment: organiserCommitmentOf(organiserSecret),
+    backupCommitment: organiserCommitmentOf(backupSecret),
     linePrice: 1_000_000n,
     minSales: 60n,
     maxSales: 86_400n,
@@ -64,7 +73,9 @@ describe.runIf(enabled)('Lunardraw on a local Midnight network', () => {
   }, 5 * 60_000);
 
   it('deploys locked and activates the oracle key', async () => {
-    const deployed = await deployLunardraw(providers, params);
+    const deployed = await deployLunardraw(providers, params).catch((err: unknown) => {
+      throw new Error(`deploy rejected: ${explain(err)}`);
+    });
     address = deployed.contractAddress;
     await acceptOracleKey(providers, address, oracleSecretKey);
     const fps = localFingerprints(zkConfigPath());
@@ -98,6 +109,7 @@ describe.runIf(enabled)('Lunardraw on a local Midnight network', () => {
     const view = await keeperChain.view();
     const first = view.draws.find((d) => d.id === 1n)!;
     expect(first.status).toBe(DrawStatus.open);
+    expect(first.oracleKey).toEqual(params.oraclePublicKey);
 
     // After sales close: reveal draw 1 and open draw 2 in one transaction.
     while (Date.now() / 1000 < Number(first.salesClose) + 25) await sleep(5_000);

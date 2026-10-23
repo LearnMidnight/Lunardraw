@@ -13,7 +13,7 @@ export type DrawView = {
   drawDeadline: bigint;
   claimDeadline: bigint;
   seedCommitment: Uint8Array;
-  /** The oracle key the draw was requested with (meaningful once requested). */
+  /** The oracle key the draw is bound to (fixed when it opened). */
   oracleKey: { x: bigint; y: bigint };
 };
 
@@ -25,6 +25,8 @@ export type ChainView = {
   minSales: bigint;
   maxSales: bigint;
   oracleKeyReady: boolean;
+  /** A proposed oracle key, if any, and the earliest time it may take effect (seconds). */
+  oracleKeyChange?: { key: { x: bigint; y: bigint }; at: bigint; approved: boolean };
   draws: DrawView[];
   wins: WinView[];
 };
@@ -50,6 +52,9 @@ export const viewOf = (l: Ledger): ChainView => ({
   minSales: l.minSales,
   maxSales: l.maxSales,
   oracleKeyReady: l.oracleKeyReady,
+  oracleKeyChange: l.proposedOracleKey.is_some
+    ? { key: { x: l.proposedOracleKey.value.x, y: l.proposedOracleKey.value.y }, at: l.oracleKeyChangeAt, approved: l.oracleKeyApproved }
+    : undefined,
   draws: Array.from(l.draws, ([id, d]) => ({
     id,
     status: d.status,

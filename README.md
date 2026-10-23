@@ -13,6 +13,7 @@ Pick 7 numbers from 1–35 and a Moonball from 1–20. Tickets cost a fixed pric
 - **Secret tickets.** Only a commitment to your numbers goes on chain. You reveal one winning line (its division, not its numbers) when you claim it.
 - **Nobody knows the numbers during sales.** The keeper bot seals a random seed before sales open and reveals it after they close; the Nightcast oracle then answers with a VRF output that anyone can check, and the numbers follow from both with a fixed public rule. The keeper can't compute the oracle's answer, and the oracle can't change the seed.
 - **Nothing gets stuck.** Every stage has a deadline. If the keeper or the oracle stops, anyone can void the draw and every ticket is refunded in full.
+- **No quiet key swaps.** A draw is bound to the oracle key that is active when it opens, so you can see which key will answer before you buy. A new key has to wait longer than any draw sells for (unless the current oracle agrees), and the wait is public.
 - **Rolling draws.** Revealing one draw's seed opens the next, so the draws run week after week. Draws settle in order, and the rollover always goes to the next draw in line.
 
 The full design, including the trust that remains, is in [docs/DESIGN.md](docs/DESIGN.md).
@@ -51,8 +52,9 @@ Wallets, the oracle key and the Blockfrost project id are Nightcast's files (see
 ```sh
 npm install && npm run compact:keys && npm run build
 ./lunardraw keygen organiser --out ~/lunardraw-secrets/organiser.secret
+./lunardraw keygen organiser --out ~/lunardraw-secrets/backup.secret     # keep this one offline
 ./lunardraw deploy --network preview --organiser ~/lunardraw-secrets/organiser.secret \
-  --oracle oracle.secret --wallet wallet.secret --accept
+  --backup ~/lunardraw-secrets/backup.secret --oracle oracle.secret --wallet wallet.secret --accept
 ./lunardraw keeper --network preview --organiser ~/lunardraw-secrets/organiser.secret --wallet wallet.secret
 ./lunardraw oracle --network preview --oracle oracle.secret --wallet oracle-wallet.secret   # on another machine
 ./lunardraw status --network preview

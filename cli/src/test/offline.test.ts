@@ -26,6 +26,7 @@ const setup = (authority = { committee: [] as string[], threshold: 1, counter: 1
     parameters: recordParameters({
       oraclePublicKey: oraclePublicKey(sk),
       organiserCommitment: pureCircuits.organiserCommitmentOf(organiserSecret),
+      backupCommitment: pureCircuits.organiserCommitmentOf(sim.backupSecret),
       linePrice: 2_000_000n,
       minSales: 600n,
       maxSales: 2_592_000n,
@@ -61,6 +62,14 @@ describe('verifyDeployment', () => {
     expect(checks.find((c) => c.name === 'price and windows match')?.detail).toMatch(/linePrice 2000000 \(record 1000000\)/);
     const stranger = { ...record, parameters: { ...record.parameters, organiserCommitment: '00'.repeat(32) } };
     expect(failing(verifyDeployment(stranger, state))).toEqual(['organiser matches the record']);
+  });
+
+  it('reports a pending oracle key change', () => {
+    const { sim, state, record } = setup();
+    sim.proposeOracleKey(oraclePublicKey(generateOracleSecretKey()));
+    const checks = verifyDeployment(record, { ...state, data: sim.publicState() }, fps);
+    expect(failing(checks)).toEqual(['no oracle key change pending']);
+    expect(checks.find((c) => c.name === 'no oracle key change pending')?.detail).toMatch(/can take effect from/);
   });
 
   it('reports a missing contract', () => {
