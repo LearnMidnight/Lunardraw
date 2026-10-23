@@ -24,7 +24,7 @@ open ── sales close ──▶ requested ── oracle ──▶ drawn ──
   └─ no reveal in time ─────┴─ oracle misses its deadline ──▶ void (refunds)
 ```
 
-1. **Open.** The organiser opens the next draw with its sales-close time and `seedCommitment = SHA-256(seedHex)`, exactly as the site publishes today. The organiser is identified by a commitment to a secret, as in Nightcast. Only one draw sells at a time. Normally the next draw opens in the same transaction that reveals the previous draw's seed (step 3); the organiser opens one directly only for the first draw, or after a draw that wasn't followed by one. The sales period must be between the contract's minimum and maximum (set at deployment), counted from when the draw opens, and a seed commitment can never be used twice.
+1. **Open.** The organiser opens the next draw with its sales-close time and `seedCommitment = SHA-256(seedHex)`, exactly as the site publishes today. The organiser is identified by a commitment to a secret, as in Nightcast. Only one draw sells at a time. Normally the next draw opens in the same transaction that reveals the previous draw's seed (step 3); the organiser opens one directly only for the first draw, or after a draw that wasn't followed by one. The sales period must be between the contract's minimum and maximum (set at deployment), counted from when the draw opens, and a seed commitment can never be used twice. A draw can only open while an oracle key is active, and it **copies that key when it opens**: the key that will answer the draw is on chain before anyone buys a ticket, and no later key change can touch it.
 2. **Buy.** Before sales close, a player sends `price × lines` tNIGHT with a ticket commitment and the number of lines. The commitment binds the draw number, every line and a random salt, so it reveals nothing and can't be reused for another draw.
 3. **Request.** After sales close, the organiser calls `requestDraw(n, seed)`. The contract checks the seed against the commitment and fixes the VRF input `alpha = H(contract, n, seed)` and its curve point. From here, nobody can change what the draw will be. In the same transaction the organiser can open the next draw, giving its sales-close time and seed commitment, so closing one draw starts the next. If the organiser doesn't reveal by the reveal deadline, the draw is void.
 
@@ -78,13 +78,14 @@ Divisions 2–9 keep the site's relative shares (10/8/8/9/10/10/20/25), scaled t
 
 ## Contract outline
 
-Ledger: `organiser` (commitment), `oracleKey`/`oracleKeyReady`/`proposedOracleKey`, `linePrice`, sales limits and windows, `carry`, `lastDraw`, `draws: Map<drawId, Draw>`, `drawLines: Map<drawId, Counter>`, `winnerCounts: Map<drawId·16+division, Counter>`, `tickets: Map<commitment, Ticket>`, `wins: Map<lineId, Win>`, `usedCommitments: Set`.
+Ledger: `organiser` (commitment), `proposedOrganiser`, `backupOrganiser`, `oracleKey`/`oracleKeyReady`, `proposedOracleKey`/`oracleKeyChangeAt`/`oracleKeyApproved`/`oracleKeyDelay`, `linePrice`, sales limits and windows, `carry`, `lastDraw`, `draws: Map<drawId, Draw>`, `drawLines: Map<drawId, Counter>`, `winnerCounts: Map<drawId·16+division, Counter>`, `tickets: Map<commitment, Ticket>`, `wins: Map<lineId, Win>`, `usedCommitments: Set`.
 
 Purchases and claims only add to counters and insert new entries, so many can land in the same block without conflicting; the `Draw` record changes only when the draw moves to its next stage.
 
 Circuits:
-- `acceptOracleKey()`: the oracle proves it holds the key (as in Nightcast); `proposeOracleKey(key)`: the organiser proposes a replacement.
-- `openDraw(salesClose, seedCommitment)`: organiser only, for the first draw or after a draw that wasn't followed by one; returns the new draw's number.
+- `acceptOracleKey()`: the oracle proves it holds the proposed key (as in Nightcast). The first key is accepted at once; a replacement only after `oracleKeyDelay` (the longest sales period plus the reveal window, so longer than any draw can sell for) has passed since it was proposed, or sooner if the current oracle has called `approveOracleKey()`. `proposeOracleKey(key, now)`: the organiser proposes a replacement; proposing again restarts the wait.
+- `proposeOrganiser(commitment)` / `acceptOrganiser()`: a planned hand-over of the organiser role. `recoverOrganiser(commitment)`: the backup organiser (a secret kept offline, set at deployment) installs a new organiser at any time, after a lost or leaked secret or a keeper that stopped for good. The backup can't make itself the organiser.
+- `openDraw(salesClose, seedCommitment)`: organiser only, for the first draw or after a draw that wasn't followed by one; needs an active oracle key, which the draw is bound to; returns the new draw's number.
 - `buyTicket(n, commitment, lines)`: before sales close; takes the tNIGHT.
 - `requestDraw(n, seed, next)`: organiser only, after sales close and before the reveal deadline; `next` (optional) opens the next draw in the same transaction.
 - `fulfilDraw(n)`: the oracle, before the draw deadline; stores the output.
@@ -102,7 +103,8 @@ From the security review (22 Oct 2026). The contract can't fix these by itself:
 
 - **The oracle sees the output first and can stay silent.** The draw is then void and refunded. If the oracle or a friend holds tickets, that's a free option to skip draws it doesn't like. Mitigation: an independent oracle, a public record of its missed draws, and deposits it loses for missing one (Nightcast Phase 3, [#9](https://github.com/LearnMidnight/Nightcast/issues/9)).
 - **An organiser and oracle working together know the numbers during sales.** Keep them independent: the keeper bot (organiser) and the oracle should run on separate machines, under separate people, with separate keys.
-- **Only the keeper opens new draws.** If it stops, the current draw voids and is refunded, and no new draw opens until someone with the organiser secret starts it again.
+- **Only the organiser opens new draws.** If the keeper stops, the current draw voids and is refunded, and no new draw opens (the rollover waits) until the organiser, a successor it proposed, or the backup organiser's replacement starts them again. Letting *anyone* open a draw when the keeper is late was considered and rejected: the oracle could then open a draw with its own seed and know both halves of the randomness.
+- **The organiser can change the oracle key, with notice.** The review (23 Oct 2026) found that the organiser could propose a key it generated, "accept" it itself (the proof of possession only shows that *someone* holds the key) and reveal a seed into a draw bound to that key, so knowing the numbers during sales on its own. Now a draw is bound to its key when it opens, and a replacement key waits longer than any draw sells for unless the current oracle approves it. A pending change is public (`./lunardraw status` and `verify` show it; the keeper logs it), so players and the oracle can see it coming. Players should still check that the key their draw is bound to is one they trust, as Nightcast's SPEC says of requests.
 - **A lost ticket preimage can't be refunded**, and nothing sweeps the money. Players (and agents) must back up their private state.
 - **A claim reveals which line of the ticket won** and the running winner counts per division.
 

@@ -7,7 +7,7 @@ import {
   encodeContractAddress,
   sampleContractAddress,
 } from '@midnight-ntwrk/compact-runtime';
-import { oraclePublicKey } from '@nightcast/contract';
+import { generateOperatorSecret, oraclePublicKey } from '@nightcast/contract';
 import {
   Contract,
   type Ledger,
@@ -24,6 +24,8 @@ const COIN_PUBLIC_KEY = '0'.repeat(64);
 export type LottoSimulatorOptions = {
   oracleSecretKey: bigint;
   organiserSecret: Uint8Array;
+  /** The backup organiser's secret (default: a fresh random one). */
+  backupSecret?: Uint8Array;
   /** Price of one line in STAR (default 1 tNIGHT). */
   linePrice?: bigint;
   minSales?: bigint;
@@ -52,15 +54,18 @@ export class LottoSimulator {
   readonly address = sampleContractAddress();
   readonly addressBytes: Uint8Array;
   now: number;
+  readonly backupSecret: Uint8Array;
   private state: ContractState | ChargedState;
 
   constructor(readonly opts: LottoSimulatorOptions) {
     this.now = opts.now ?? 1_800_000_000;
     this.addressBytes = encodeContractAddress(this.address);
+    this.backupSecret = opts.backupSecret ?? generateOperatorSecret();
     const result = this.contract.initialState(
       createConstructorContext<LottoPrivateState>({}, COIN_PUBLIC_KEY),
       oraclePublicKey(opts.oracleSecretKey),
       pureCircuits.organiserCommitmentOf(opts.organiserSecret),
+      pureCircuits.organiserCommitmentOf(this.backupSecret),
       opts.linePrice ?? 1_000_000n,
       opts.minSales ?? 600n,
       opts.maxSales ?? 2_592_000n,
@@ -78,6 +83,11 @@ export class LottoSimulator {
 
   get organiser(): LottoPrivateState {
     return { organiserSecret: this.opts.organiserSecret };
+  }
+
+  /** The backup organiser's private state (its secret goes in as `organiserSecret`). */
+  get backup(): LottoPrivateState {
+    return { organiserSecret: this.backupSecret };
   }
 
   readonly anyone: LottoPrivateState = {};
@@ -138,8 +148,25 @@ export class LottoSimulator {
     this.run(as, (ctx) => this.contract.impureCircuits.acceptOracleKey(ctx));
   }
 
-  proposeOracleKey(key: { x: bigint; y: bigint }, as: LottoPrivateState = this.organiser): void {
-    this.run(as, (ctx) => this.contract.impureCircuits.proposeOracleKey(ctx, key));
+  /** Propose a new oracle key; `now` defaults to the simulator's clock. */
+  proposeOracleKey(key: { x: bigint; y: bigint }, as: LottoPrivateState = this.organiser, now: bigint = BigInt(this.now)): void {
+    this.run(as, (ctx) => this.contract.impureCircuits.proposeOracleKey(ctx, key, now));
+  }
+
+  approveOracleKey(as: LottoPrivateState = this.oracle): void {
+    this.run(as, (ctx) => this.contract.impureCircuits.approveOracleKey(ctx));
+  }
+
+  proposeOrganiser(commitment: Uint8Array, as: LottoPrivateState = this.organiser): void {
+    this.run(as, (ctx) => this.contract.impureCircuits.proposeOrganiser(ctx, commitment));
+  }
+
+  acceptOrganiser(as: LottoPrivateState): void {
+    this.run(as, (ctx) => this.contract.impureCircuits.acceptOrganiser(ctx));
+  }
+
+  recoverOrganiser(commitment: Uint8Array, as: LottoPrivateState = this.backup): void {
+    this.run(as, (ctx) => this.contract.impureCircuits.recoverOrganiser(ctx, commitment));
   }
 
   /** Open the next draw; returns its number. */

@@ -228,6 +228,17 @@ export class Keeper {
       this.lastTickAt = this.cfg.clock();
       throw err;
     }
+    if (view.oracleKeyChange) {
+      const c = view.oracleKeyChange;
+      const key = `key change ${c.key.x}:${c.key.y}:${c.at}`;
+      if (!this.warned.has(key)) {
+        this.warned.add(key);
+        this.logger.warn(
+          `an oracle key change is pending: it can take effect ${c.approved ? 'now (the current oracle approved it)' : `from ${new Date(Number(c.at) * 1000).toISOString()}`}; ` +
+            'draws already open keep their key. If you did not propose this, the organiser secret may be compromised.',
+        );
+      }
+    }
     const steps = dueSteps(view, now, { marginSecs: this.cfg.marginSecs, openNew: this.cfg.openNew });
     const keys = new Set(steps.map((s) => stepKey(s, view.lastDraw)));
     // Forget steps that are no longer due.
@@ -283,8 +294,18 @@ export class Keeper {
       }
       return close;
     };
+    const keyReady = (): boolean => {
+      if (view.oracleKeyReady) return true;
+      const key = 'no oracle key';
+      if (!this.warned.has(key)) {
+        this.warned.add(key);
+        this.logger.error('the oracle has not accepted its key yet, so no draw can open');
+      }
+      return false;
+    };
     switch (step.kind) {
       case 'open': {
+        if (!keyReady()) return false;
         const sealed = await seeds.create();
         const close = nextClose();
         await chain.openDraw(close, sealed.commitment);
@@ -305,15 +326,8 @@ export class Keeper {
           }
           return false;
         }
-        if (!view.oracleKeyReady) {
-          const key = 'no oracle key';
-          if (!this.warned.has(key)) {
-            this.warned.add(key);
-            this.logger.error('the oracle has not accepted its key yet, so no draw can be revealed');
-          }
-          return false;
-        }
-        if (step.openNext) {
+        // Reveal regardless; open the next draw too only if a key is ready for it.
+        if (step.openNext && keyReady()) {
           const sealed = await seeds.create();
           const close = nextClose();
           await chain.requestDraw(step.draw, seed, { salesClose: close, seedCommitment: sealed.commitment });

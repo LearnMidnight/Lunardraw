@@ -2,8 +2,8 @@
 /**
  * Run Lunardraw on Midnight.
  *
- *   ./lunardraw keygen organiser --out <file>
- *   ./lunardraw deploy     --network <n> --organiser <file> --oracle <file> --wallet <file> [--accept] [parameters]
+ *   ./lunardraw keygen organiser --out <file>        (also for the backup organiser)
+ *   ./lunardraw deploy     --network <n> --organiser <file> --backup <file> --oracle <file> --wallet <file> [--accept] [parameters]
  *   ./lunardraw accept-key --network <n> --oracle <file> --wallet <file>
  *   ./lunardraw keeper     --network <n> --organiser <file> --wallet <file> [--seeds <file>] [--every <seconds>]
  *   ./lunardraw oracle     --network <n> --oracle <file> --wallet <file>
@@ -62,7 +62,7 @@ import {
 const USAGE = `usage:
   ./lunardraw keygen organiser --out <file>
   ./lunardraw wallet show  --network <network> --wallet <file>
-  ./lunardraw deploy       --network <${NETWORKS.join('|')}> --organiser <file> --oracle <file> --wallet <file> [--accept]
+  ./lunardraw deploy       --network <${NETWORKS.join('|')}> --organiser <file> --backup <file> --oracle <file> --wallet <file> [--accept]
                            [--price <STAR>] [--min-sales <s>] [--max-sales <s>] [--reveal <s>] [--draw <s>] [--claim <s>]
   ./lunardraw accept-key   --network <network> --oracle <oracle secret file> --wallet <file>
   ./lunardraw keeper       --network <network> --organiser <file> --wallet <file> [--seeds <file>] [--every <seconds>]
@@ -77,7 +77,9 @@ to claim. --every <seconds> runs draws on a fixed period instead (for test netwo
 
 --oracle and --wallet take Nightcast's files (nightcast/nightcast keygen oracle, wallet new).
 The keeper keeps its sealed seeds in --seeds (default ~/lunardraw-secrets/seeds-<network>.json):
-back it up, keep it private. Run the oracle on a different machine from the keeper.`;
+back it up, keep it private. Run the oracle on a different machine from the keeper.
+--backup is a second organiser file (keygen organiser) whose holder can replace the organiser
+if its secret is lost or leaked: keep it offline. Its file may hold only the public commitment.`;
 
 const hex = (b: Uint8Array): string => Buffer.from(b).toString('hex');
 const fromHex = (h: string): Uint8Array => Uint8Array.from(Buffer.from(h.replace(/^0x/, ''), 'hex'));
@@ -94,6 +96,18 @@ const organiserSecretFrom = (path: string): Uint8Array => {
   const f = readKeyFile(path, 'organiser');
   if (!f.secret) throw new Error(`${path} has no secret`);
   return fromHex(f.secret);
+};
+
+/**
+ * The backup organiser's commitment. Its file may hold only the `public`
+ * commitment (the secret stays offline); with a secret, the commitment is
+ * recomputed from it.
+ */
+const organiserCommitmentFrom = (path: string): Uint8Array => {
+  const f = readKeyFile(path, 'organiser');
+  if (f.secret) return organiserCommitmentOf(fromHex(f.secret));
+  if (typeof f.public !== 'string') throw new Error(`${path} has neither a secret nor a public commitment`);
+  return fromHex(f.public);
 };
 
 const oracleKeyFrom = (path: string, needSecret: boolean): { pk: { x: bigint; y: bigint }; sk?: bigint } => {
@@ -163,6 +177,7 @@ const main = async (argv: string[]): Promise<number> => {
       network: { type: 'string' },
       wallet: { type: 'string' },
       organiser: { type: 'string' },
+      backup: { type: 'string' },
       oracle: { type: 'string' },
       out: { type: 'string' },
       seeds: { type: 'string' },
@@ -210,12 +225,16 @@ const main = async (argv: string[]): Promise<number> => {
 
     case 'deploy': {
       const network = networkArg(values.network);
-      if (!values.organiser || !values.oracle) throw new Error(USAGE);
+      if (!values.organiser || !values.backup || !values.oracle) throw new Error(USAGE);
       const oracle = oracleKeyFrom(values.oracle, values.accept);
       const num = (v: string | undefined, d: bigint) => (v === undefined ? d : BigInt(v));
+      const organiserCommitment = organiserCommitmentOf(organiserSecretFrom(values.organiser));
+      const backupCommitment = organiserCommitmentFrom(values.backup);
+      if (hex(organiserCommitment) === hex(backupCommitment)) throw new Error('--backup must be a different organiser file from --organiser');
       const params: DeployParams = {
         oraclePublicKey: oracle.pk,
-        organiserCommitment: organiserCommitmentOf(organiserSecretFrom(values.organiser)),
+        organiserCommitment,
+        backupCommitment,
         linePrice: num(values.price, WEEKLY_DEFAULTS.linePrice),
         minSales: num(values['min-sales'], WEEKLY_DEFAULTS.minSales),
         maxSales: num(values['max-sales'], WEEKLY_DEFAULTS.maxSales),
@@ -340,6 +359,11 @@ const main = async (argv: string[]): Promise<number> => {
       const record = readRecord(network);
       const view = await readView(publicDataFor(network), record.contractAddress);
       process.stdout.write(`Lunardraw on ${network} at ${record.contractAddress}\n`);
+      if (!view.oracleKeyReady) process.stdout.write('The oracle key is not active yet; no draw can open.\n');
+      if (view.oracleKeyChange) {
+        const c = view.oracleKeyChange;
+        process.stdout.write(`An oracle key change is pending: it can take effect ${c.approved ? 'now (approved by the current oracle)' : `from ${iso(c.at)}`}.\n`);
+      }
       if (view.draws.length === 0) process.stdout.write('No draws yet.\n');
       for (const d of view.draws) {
         process.stdout.write(`draw ${d.id}  ${STATUS[d.status] ?? d.status}  sales close ${iso(d.salesClose)}\n`);

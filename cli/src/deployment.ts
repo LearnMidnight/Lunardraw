@@ -27,6 +27,8 @@ const hex = (b: Uint8Array): string => Buffer.from(b).toString('hex');
 export type DeployParams = {
   oraclePublicKey: { x: bigint; y: bigint };
   organiserCommitment: Uint8Array;
+  /** Commitment to the backup organiser's secret (kept offline). */
+  backupCommitment: Uint8Array;
   /** Price of one line, in STAR (1 tNIGHT = 1,000,000 STAR). */
   linePrice: bigint;
   minSales: bigint;
@@ -58,7 +60,17 @@ export const deployLunardraw = (providers: LunardrawProviders, p: DeployParams) 
     compiledContract: compiledLunardraw(),
     initialPrivateState: {},
     signingKey: sampleSigningKey(), // never used: the authority is replaced before anything is sent
-    args: [p.oraclePublicKey, p.organiserCommitment, p.linePrice, p.minSales, p.maxSales, p.revealWindow, p.drawWindow, p.claimWindow],
+    args: [
+      p.oraclePublicKey,
+      p.organiserCommitment,
+      p.backupCommitment,
+      p.linePrice,
+      p.minSales,
+      p.maxSales,
+      p.revealWindow,
+      p.drawWindow,
+      p.claimWindow,
+    ],
   });
 
 /** The oracle proves it holds the proposed key, activating it. */
@@ -86,6 +98,7 @@ export type DeploymentRecord = {
   parameters: {
     oraclePublicKey: { x: string; y: string };
     organiserCommitment: string;
+    backupCommitment: string;
     linePrice: string;
     minSales: string;
     maxSales: string;
@@ -101,6 +114,7 @@ export type DeploymentRecord = {
 export const recordParameters = (p: DeployParams): DeploymentRecord['parameters'] => ({
   oraclePublicKey: { x: p.oraclePublicKey.x.toString(), y: p.oraclePublicKey.y.toString() },
   organiserCommitment: hex(p.organiserCommitment),
+  backupCommitment: hex(p.backupCommitment),
   linePrice: p.linePrice.toString(),
   minSales: p.minSales.toString(),
   maxSales: p.maxSales.toString(),
@@ -182,10 +196,28 @@ export const verifyDeployment = (
     ok: l.oracleKeyReady && keyMatches,
     detail: l.oracleKeyReady ? (keyMatches ? 'active and matches the record' : 'active but differs from the record (rotated?)') : 'not accepted yet: run `./lunardraw accept-key`',
   });
+  // A changed oracle key is visible, not an error: the on-chain key and the
+  // delay rule are what players rely on. A pending change is worth knowing about.
+  if (l.proposedOracleKey.is_some) {
+    const at = new Date(Number(l.oracleKeyChangeAt) * 1000).toISOString();
+    checks.push({
+      name: 'no oracle key change pending',
+      ok: false,
+      detail: `a new key is proposed; it can take effect ${l.oracleKeyApproved ? 'now (approved by the current oracle)' : `from ${at}`}`,
+    });
+  } else {
+    checks.push({ name: 'no oracle key change pending', ok: true, detail: `a change would wait ${l.oracleKeyDelay} s` });
+  }
+  const organiserOk = hex(l.organiser) === p.organiserCommitment;
   checks.push({
     name: 'organiser matches the record',
-    ok: hex(l.organiser) === p.organiserCommitment,
-    detail: hex(l.organiser),
+    ok: organiserOk,
+    detail: organiserOk ? hex(l.organiser) : `${hex(l.organiser)} (record ${p.organiserCommitment}; handed over or recovered?)`,
+  });
+  checks.push({
+    name: 'backup organiser matches the record',
+    ok: hex(l.backupOrganiser) === p.backupCommitment,
+    detail: hex(l.backupOrganiser),
   });
   const actual = {
     linePrice: l.linePrice,

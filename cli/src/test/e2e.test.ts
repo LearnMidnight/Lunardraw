@@ -28,10 +28,12 @@ describe.runIf(enabled)('Lunardraw on a local Midnight network', () => {
   let address: string;
   const oracleSecretKey = generateOracleSecretKey();
   const organiserSecret = generateOperatorSecret();
+  const backupSecret = generateOperatorSecret();
   const seeds = new MemorySeedStore();
   const params = {
     oraclePublicKey: oraclePublicKey(oracleSecretKey),
     organiserCommitment: organiserCommitmentOf(organiserSecret),
+    backupCommitment: organiserCommitmentOf(backupSecret),
     linePrice: 1_000_000n,
     minSales: 60n,
     maxSales: 86_400n,
@@ -98,6 +100,7 @@ describe.runIf(enabled)('Lunardraw on a local Midnight network', () => {
     const view = await keeperChain.view();
     const first = view.draws.find((d) => d.id === 1n)!;
     expect(first.status).toBe(DrawStatus.open);
+    expect(first.oracleKey).toEqual(params.oraclePublicKey);
 
     // After sales close: reveal draw 1 and open draw 2 in one transaction.
     while (Date.now() / 1000 < Number(first.salesClose) + 25) await sleep(5_000);

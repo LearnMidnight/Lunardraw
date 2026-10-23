@@ -6,7 +6,9 @@ import type { Ledger, TicketPreimage } from './managed/lunardraw/contract/index.
  *
  * - The oracle sets `oracleSecretKey` (for `acceptOracleKey` and `fulfilDraw`).
  * - The organiser (the keeper bot) sets `organiserSecret` (for `openDraw`,
- *   `requestDraw` and `proposeOracleKey`).
+ *   `requestDraw`, `proposeOracleKey` and `proposeOrganiser`). A proposed
+ *   organiser accepting, or the backup organiser recovering, puts its own
+ *   secret in the same field.
  * - A player buying a ticket sets `pendingTicket`; to claim or be refunded they
  *   keep every ticket they bought in `tickets` (hex commitment -> preimage).
  *   Losing a preimage means losing the ability to claim or be refunded.
