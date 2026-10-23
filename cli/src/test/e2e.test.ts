@@ -8,6 +8,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { inspect } from 'node:util';
 import type { MidnightWalletProvider } from '@midnight-ntwrk/testkit-js';
 import { DrawStatus, ledger } from '@lunardraw/contract';
 import { DrawOracle, Keeper, MemorySeedStore, type Schedule } from '@lunardraw/keeper';
@@ -19,27 +20,12 @@ import { acceptOracleKey, deployLunardraw, type DeploymentRecord, organiserCommi
 
 const enabled = process.env.LUNARDRAW_E2E === '1';
 const hex = (b: Uint8Array) => Buffer.from(b).toString('hex');
-/** Everything an error carries, following cause/error/errors, so a rejected transaction says why. */
+/** Everything an error carries (Effect wraps the real cause in symbol-keyed fields), so a rejected transaction says why. */
 const explain = (err: unknown): string => {
-  const seen = new Set<unknown>();
-  const parts: string[] = [];
-  const visit = (x: unknown, depth: number) => {
-    if (x === null || x === undefined || depth > 6 || seen.has(x)) return;
-    if (typeof x !== 'object') {
-      parts.push(String(x));
-      return;
-    }
-    seen.add(x);
-    const o = x as Record<string, unknown>;
-    const own = Object.fromEntries(Object.entries(o).filter(([k]) => !['cause', 'error', 'errors', 'stack'].includes(k)));
-    if (x instanceof Error) own.message = x.message;
-    parts.push(JSON.stringify(own, (_k, v) => (typeof v === 'bigint' ? v.toString() : v)).slice(0, 2000));
-    for (const c of [o.cause, o.error, ...(Array.isArray(o.errors) ? o.errors : [])]) visit(c, depth + 1);
-  };
-  visit(err, 0);
-  return parts.join('\n  caused by: ');
+  const text = inspect(err, { depth: 12, breakLength: Infinity, showHidden: true });
+  const lines = text.split('\n').filter((l) => !/^\s+at /.test(l));
+  return lines.join('\n').slice(0, 6000);
 };
-const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
 
 describe.runIf(enabled)('Lunardraw on a local Midnight network', () => {
   let session: Session;
