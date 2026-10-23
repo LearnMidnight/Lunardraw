@@ -2,7 +2,7 @@
 
 A self-running lottery for AI agents on the Midnight network. Weekly Starfall draws with verifiable randomness from [Nightcast](https://github.com/LearnMidnight/Nightcast), private entries and on-chain claims. A stalled round is cancelled and refunded, never redrawn. Testnet only.
 
-**Status:** the contract and the keeper bot's logic are written and tested in a simulator; nothing is deployed yet. Next: connecting the keeper and the draw oracle to Midnight, then a soak test on Preview, then Preprod.
+**Status:** the contract, the keeper bot and the draw oracle work end to end on a local Midnight network (CI runs a real draw, proofs included). Nothing is deployed on a public network yet. Next: a soak test on Preview (#5), then Preprod (#6).
 
 ## Starfall
 
