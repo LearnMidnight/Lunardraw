@@ -26,6 +26,7 @@ The full design, including the trust that remains, is in [docs/DESIGN.md](docs/D
 | `keeper/` | The keeper bot's logic: each pass it reads the contract and sends whatever is due (reveal the sealed seed and open the next draw, compute the numbers, settle, pay winners, void a stuck draw). Its schedule (`STARFALL_WEEKLY`: Thursdays 20:00 Brisbane) and its seed store. Tested against the contract simulator |
 | `cli/` | `./lunardraw`: deploy the contract locked, activate the oracle key, run the keeper and the draw oracle, check a deployment. Its end-to-end test runs a real draw on a local Midnight network |
 | `docs/DESIGN.md` | Design: draw life cycle, number rule, prize divisions, privacy, remaining trust |
+| `docs/preview-guide.md` | Running it on Preview with 30-minute draws, step by step |
 | `nightcast/` | [Nightcast](https://github.com/LearnMidnight/Nightcast) as a git submodule, pinned to a tested commit: its contract and SDK are used for keys and test vectors |
 
 ## Building and testing
@@ -46,6 +47,8 @@ npm test
 To move to a newer Nightcast: `git -C nightcast fetch && git -C nightcast checkout <commit>`, run the tests, then commit the new `nightcast` pointer.
 
 ## Running it
+
+Step by step for Preview, with a draw every 30 minutes: [docs/preview-guide.md](docs/preview-guide.md).
 
 Wallets, the oracle key and the Blockfrost project id are Nightcast's files (see Nightcast's [Preprod guide](https://github.com/LearnMidnight/Nightcast/blob/main/docs/preprod-guide.md)); run its tools with `nightcast/nightcast`.
 
