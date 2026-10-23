@@ -109,11 +109,12 @@ export class DrawOracle {
         continue;
       }
       try {
+        const startedAt = Date.now();
         await chain.fulfilDraw(d.id);
         this.answered.set(d.id, this.cfg.clock());
         this.failures.delete(d.id);
         report.fulfilled.push(d.id);
-        this.logger.info(`answered draw ${d.id}`);
+        this.logger.info(`answered draw ${d.id} (${Math.round((Date.now() - startedAt) / 1000)} s)`);
       } catch (err) {
         const error = reasonOf(err);
         const n = (failed?.failures ?? 0) + 1;

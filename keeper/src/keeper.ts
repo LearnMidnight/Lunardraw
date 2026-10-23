@@ -248,6 +248,7 @@ export class Keeper {
         continue;
       }
       try {
+        const startedAt = Date.now();
         const sent = await this.run(step, view, now);
         if (!sent) {
           report.skipped.push({ step: key, reason: 'cannot be sent' });
@@ -256,7 +257,8 @@ export class Keeper {
         this.done.set(key, this.cfg.clock());
         this.failures.delete(key);
         report.done.push(key);
-        this.logger.info(`done: ${describeStep(step)}`);
+        // How long the proof and the transaction took (wall clock), for capacity planning.
+        this.logger.info(`done: ${describeStep(step)} (${Math.round((Date.now() - startedAt) / 1000)} s)`);
       } catch (err) {
         const error = reasonOf(err);
         const n = (failed?.failures ?? 0) + 1;

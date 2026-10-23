@@ -144,7 +144,29 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          npx vitest run src/test/e2e.test.ts --reporter=default --reporter=github-actions --reporter=json --outputFile.json=../reports/e2e.json 2>&1 | tee ../e2e.log
+          # Sample the proof server's memory every 2 s while the draw runs.
+          ( set +e; while true; do docker stats --no-stream --format '{{.Name}} {{.MemUsage}}' 2>/dev/null | grep '^proof-server' >> ../proof-mem.log; sleep 2; done ) &
+          sampler=$!
+          status=0
+          npx vitest run src/test/e2e.test.ts --reporter=default --reporter=github-actions --reporter=json --outputFile.json=../reports/e2e.json 2>&1 | tee ../e2e.log || status=$?
+          kill $sampler 2>/dev/null || true
+          exit $status
+
+      - name: Proof sizes and times
+        if: always()
+        shell: bash
+        run: |
+          # Peak proof-server memory ("1.2GiB / 15.6GiB" -> MiB).
+          if [ -s proof-mem.log ]; then
+            peak=$(awk '{ v=$2; u=v; gsub(/[0-9.]/, "", u); gsub(/[A-Za-z]/, "", v); m = (u=="GiB") ? v*1024 : (u=="MiB") ? v : (u=="KiB") ? v/1024 : v/1048576; if (m>max) max=m } END { printf "%.0f", max }' proof-mem.log)
+            echo "::notice title=proof server peak memory::${peak} MiB ($(wc -l < proof-mem.log) samples)"
+          else
+            echo "::warning title=proof server peak memory::no samples"
+          fi
+          # Each keeper and oracle step, with how long its proof and transaction took.
+          sed 's/\x1b\[[0-9;]*m//g' e2e.log | grep -oE '(done: .*|answered draw .*)\([0-9]+ s\)' | head -10 | while read -r line; do
+            echo "::notice title=step time::$line"
+          done
 
       - name: Summarise tests
         if: always()
