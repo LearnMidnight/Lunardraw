@@ -20,6 +20,7 @@ import { acceptOracleKey, deployLunardraw, type DeploymentRecord, organiserCommi
 
 const enabled = process.env.LUNARDRAW_E2E === '1';
 const hex = (b: Uint8Array) => Buffer.from(b).toString('hex');
+const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
 /** Everything an error carries (Effect wraps the real cause in symbol-keyed fields), so a rejected transaction says why. */
 const explain = (err: unknown): string => {
   const text = inspect(err, { depth: 12, breakLength: Infinity, showHidden: true });

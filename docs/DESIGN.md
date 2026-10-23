@@ -83,11 +83,10 @@ Ledger: `organiser` (commitment), `proposedOrganiser`, `backupOrganiser`, `oracl
 Purchases and claims only add to counters and insert new entries, so many can land in the same block without conflicting; the `Draw` record changes only when the draw moves to its next stage.
 
 Circuits:
-- `acceptOracleKey()`: the oracle proves it holds the proposed key (as in Nightcast). The first key is accepted at once; a replacement only after `oracleKeyDelay` (the longest sales period plus the reveal window, so longer than any draw can sell for) has passed since it was proposed, or sooner if the current oracle has called `approveOracleKey()`. `proposeOracleKey(key, now)`: the organiser proposes a replacement; proposing again restarts the wait.
-- `proposeOrganiser(commitment)` / `acceptOrganiser()`: a planned hand-over of the organiser role. `recoverOrganiser(commitment)`: the backup organiser (a secret kept offline, set at deployment) installs a new organiser at any time, after a lost or leaked secret or a keeper that stopped for good. The backup can't make itself the organiser.
-- `openDraw(salesClose, seedCommitment)`: organiser only, for the first draw or after a draw that wasn't followed by one; needs an active oracle key, which the draw is bound to; returns the new draw's number.
+- `acceptOracleKey()`: called by the holder of the proposed key, proves it holds it and activates it (as in Nightcast). The first key is accepted at once; a replacement only after `oracleKeyDelay` (the longest sales period plus the reveal window, so longer than any draw can sell for) has passed since it was proposed, or sooner if the *current* oracle has called the same circuit, which records its approval. `proposeOracleKey(key, now)`: the organiser proposes a replacement; proposing again restarts the wait.
+- `changeOrganiser(commitment)`: what it does depends on the caller's secret. The organiser proposes `commitment` as its successor; the holder of the proposed secret accepts (passing its own commitment); the backup organiser (a secret kept offline, set at deployment) installs `commitment` at once, after a lost or leaked secret or a keeper that stopped for good. The backup can't make itself the organiser.
 - `buyTicket(n, commitment, lines)`: before sales close; takes the tNIGHT.
-- `requestDraw(n, seed, next)`: organiser only, after sales close and before the reveal deadline; `next` (optional) opens the next draw in the same transaction.
+- `requestDraw(n, seed, next)`: organiser only, after sales close and before the reveal deadline; `next` (optional) opens the next draw in the same transaction. With `n = 0` nothing is revealed and `next` just opens a draw (the first one, or one after a draw that wasn't followed by one). A draw opens only while an oracle key is active, and is bound to it.
 - `fulfilDraw(n)`: the oracle, before the draw deadline; stores the output.
 - `computeNumbers(n, now)`: anyone; derives and stores the numbers and starts the claim window (`now` must be within 10 minutes of block time). It's separate because it's the biggest circuit by far (about 145 MB of proving key).
 - `registerWin(n, line, recipient)`: a ticket holder, during the claim window.
@@ -96,6 +95,8 @@ Circuits:
 - `voidDraw(n)` and `refundTicket(n, recipient)`: the refund path.
 
 Deployed locked like Nightcast (no maintenance authority), with its own published fingerprints.
+
+**Circuit budget.** A deploy transaction carries every circuit's verifier key and must fit Midnight's block limits. Twelve circuits fit; sixteen were rejected (`1010`, block limits exhausted). That is why the oracle and organiser circuits each do several things, chosen by the secret the caller holds, and why opening a draw is `requestDraw` with `n = 0`. Adding a circuit means merging another.
 
 ## Trust that remains (v0)
 

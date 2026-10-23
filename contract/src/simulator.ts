@@ -153,25 +153,36 @@ export class LottoSimulator {
     this.run(as, (ctx) => this.contract.impureCircuits.proposeOracleKey(ctx, key, now));
   }
 
+  /** The current oracle approves the proposed key (`acceptOracleKey` by the current oracle). */
   approveOracleKey(as: LottoPrivateState = this.oracle): void {
-    this.run(as, (ctx) => this.contract.impureCircuits.approveOracleKey(ctx));
+    this.acceptOracleKey(as);
   }
 
+  changeOrganiser(commitment: Uint8Array, as: LottoPrivateState): void {
+    this.run(as, (ctx) => this.contract.impureCircuits.changeOrganiser(ctx, commitment));
+  }
+
+  /** The organiser proposes a successor. */
   proposeOrganiser(commitment: Uint8Array, as: LottoPrivateState = this.organiser): void {
-    this.run(as, (ctx) => this.contract.impureCircuits.proposeOrganiser(ctx, commitment));
+    this.changeOrganiser(commitment, as);
   }
 
+  /** The proposed organiser accepts (passing its own commitment). */
   acceptOrganiser(as: LottoPrivateState): void {
-    this.run(as, (ctx) => this.contract.impureCircuits.acceptOrganiser(ctx));
+    if (!as.organiserSecret) throw new Error('acceptOrganiser needs the accepting secret');
+    this.changeOrganiser(pureCircuits.organiserCommitmentOf(as.organiserSecret), as);
   }
 
+  /** The backup organiser installs a new organiser. */
   recoverOrganiser(commitment: Uint8Array, as: LottoPrivateState = this.backup): void {
-    this.run(as, (ctx) => this.contract.impureCircuits.recoverOrganiser(ctx, commitment));
+    this.changeOrganiser(commitment, as);
   }
 
-  /** Open the next draw; returns its number. */
+  /** Open the next draw without revealing one (`requestDraw` with n = 0); returns its number. */
   openDraw(salesClose: bigint, seedCommitment: Uint8Array, as: LottoPrivateState = this.organiser): bigint {
-    return this.run(as, (ctx) => this.contract.impureCircuits.openDraw(ctx, salesClose, seedCommitment));
+    const next = { is_some: true, value: { salesClose, seedCommitment } };
+    this.run(as, (ctx) => this.contract.impureCircuits.requestDraw(ctx, 0n, new Uint8Array(32), next));
+    return this.getLedger().lastDraw;
   }
 
   buyTicket(t: TicketPreimage, as: LottoPrivateState = { pendingTicket: t }): Uint8Array {

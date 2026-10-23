@@ -171,8 +171,8 @@ describe('the draw', () => {
     expect(() => sim.acceptOracleKey({ oracleSecretKey: next })).toThrow(/still waiting/);
     // The clock must be close to block time.
     expect(() => sim.proposeOracleKey(oraclePublicKey(next), sim.organiser, BigInt(sim.now + 1_000))).toThrow(/clock/);
-    // The current oracle's approval lifts the wait; nobody else's does.
-    expect(() => sim.approveOracleKey({ oracleSecretKey: next })).toThrow(/not the current oracle/);
+    // The current oracle's approval lifts the wait; the new key's holder can't approve for itself.
+    expect(() => sim.approveOracleKey({ oracleSecretKey: next })).toThrow(/still waiting/);
     sim.approveOracleKey();
     sim.acceptOracleKey({ oracleSecretKey: next });
     expect(sim.getLedger().oracleKey).toEqual(oraclePublicKey(next));
@@ -186,9 +186,10 @@ describe('the draw', () => {
     const successor = generateOperatorSecret();
     const asSuccessor = { organiserSecret: successor };
     expect(() => sim.proposeOrganiser(pureCircuits.organiserCommitmentOf(successor), sim.anyone)).toThrow();
-    expect(() => sim.acceptOrganiser(asSuccessor)).toThrow(/no organiser proposed/);
+    // Nobody can take over without a proposal.
+    expect(() => sim.acceptOrganiser(asSuccessor)).toThrow(/not the organiser/);
     sim.proposeOrganiser(pureCircuits.organiserCommitmentOf(successor));
-    expect(() => sim.acceptOrganiser(sim.organiser)).toThrow(/not the proposed organiser/);
+    expect(() => sim.acceptOrganiser({ organiserSecret: generateOperatorSecret() })).toThrow(/not the organiser/);
     sim.acceptOrganiser(asSuccessor);
     // The old organiser is out; the new one carries on with the open draw.
     closeSales(sim);
@@ -196,8 +197,9 @@ describe('the draw', () => {
     sim.requestDraw(n, seed, asSuccessor);
     // The backup replaces a lost organiser without a proposal, but never with itself.
     const replacement = generateOperatorSecret();
-    expect(() => sim.recoverOrganiser(pureCircuits.organiserCommitmentOf(replacement), asSuccessor)).toThrow(/not the backup/);
+    expect(() => sim.recoverOrganiser(pureCircuits.organiserCommitmentOf(replacement), { organiserSecret: generateOperatorSecret() })).toThrow(/not the organiser/);
     expect(() => sim.recoverOrganiser(pureCircuits.organiserCommitmentOf(sim.backupSecret))).toThrow(/can't be the organiser/);
+    expect(() => sim.proposeOrganiser(pureCircuits.organiserCommitmentOf(sim.backupSecret), asSuccessor)).toThrow(/can't be the organiser/);
     sim.recoverOrganiser(pureCircuits.organiserCommitmentOf(replacement));
     expect(() => openWithSeed(sim, oracleSecretKey)).toThrow(/not the organiser/);
     sim.fulfilDraw(n);

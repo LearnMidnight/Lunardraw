@@ -55,7 +55,6 @@ export const joinLunardraw = (providers: LunardrawProviders, contractAddress: st
 /** The calls the keeper and the oracle make on a joined contract. */
 export interface LunardrawCalls {
   callTx: {
-    openDraw(salesClose: bigint, seedCommitment: Uint8Array): Promise<unknown>;
     requestDraw(n: bigint, seed: Uint8Array, next: { is_some: boolean; value: NextDraw }): Promise<unknown>;
     fulfilDraw(n: bigint): Promise<unknown>;
     computeNumbers(n: bigint, now: bigint): Promise<unknown>;
@@ -100,7 +99,8 @@ export class MidnightLunardrawChain implements LunardrawChain, DrawOracleChain {
   }
 
   async openDraw(salesClose: bigint, seedCommitment: Uint8Array): Promise<void> {
-    await this.contract.callTx.openDraw(salesClose, seedCommitment);
+    // requestDraw with n = 0 reveals nothing and just opens the next draw.
+    await this.contract.callTx.requestDraw(0n, new Uint8Array(32), { is_some: true, value: { salesClose, seedCommitment } });
   }
 
   async requestDraw(n: bigint, seed: Uint8Array, next?: NextDraw): Promise<void> {
