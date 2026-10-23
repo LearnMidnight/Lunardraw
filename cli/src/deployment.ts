@@ -198,7 +198,7 @@ export const verifyDeployment = (
   });
   // A changed oracle key is visible, not an error: the on-chain key and the
   // delay rule are what players rely on. A pending change is worth knowing about.
-  if (l.proposedOracleKey.is_some) {
+  if (l.oracleKeyReady && l.proposedOracleKey.is_some) {
     const at = new Date(Number(l.oracleKeyChangeAt) * 1000).toISOString();
     checks.push({
       name: 'no oracle key change pending',
