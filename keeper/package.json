@@ -1,0 +1,32 @@
+{
+  "name": "@lunardraw/keeper",
+  "version": "0.1.0",
+  "description": "Keeps Lunardraw's weekly Starfall draws moving: reveals each sealed seed after sales close, opens the next draw, computes the numbers, settles, pays winners and voids stuck draws.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lunardraw/contract": "0.1.0",
+    "@nightcast/sdk": "0.1.0"
+  },
+  "devDependencies": {
+    "@nightcast/contract": "0.1.0"
+  }
+}

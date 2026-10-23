@@ -55,6 +55,11 @@ jobs:
         working-directory: contract
         run: npx vitest run --reporter=default --reporter=github-actions --reporter=json --outputFile.json=../reports/contract.json
 
+      - name: Test the keeper
+        if: ${{ !cancelled() }}
+        working-directory: keeper
+        run: npx vitest run --reporter=default --reporter=github-actions --reporter=json --outputFile.json=../reports/keeper.json
+
       - name: Summarise tests
         if: always()
         run: |
