@@ -76,7 +76,7 @@ jobs:
   # time. Informational until the contract is deployed.
   keys:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 150
     continue-on-error: true
     steps:
       - uses: actions/checkout@v5
@@ -93,11 +93,20 @@ jobs:
         working-directory: contract
         shell: bash
         run: |
-          start=$SECONDS
-          compact compile src/lunardraw.compact src/managed/lunardraw 2>&1 | tee keys.log
-          echo "::notice title=keys::built in $((SECONDS - start))s"
-          for f in src/managed/lunardraw/keys/*.prover; do
-            c=$(basename "$f" .prover)
-            p=$(stat -c %s "$f"); v=$(stat -c %s "src/managed/lunardraw/keys/$c.verifier")
-            echo "::notice title=circuit $c::prover key $((p / 1024)) KiB, verifier key $v bytes"
+          # GitHub keeps at most 10 annotations per step, so each contract gets one
+          # notice listing every circuit's key size.
+          set -o pipefail
+          for contract in lunardraw settlement; do
+            start=$SECONDS
+            if ! compact compile "src/$contract.compact" "src/managed/$contract" 2>&1 | tee "keys-$contract.log"; then
+              echo "::error title=$contract keys::compile failed: $(tail -c 800 "keys-$contract.log" | tr '\n' ' ')"
+              continue
+            fi
+            sizes=""
+            for f in "src/managed/$contract"/keys/*.prover; do
+              c=$(basename "$f" .prover)
+              p=$(stat -c %s "$f"); v=$(stat -c %s "src/managed/$contract/keys/$c.verifier")
+              sizes="$sizes $c: $((p / 1024)) KiB (verifier $v B);"
+            done
+            echo "::notice title=$contract keys::built in $((SECONDS - start))s;$sizes"
           done
