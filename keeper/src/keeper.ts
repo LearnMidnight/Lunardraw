@@ -289,6 +289,15 @@ export class Keeper {
     }
     this.lastTickOk = true;
     this.lastTickAt = this.cfg.clock();
+    // Something changed: publish the new state now rather than next pass.
+    if (report.done.length > 0 && this.options.onView) {
+      try {
+        const [after, at] = await Promise.all([chain.view(), chain.now()]);
+        this.cfg.onView(after, at);
+      } catch (err) {
+        this.logger.error(`publishing the view failed: ${reasonOf(err)}`);
+      }
+    }
     return report;
   }
 
