@@ -106,7 +106,15 @@ export const dueSteps = (view: ChainView, now: number, opts: PlanOptions): Step[
   if (opts.openNew && !opensNext && (view.lastDraw === 0n || (last !== undefined && last.status !== DrawStatus.open))) {
     steps.push({ kind: 'open' });
   }
-  return steps;
+  // Most urgent first. Only the organiser can reveal or open, and a reveal has
+  // a deadline (reveal window) that a slow proof elsewhere must not eat into;
+  // voids and settlements have no deadline; computing the numbers is the
+  // slowest proof by far (minutes on a home PC) and has an hour.
+  const rank: Record<Step['kind'], number> = { reveal: 0, open: 1, void: 2, settle: 3, pay: 4, compute: 5 };
+  return steps
+    .map((step, i) => ({ step, i }))
+    .sort((a, b) => rank[a.step.kind] - rank[b.step.kind] || a.i - b.i)
+    .map(({ step }) => step);
 };
 
 /** A step's identity, for not sending the same one twice in a row. */
