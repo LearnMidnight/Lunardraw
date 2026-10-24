@@ -235,6 +235,9 @@ describe('dueSteps', () => {
     lastDraw,
     minSales: 600n,
     maxSales: 86_400n * 30n,
+    linePrice: 1_000_000n,
+    claimWindow: 7_000n,
+    carry: 0n,
     oracleKeyReady: true,
     wins: [],
     draws: draws.map((d, i) => ({
@@ -246,6 +249,14 @@ describe('dueSteps', () => {
       claimDeadline: 10_000n,
       seedCommitment: new Uint8Array(32),
       oracleKey: { x: 0n, y: 1n },
+      seed: new Uint8Array(32),
+      output: new Uint8Array(32),
+      numbers: [0, 0, 0, 0, 0, 0, 0],
+      moonball: 0,
+      lines: 0n,
+      winners: [0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n],
+      carried: 0n,
+      prizes: [0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n],
       ...d,
     })),
   });
@@ -255,20 +266,23 @@ describe('dueSteps', () => {
     expect(plan(view([{}]), 1_029)).toEqual([]);
     expect(plan(view([{}]), 1_030)).toEqual(['reveal 1']);
     expect(plan(view([{}]), 2_030)).toEqual(['void 1']);
+    // A reveal comes before a slow compute, whatever the draw order.
+    const closing = { status: DrawStatus.open, salesClose: 4_000n, revealDeadline: 5_000n };
+    expect(plan(view([{ status: DrawStatus.fulfilled, claimDeadline: 9_000n }, closing]), 4_030)).toEqual(['reveal 2', 'compute 1']);
   });
 
   it('settles in order and only after the claim window', () => {
     const drawn = { status: DrawStatus.drawn, claimDeadline: 5_000n };
     expect(plan(view([drawn, drawn]), 4_000)).toEqual(['open after 2']);
-    expect(plan(view([drawn, drawn]), 5_030)).toEqual(['settle 1', 'open after 2']);
-    expect(plan(view([{ status: DrawStatus.voided }, drawn]), 5_030)).toEqual(['settle 2', 'open after 2']);
+    expect(plan(view([drawn, drawn]), 5_030)).toEqual(['open after 2', 'settle 1']);
+    expect(plan(view([{ status: DrawStatus.voided }, drawn]), 5_030)).toEqual(['open after 2', 'settle 2']);
   });
 
   it('computes, or voids once computing is too late', () => {
     const fulfilled = { status: DrawStatus.fulfilled, claimDeadline: 5_000n };
-    expect(plan(view([fulfilled]), 4_999)).toEqual(['compute 1', 'open after 1']);
+    expect(plan(view([fulfilled]), 4_999)).toEqual(['open after 1', 'compute 1']);
     expect(plan(view([fulfilled]), 5_010)).toEqual(['open after 1']);
-    expect(plan(view([fulfilled]), 5_030)).toEqual(['void 1', 'open after 1']);
+    expect(plan(view([fulfilled]), 5_030)).toEqual(['open after 1', 'void 1']);
   });
 });
 

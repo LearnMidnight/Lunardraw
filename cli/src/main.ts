@@ -5,8 +5,9 @@
  *   ./lunardraw keygen organiser --out <file>        (also for the backup organiser)
  *   ./lunardraw deploy     --network <n> --organiser <file> --backup <file> --oracle <file> --wallet <file> [--accept] [parameters]
  *   ./lunardraw accept-key --network <n> --oracle <file> --wallet <file>
- *   ./lunardraw keeper     --network <n> --organiser <file> --wallet <file> [--seeds <file>] [--every <seconds>]
- *   ./lunardraw oracle     --network <n> --oracle <file> --wallet <file>
+ *   ./lunardraw proof-server [--port 6300]
+ *   ./lunardraw keeper     --network <n> --organiser <file> --wallet <file> [--seeds <file>] [--every <seconds>] [--feed <file>] [--proof-server-port <port>] [--prove-lead <secs>]
+ *   ./lunardraw oracle     --network <n> --oracle <file> --wallet <file> [--proof-server-port <port>]
  *   ./lunardraw status     --network <n>
  *   ./lunardraw verify     --network <n>
  *   ./lunardraw fingerprints
@@ -26,7 +27,7 @@ import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
 import { setNetworkId } from '@midnight-ntwrk/midnight-js/network-id';
-import { DrawOracle, every, FileSeedStore, Keeper, STARFALL_WEEKLY } from '@lunardraw/keeper';
+import { buildFeed, type ChainView, DrawOracle, every, FileSeedStore, Keeper, STARFALL_WEEKLY, writeFeed } from '@lunardraw/keeper';
 import { oraclePublicKey, parseOracleSecretKey } from '@nightcast/contract';
 import {
   BLOCKFROST,
@@ -65,8 +66,9 @@ const USAGE = `usage:
   ./lunardraw deploy       --network <${NETWORKS.join('|')}> --organiser <file> --backup <file> --oracle <file> --wallet <file> [--accept]
                            [--price <STAR>] [--min-sales <s>] [--max-sales <s>] [--reveal <s>] [--draw <s>] [--claim <s>]
   ./lunardraw accept-key   --network <network> --oracle <oracle secret file> --wallet <file>
-  ./lunardraw keeper       --network <network> --organiser <file> --wallet <file> [--seeds <file>] [--every <seconds>]
-  ./lunardraw oracle       --network <network> --oracle <oracle secret file> --wallet <file>
+  ./lunardraw proof-server [--port 6300]
+  ./lunardraw keeper       --network <network> --organiser <file> --wallet <file> [--seeds <file>] [--every <seconds>] [--feed <file>] [--proof-server-port <port>] [--prove-lead <secs>]
+  ./lunardraw oracle       --network <network> --oracle <oracle secret file> --wallet <file> [--proof-server-port <port>]
   ./lunardraw status       --network <network>
   ./lunardraw verify       --network <network>
   ./lunardraw fingerprints
@@ -78,10 +80,16 @@ to claim. --every <seconds> runs draws on a fixed period instead (for test netwo
 --oracle and --wallet take Nightcast's files (nightcast/nightcast keygen oracle, wallet new).
 The keeper keeps its sealed seeds in --seeds (default ~/lunardraw-secrets/seeds-<network>.json):
 back it up, keep it private. Run the oracle on a different machine from the keeper.
+On one PC, run \`./lunardraw proof-server\` once and give the keeper and the oracle --proof-server-port 6300,
+so they share it (each would otherwise start its own). --prove-lead <secs> (default 240) is how far ahead
+the keeper stamps the numbers proof's clock, since proving takes minutes and the contract allows 10 either way.
+--feed <file> makes the keeper write the site feed (lunardraw-feed/1 JSON) there after every pass.
 --backup is a second organiser file (keygen organiser) whose holder can replace the organiser
 if its secret is lost or leaked: keep it offline. Its file may hold only the public commitment.`;
 
 const hex = (b: Uint8Array): string => Buffer.from(b).toString('hex');
+/** The same image Nightcast's compose files use (Midnight's support matrix, October 2026). */
+const PROOF_SERVER_IMAGE = 'midnightntwrk/proof-server:8.1.3';
 const fromHex = (h: string): Uint8Array => Uint8Array.from(Buffer.from(h.replace(/^0x/, ''), 'hex'));
 const iso = (secs: bigint) => new Date(Number(secs) * 1000).toISOString();
 
@@ -128,14 +136,22 @@ const walletSeed = (path: string | undefined): string | undefined => {
   return f.seed;
 };
 
+/** A proof server already running (`./lunardraw proof-server`), instead of starting one. */
+const proofServerPort = (value: string | undefined): number | undefined => {
+  if (value === undefined) return undefined;
+  const port = Number(value);
+  if (!Number.isInteger(port) || port <= 0) throw new Error('--proof-server-port must be a port number');
+  return port;
+};
+
 const networkArg = (value: string | undefined): Network => {
   if (!value || !isNetwork(value)) throw new Error(`--network must be one of ${NETWORKS.join(', ')}`);
   return value;
 };
 
-const withSession = async <T>(network: Network, run: (s: Session) => Promise<T>): Promise<T> => {
+const withSession = async <T>(network: Network, run: (s: Session) => Promise<T>, proofServerPort?: number): Promise<T> => {
   const projectId = BLOCKFROST[network] ? blockfrostProjectId(network) : undefined;
-  const session = await connect(network, { projectId });
+  const session = await connect(network, { projectId, proofServerPort });
   try {
     return await run(session);
   } finally {
@@ -182,6 +198,10 @@ const main = async (argv: string[]): Promise<number> => {
       out: { type: 'string' },
       seeds: { type: 'string' },
       every: { type: 'string' },
+      feed: { type: 'string' },
+      'proof-server-port': { type: 'string' },
+      'prove-lead': { type: 'string' },
+      port: { type: 'string' },
       accept: { type: 'boolean', default: false },
       price: { type: 'string' },
       'min-sales': { type: 'string' },
@@ -200,6 +220,25 @@ const main = async (argv: string[]): Promise<number> => {
       writeFileSync(values.out, JSON.stringify(file, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
       process.stdout.write(`Organiser secret written to ${values.out} (keep it private; it runs the draws).\nOrganiser commitment: ${file.public}\n`);
       return 0;
+    }
+
+    case 'proof-server': {
+      // One proof server for the keeper and the oracle to share (each would
+      // otherwise start its own, about 1 GB each at peak). Listens on this
+      // machine only. Runs until Ctrl+C.
+      const port = values.port ?? '6300';
+      if (!/^\d+$/.test(port)) throw new Error('--port must be a number');
+      process.stdout.write(`Proof server on 127.0.0.1:${port}. Give the keeper and the oracle --proof-server-port ${port}. Press Ctrl+C to stop.\n`);
+      const { spawn } = await import('node:child_process');
+      const child = spawn(
+        'docker',
+        ['run', '--rm', '--name', `lunardraw-proof-server-${port}`, '-p', `127.0.0.1:${port}:6300`, PROOF_SERVER_IMAGE, 'midnight-proof-server'],
+        { stdio: 'inherit' },
+      );
+      const stop = () => child.kill('SIGINT');
+      process.on('SIGINT', stop);
+      process.on('SIGTERM', stop);
+      return new Promise<number>((res) => child.on('exit', (code) => res(code ?? 0)));
     }
 
     case 'fingerprints': {
@@ -312,11 +351,17 @@ const main = async (argv: string[]): Promise<number> => {
         try {
           const providers = lunardrawProviders(session, wallet);
           const joined = await joinLunardraw(providers, record.contractAddress, { organiserSecret });
-          const chain = new MidnightLunardrawChain(joined, providers.publicDataProvider, record.contractAddress);
-          const keeper = new Keeper({ chain, seeds, schedule, logger: session.logger });
+          const lead = values['prove-lead'] === undefined ? undefined : Number(values['prove-lead']);
+          const chain = new MidnightLunardrawChain(joined, providers.publicDataProvider, record.contractAddress, lead);
+          const feedPath = values.feed;
+          const onView = feedPath
+            ? (view: ChainView, nowSecs: number) => writeFeed(feedPath, buildFeed(view, { network, contract: record.contractAddress, nowSecs }))
+            : undefined;
+          const keeper = new Keeper({ chain, seeds, schedule, logger: session.logger, onView });
           keeper.start();
           session.logger.info(
-            `Keeper running for ${record.contractAddress} (${values.every ? `draws every ${values.every} s` : 'weekly Starfall'}; seeds in ${seeds.path}). Press Ctrl+C to stop.`,
+            `Keeper running for ${record.contractAddress} (${values.every ? `draws every ${values.every} s` : 'weekly Starfall'}; seeds in ${seeds.path}` +
+              `${feedPath ? `; site feed written to ${feedPath}` : ''}). Press Ctrl+C to stop.`,
           );
           await untilStopped();
           session.logger.info('Stopping the keeper...');
@@ -325,7 +370,7 @@ const main = async (argv: string[]): Promise<number> => {
         } finally {
           await wallet.stop().catch(() => undefined);
         }
-      });
+      }, proofServerPort(values['proof-server-port']));
     }
 
     case 'oracle': {
@@ -351,7 +396,7 @@ const main = async (argv: string[]): Promise<number> => {
         } finally {
           await wallet.stop().catch(() => undefined);
         }
-      });
+      }, proofServerPort(values['proof-server-port']));
     }
 
     case 'status': {

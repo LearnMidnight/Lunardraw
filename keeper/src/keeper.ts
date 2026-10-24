@@ -106,7 +106,15 @@ export const dueSteps = (view: ChainView, now: number, opts: PlanOptions): Step[
   if (opts.openNew && !opensNext && (view.lastDraw === 0n || (last !== undefined && last.status !== DrawStatus.open))) {
     steps.push({ kind: 'open' });
   }
-  return steps;
+  // Most urgent first. Only the organiser can reveal or open, and a reveal has
+  // a deadline (reveal window) that a slow proof elsewhere must not eat into;
+  // voids and settlements have no deadline; computing the numbers is the
+  // slowest proof by far (minutes on a home PC) and has an hour.
+  const rank: Record<Step['kind'], number> = { reveal: 0, open: 1, void: 2, settle: 3, pay: 4, compute: 5 };
+  return steps
+    .map((step, i) => ({ step, i }))
+    .sort((a, b) => rank[a.step.kind] - rank[b.step.kind] || a.i - b.i)
+    .map(({ step }) => step);
 };
 
 /** A step's identity, for not sending the same one twice in a row. */
@@ -159,6 +167,8 @@ export type KeeperOptions = {
   logger?: KeeperLogger;
   /** Local clock in ms (for grace and backoff). */
   clock?: () => number;
+  /** Called with the contract's state after every pass (used to publish the site feed). */
+  onView?: (view: ChainView, nowSecs: number) => void;
 };
 
 export type TickReport = { done: string[]; failed: { step: string; error: string }[]; skipped: { step: string; reason: string }[] };
@@ -187,6 +197,7 @@ export class Keeper {
 
   constructor(private readonly options: KeeperOptions) {
     this.cfg = {
+      onView: options.onView ?? (() => {}),
       marginSecs: options.marginSecs ?? 30,
       openNew: options.openNew ?? true,
       pollMs: options.pollMs ?? 30_000,
@@ -227,6 +238,11 @@ export class Keeper {
       this.lastTickOk = false;
       this.lastTickAt = this.cfg.clock();
       throw err;
+    }
+    try {
+      this.cfg.onView(view, now);
+    } catch (err) {
+      this.logger.error(`publishing the view failed: ${reasonOf(err)}`);
     }
     if (view.oracleKeyChange) {
       const c = view.oracleKeyChange;
@@ -281,6 +297,15 @@ export class Keeper {
     }
     this.lastTickOk = true;
     this.lastTickAt = this.cfg.clock();
+    // Something changed: publish the new state now rather than next pass.
+    if (report.done.length > 0 && this.options.onView) {
+      try {
+        const [after, at] = await Promise.all([chain.view(), chain.now()]);
+        this.cfg.onView(after, at);
+      } catch (err) {
+        this.logger.error(`publishing the view failed: ${reasonOf(err)}`);
+      }
+    }
     return report;
   }
 
