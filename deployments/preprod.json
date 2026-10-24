@@ -1,0 +1,43 @@
+{
+  "network": "preprod",
+  "contractAddress": "5bb124eebe0cc213f04565f24f4590c4023363fdfd9dbd35c3219702db5d6ec5",
+  "deployedAt": "2026-10-24T09:24:22.223Z",
+  "sourceCommit": "3b3c176140e2164ef47eaf688445241d20371b36",
+  "compiler": {
+    "compiler": "0.31.1",
+    "language": "0.23.0",
+    "runtime": "0.16.0"
+  },
+  "parameters": {
+    "oraclePublicKey": {
+      "x": "32993920963106060157182722391396204195876652346556573714871675241262963030490",
+      "y": "2970426460907353687275298249844606722016022192568680380589640846132638876538"
+    },
+    "organiserCommitment": "b28557de332f24603e8964d21e044f91fa230a8a50b94549a24cae055b2831d7",
+    "backupCommitment": "0f029a783b81e36fe5c1a31611a77b9f4a1243d7cdbc51fabd54f1f54c59ad06",
+    "linePrice": "1000000",
+    "minSales": "600",
+    "maxSales": "7200",
+    "revealWindow": "600",
+    "drawWindow": "900",
+    "claimWindow": "3600"
+  },
+  "transactions": {
+    "deploy": "007c63340a631443e348da820472928e596663f09e6712ca40a799b1effd71e41e",
+    "acceptOracleKey": "00b78109aca19224330f9dfda03658084a3f51b4fdc5f9a8dcaa9f351ff5904ee6"
+  },
+  "verifierKeys": {
+    "acceptOracleKey": "4ee9f04e2dd12b636e432f3bcdbf46ff9b5217110aa1a5ca2d141ad876915fb9",
+    "buyTicket": "8f1234d51139d1b2cbe8c0c032a1152d9c5ff7abfbb0066bdeaa475825786a2e",
+    "changeOrganiser": "1c4234456de7b531cb92ed21b8c49d329e28d51bb1f73a48eccfd6bbe85494df",
+    "computeNumbers": "7072691c1b4261076c760f171e80f74f8a847064211b02c6ee8a108c7e25714a",
+    "fulfilDraw": "daa88bdd3827026923379ceb10a122e96c01ec20e3f6ffa43a94ea56e17d19bf",
+    "payWin": "ee668725a67bcc0811d4347ec2dd21095d769ee395260858e8d6887df8b0d7f9",
+    "proposeOracleKey": "4642c5e8bf416dcb49f128c077dd8022b4a7a84e64e188d4bd98c088c2e41343",
+    "refundTicket": "106140123c9f4e8028aee1760bb34e2edfadbd3e1a0a6c3723c49cd9ebd6c3f5",
+    "registerWin": "5ca1060b93bcf04307b5ce03bb023193aa0a308303aa026e1e5388c558c2f750",
+    "requestDraw": "2333d650225c1c9769a1b057faa662e5fe9c3def5c93889ba2076f2a5aec5bdb",
+    "settleDraw": "84b5bc6ddee8c0a2995c9b0afa3fa728bf9275af644ece53ab33ee5437fcb16c",
+    "voidDraw": "6f659e01e2f540f1d8d8d3532400c64f671f57c7cabaa81b98a88af52816b7df"
+  }
+}

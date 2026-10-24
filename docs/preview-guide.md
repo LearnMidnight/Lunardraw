@@ -1,8 +1,10 @@
 # Running Lunardraw on Preview: a step-by-step guide
 
-This runs the Starfall lottery by itself on Midnight's **Preview** test network, with a draw every 30 minutes instead of every week, so you can watch many draws happen in a day. Nothing here uses real money: Preview tokens are free from a faucet.
+This runs the Starfall lottery by itself on a Midnight test network, with a draw every 30 minutes instead of every week, so you can watch many draws happen in a day. Nothing here uses real money: test tokens are free from a faucet.
 
-It assumes you've been through Nightcast's [Preprod guide](https://github.com/LearnMidnight/Nightcast/blob/main/docs/preprod-guide.md) Part 1 (Ubuntu in Windows, Docker Desktop, Node 22, the Compact compiler). You don't need a Blockfrost ID: Preview is served by Midnight directly.
+It assumes you've been through Nightcast's [Preprod guide](https://github.com/LearnMidnight/Nightcast/blob/main/docs/preprod-guide.md) Part 1 (Ubuntu in Windows, Docker Desktop, Node 22, the Compact compiler).
+
+> **Preview or Preprod?** The guide is written for **Preview** (no Blockfrost ID needed). As of 24 Oct 2026, though, Preview's public node drops contract deploys ([#24](https://github.com/LearnMidnight/Lunardraw/issues/24)), so the first soak ran on **Preprod** instead: the same commands with `--network preprod`, Nightcast's Blockfrost ID saved as in its guide, and wallets funded from the Preprod faucet (a fresh Preprod wallet takes about an hour to sync; wallets you already use with Nightcast work as they are). Try Preview first; if the deploy ends in `Transaction submission error` twice, switch.
 
 Two programs run on your PC: the **keeper** (opens draws, reveals seeds, computes numbers, settles) and the **oracle** (answers each draw with the VRF). In real use they'd be on separate machines under separate people; on one PC for a test is fine. Each starts its own proof server in Docker, so expect about 2 GB of memory in use while a draw is being proved.
 
