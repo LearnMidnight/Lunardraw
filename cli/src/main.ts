@@ -5,7 +5,7 @@
  *   ./lunardraw keygen organiser --out <file>        (also for the backup organiser)
  *   ./lunardraw deploy     --network <n> --organiser <file> --backup <file> --oracle <file> --wallet <file> [--accept] [parameters]
  *   ./lunardraw accept-key --network <n> --oracle <file> --wallet <file>
- *   ./lunardraw keeper     --network <n> --organiser <file> --wallet <file> [--seeds <file>] [--every <seconds>]
+ *   ./lunardraw keeper     --network <n> --organiser <file> --wallet <file> [--seeds <file>] [--every <seconds>] [--feed <file>]
  *   ./lunardraw oracle     --network <n> --oracle <file> --wallet <file>
  *   ./lunardraw status     --network <n>
  *   ./lunardraw verify     --network <n>
@@ -26,7 +26,7 @@ import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
 import { setNetworkId } from '@midnight-ntwrk/midnight-js/network-id';
-import { DrawOracle, every, FileSeedStore, Keeper, STARFALL_WEEKLY } from '@lunardraw/keeper';
+import { buildFeed, type ChainView, DrawOracle, every, FileSeedStore, Keeper, STARFALL_WEEKLY, writeFeed } from '@lunardraw/keeper';
 import { oraclePublicKey, parseOracleSecretKey } from '@nightcast/contract';
 import {
   BLOCKFROST,
@@ -65,7 +65,7 @@ const USAGE = `usage:
   ./lunardraw deploy       --network <${NETWORKS.join('|')}> --organiser <file> --backup <file> --oracle <file> --wallet <file> [--accept]
                            [--price <STAR>] [--min-sales <s>] [--max-sales <s>] [--reveal <s>] [--draw <s>] [--claim <s>]
   ./lunardraw accept-key   --network <network> --oracle <oracle secret file> --wallet <file>
-  ./lunardraw keeper       --network <network> --organiser <file> --wallet <file> [--seeds <file>] [--every <seconds>]
+  ./lunardraw keeper       --network <network> --organiser <file> --wallet <file> [--seeds <file>] [--every <seconds>] [--feed <file>]
   ./lunardraw oracle       --network <network> --oracle <oracle secret file> --wallet <file>
   ./lunardraw status       --network <network>
   ./lunardraw verify       --network <network>
@@ -78,6 +78,7 @@ to claim. --every <seconds> runs draws on a fixed period instead (for test netwo
 --oracle and --wallet take Nightcast's files (nightcast/nightcast keygen oracle, wallet new).
 The keeper keeps its sealed seeds in --seeds (default ~/lunardraw-secrets/seeds-<network>.json):
 back it up, keep it private. Run the oracle on a different machine from the keeper.
+--feed <file> makes the keeper write the site feed (lunardraw-feed/1 JSON) there after every pass.
 --backup is a second organiser file (keygen organiser) whose holder can replace the organiser
 if its secret is lost or leaked: keep it offline. Its file may hold only the public commitment.`;
 
@@ -182,6 +183,7 @@ const main = async (argv: string[]): Promise<number> => {
       out: { type: 'string' },
       seeds: { type: 'string' },
       every: { type: 'string' },
+      feed: { type: 'string' },
       accept: { type: 'boolean', default: false },
       price: { type: 'string' },
       'min-sales': { type: 'string' },
@@ -313,10 +315,15 @@ const main = async (argv: string[]): Promise<number> => {
           const providers = lunardrawProviders(session, wallet);
           const joined = await joinLunardraw(providers, record.contractAddress, { organiserSecret });
           const chain = new MidnightLunardrawChain(joined, providers.publicDataProvider, record.contractAddress);
-          const keeper = new Keeper({ chain, seeds, schedule, logger: session.logger });
+          const feedPath = values.feed;
+          const onView = feedPath
+            ? (view: ChainView, nowSecs: number) => writeFeed(feedPath, buildFeed(view, { network, contract: record.contractAddress, nowSecs }))
+            : undefined;
+          const keeper = new Keeper({ chain, seeds, schedule, logger: session.logger, onView });
           keeper.start();
           session.logger.info(
-            `Keeper running for ${record.contractAddress} (${values.every ? `draws every ${values.every} s` : 'weekly Starfall'}; seeds in ${seeds.path}). Press Ctrl+C to stop.`,
+            `Keeper running for ${record.contractAddress} (${values.every ? `draws every ${values.every} s` : 'weekly Starfall'}; seeds in ${seeds.path}` +
+              `${feedPath ? `; site feed written to ${feedPath}` : ''}). Press Ctrl+C to stop.`,
           );
           await untilStopped();
           session.logger.info('Stopping the keeper...');

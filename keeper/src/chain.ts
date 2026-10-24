@@ -15,6 +15,18 @@ export type DrawView = {
   seedCommitment: Uint8Array;
   /** The oracle key the draw is bound to (fixed when it opened). */
   oracleKey: { x: bigint; y: bigint };
+  /** The revealed seed and the VRF output (all zeros until known). */
+  seed: Uint8Array;
+  output: Uint8Array;
+  /** The drawn numbers (zeros until computed). */
+  numbers: number[];
+  moonball: number;
+  /** Lines sold, and registered winning lines per division (division 1 first). */
+  lines: bigint;
+  winners: bigint[];
+  /** Rollover added to this draw's pool when it settled, and each division's prize per line. */
+  carried: bigint;
+  prizes: bigint[];
 };
 
 export type WinView = { line: Uint8Array; drawId: bigint; paid: boolean };
@@ -24,6 +36,10 @@ export type ChainView = {
   lastDraw: bigint;
   minSales: bigint;
   maxSales: bigint;
+  linePrice: bigint;
+  claimWindow: bigint;
+  /** Rollover waiting for the next draw to settle, in STAR. */
+  carry: bigint;
   oracleKeyReady: boolean;
   /** A proposed oracle key, if any, and the earliest time it may take effect (seconds). */
   oracleKeyChange?: { key: { x: bigint; y: bigint }; at: bigint; approved: boolean };
@@ -51,6 +67,9 @@ export const viewOf = (l: Ledger): ChainView => ({
   lastDraw: l.lastDraw,
   minSales: l.minSales,
   maxSales: l.maxSales,
+  linePrice: l.linePrice,
+  claimWindow: l.claimWindow,
+  carry: l.carry,
   oracleKeyReady: l.oracleKeyReady,
   oracleKeyChange: l.proposedOracleKey.is_some
     ? { key: { x: l.proposedOracleKey.value.x, y: l.proposedOracleKey.value.y }, at: l.oracleKeyChangeAt, approved: l.oracleKeyApproved }
@@ -64,6 +83,17 @@ export const viewOf = (l: Ledger): ChainView => ({
     claimDeadline: d.claimDeadline,
     seedCommitment: d.seedCommitment,
     oracleKey: { x: d.oracleKey.x, y: d.oracleKey.y },
+    seed: d.seed,
+    output: d.output,
+    numbers: d.numbers.map(Number),
+    moonball: Number(d.moonball),
+    lines: l.drawLines.member(id) ? l.drawLines.lookup(id).read() : 0n,
+    winners: [1n, 2n, 3n, 4n, 5n, 6n, 7n, 8n, 9n].map((div) => {
+      const key = id * 16n + div;
+      return l.winnerCounts.member(key) ? l.winnerCounts.lookup(key).read() : 0n;
+    }),
+    carried: d.carried,
+    prizes: d.prizes.map((p) => p),
   })).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)),
   wins: Array.from(l.wins, ([line, w]) => ({ line, drawId: w.drawId, paid: w.paid })),
 });
