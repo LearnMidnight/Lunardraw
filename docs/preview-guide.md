@@ -120,39 +120,49 @@ If the wallet sits at "Waiting for the first DUST" for more than 15 minutes, its
 
 ## Part 4: Run it
 
-Open **two Ubuntu windows**, both in `~/Lunardraw`.
+Open **three Ubuntu windows**, all in `~/Lunardraw`.
 
-**Window 1, the keeper:**
+**Window 1, one proof server for both programs:**
+
+```bash
+./lunardraw proof-server
+```
+
+The keeper and the oracle each need a proof server, and each would start its own in Docker. On one PC that's two of them fighting for memory (each peaks at about 1 GB), so run one and point both at it. Leave this window alone.
+
+**Window 2, the keeper:**
 
 ```bash
 ./lunardraw keeper --network preview \
   --organiser ~/lunardraw-secrets/organiser.secret \
   --wallet ~/lunardraw-secrets/keeper-wallet.secret \
-  --every 1800
+  --every 3600 --proof-server-port 6300 \
+  --feed ~/lunardraw-feed/feed.json
 ```
 
-`--every 1800` closes a draw every 30 minutes, on the hour and half hour. The keeper keeps each draw's sealed seed in `~/lunardraw-secrets/seeds-preview.json`.
+`--every 3600` closes a draw every hour, on the hour. (`--every 1800`, every half hour, works on a fast machine; on an 8 GB PC the numbers proof can take 10 minutes or more and must not still be running when the next draw closes.) The keeper keeps each draw's sealed seed in `~/lunardraw-secrets/seeds-preview.json`, and writes the website's feed to the `--feed` file after every pass.
 
-**Window 2, the oracle:**
+**Window 3, the oracle:**
 
 ```bash
 ./lunardraw oracle --network preview \
   --oracle ~/lunardraw-secrets/oracle.secret \
-  --wallet ~/lunardraw-secrets/oracle-wallet.secret
+  --wallet ~/lunardraw-secrets/oracle-wallet.secret \
+  --proof-server-port 6300
 ```
 
-Within a minute the keeper opens draw 1: `opened draw 1, selling until ...`. Then, every half hour, you should see this cycle:
+Within a minute or two the keeper opens draw 1: `opened draw 1, selling until ...`. Then, every hour, you should see this cycle:
 
 | Who | Line in the log | About |
 |---|---|---|
-| keeper | `done: reveal draw N's seed and open the next draw (35 s)` | right after the half hour |
-| oracle | `answered draw N (24 s)` | within a minute of that |
-| keeper | `done: compute draw N's numbers (130 s)` | a couple of minutes later |
-| keeper | `done: settle draw N` | an hour and a bit later (after the claim window) |
+| keeper | `done: reveal draw N's seed and open the next draw (70 s)` | right after the hour |
+| oracle | `answered draw N (33 s)` | within a minute of that |
+| keeper | `done: compute draw N's numbers (N s)` | minutes later: 2 on CI, 10 or more on an 8 GB PC |
+| keeper | `done: settle draw N` | an hour and a bit after that (after the claim window) |
 
-The seconds in brackets are how long each proof took on CI's machine; yours may differ.
+The seconds in brackets are what one 8 GB PC and CI's machine took; yours will differ. **The numbers proof must land within about 14 minutes of starting** (the contract checks the keeper's clock stamp against block time, 10 minutes either way, and the keeper stamps it 4 minutes ahead). If it takes longer, the transaction is refused with `1010: Invalid Transaction: Custom error: 104`, the draw eventually voids, and the PC needs more memory or fewer things running: check with `free -h` that swap isn't in heavy use.
 
-**Window 3 (optional), checking:**
+**Checking** (any window, any time):
 
 ```bash
 ./lunardraw status --network preview    # every draw and its stage
@@ -161,13 +171,13 @@ The seconds in brackets are how long each proof took on CI's machine; yours may 
 
 ### What "working" looks like
 
-After a day you'd expect about 48 draws, each **settled** (nobody bought tickets, so there's nothing to pay and the prize pool stays at zero; that's fine for this test). What you're testing is that the machinery never stops: every draw reaches `settled`, and the next one opens on time.
+After a day you'd expect about 24 draws, each **settled** (nobody bought tickets, so there's nothing to pay and the prize pool stays at zero; that's fine for this test). What you're testing is that the machinery never stops: every draw reaches `settled`, and the next one opens on time.
 
 A draw shown as **voided** means a deadline was missed: the keeper didn't reveal in time, the oracle didn't answer in time, or nobody computed the numbers. One or two voids after a PC sleep or a network drop are expected and harmless (a void draw is refunded, never redrawn). Voids while everything was running are worth reporting.
 
 ### Stopping and restarting
 
-Ctrl+C once in each window stops it cleanly (a second Ctrl+C forces it). Start the same commands again to carry on: the keeper reads everything it needs from the chain and its seeds file, so a stop in the middle of a draw costs at most that draw.
+Ctrl+C once in each window stops it cleanly (a second Ctrl+C forces it). Start the same commands again to carry on (proof server first): the keeper reads everything it needs from the chain and its seeds file, so a stop in the middle of a draw costs at most that draw.
 
 Your PC sleeping stops both programs. For a day-long run, set Windows to never sleep while plugged in (Settings → System → Power).
 
@@ -195,4 +205,5 @@ Each of these should end with the affected draw **voided** or finished normally,
 | `Wallet sync problem: ...` lines now and then | The wallet reconnecting by itself; ignore unless it never recovers. |
 | `no seed for draw N in the seed store` | The seeds file was lost or replaced. That draw will void and be refunded; the keeper opens a new one. Restore the file from backup if you have one. |
 | `an oracle key change is pending` | Someone proposed a new oracle key. If it wasn't you, treat the organiser secret as leaked. |
+| `1010: Invalid Transaction: Custom error: 104` after computing the numbers | The proof took longer than the contract's clock window allows (see Part 4). Free up memory, or use hourly draws and `--prove-lead`. |
 | Docker errors about ports or containers | Make sure Docker Desktop is running; `docker ps` shows the proof servers; `docker rm -f $(docker ps -aq)` clears leftovers. |

@@ -84,10 +84,18 @@ export const readView = async (publicData: ContractStateSource, contractAddress:
  * boundary.
  */
 export class MidnightLunardrawChain implements LunardrawChain, DrawOracleChain {
+  /**
+   * @param proveLeadSecs computeNumbers stamps the caller's clock, and the
+   * contract accepts the transaction only within 10 minutes of that stamp
+   * (either way). Proving the numbers takes minutes, so the stamp is set this
+   * far ahead: with 240 s the proof may land from 6 minutes before to 14
+   * minutes after it was started.
+   */
   constructor(
     private readonly contract: LunardrawCalls,
     private readonly publicData: ContractStateSource,
     readonly contractAddress: string,
+    private readonly proveLeadSecs = 240,
   ) {}
 
   view(): Promise<ChainView> {
@@ -112,7 +120,7 @@ export class MidnightLunardrawChain implements LunardrawChain, DrawOracleChain {
   }
 
   async computeNumbers(n: bigint): Promise<void> {
-    await this.contract.callTx.computeNumbers(n, BigInt(Math.floor(Date.now() / 1000)));
+    await this.contract.callTx.computeNumbers(n, BigInt(Math.floor(Date.now() / 1000) + this.proveLeadSecs));
   }
 
   async settleDraw(n: bigint): Promise<void> {
