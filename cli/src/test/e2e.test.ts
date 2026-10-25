@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { inspect } from 'node:util';
 import type { MidnightWalletProvider } from '@midnight-ntwrk/testkit-js';
 import { DrawStatus, ledger } from '@lunardraw/contract';
-import { DrawOracle, Keeper, MemorySeedStore, type Schedule } from '@lunardraw/keeper';
+import { commitmentOf, DrawOracle, Keeper, MemorySeedStore, type Schedule } from '@lunardraw/keeper';
 import { generateOperatorSecret, generateOracleSecretKey, oraclePublicKey, pureCircuits as nightcast } from '@nightcast/contract';
 import { combineDrawSeed, drawStarfall } from '@nightcast/sdk';
 import { connect, localFingerprints, openWallet, type Session } from '@nightcast/deploy';
@@ -129,8 +129,11 @@ describe.runIf(enabled)('Lunardraw on a local Midnight network', () => {
     // The numbers are the published rule applied to the revealed seed and the VRF output.
     const state = await providers.publicDataProvider.queryContractState(address);
     const draw = ledger(state!.data).draws.lookup(1n);
-    const seed = (await seeds.find(draw.seedCommitment))!;
-    expect(hex(draw.seed)).toBe(hex(seed));
+    // The revealed seed matches the commitment published when the draw opened
+    // (the keeper has dropped its own copy by now: it's public).
+    const seed = draw.seed;
+    expect(hex(commitmentOf(seed))).toBe(hex(draw.seedCommitment));
+    expect(await seeds.find(draw.seedCommitment)).toBeUndefined();
     expect(hex(draw.output)).toBe(hex(nightcast.evaluateAt(oracleSecretKey, draw.point)));
     const expected = drawStarfall(combineDrawSeed(hex(seed), draw.output));
     expect(draw.numbers.map(Number)).toEqual(expected.numbers);

@@ -47,8 +47,8 @@ describe('the draw oracle', () => {
     expect((await oracle.tick()).fulfilled).toEqual([1n]);
     const d = sim.getLedger().draws.lookup(1n);
     expect(d.status).toBe(DrawStatus.fulfilled);
-    const seed = (await seeds.find(d.seedCommitment))!;
-    expect(hex(d.output)).toBe(hex(nightcast.evaluate(oracleSecretKey, sim.alphaOf(1n, seed))));
+    // The seed is public once revealed (the keeper drops its own copy).
+    expect(hex(d.output)).toBe(hex(nightcast.evaluate(oracleSecretKey, sim.alphaOf(1n, d.seed))));
   });
 
   it('ignores draws bound to another key, and draws too close to their deadline', async () => {
