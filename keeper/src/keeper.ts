@@ -277,6 +277,16 @@ export class Keeper {
         );
       }
     }
+    // Seeds of draws that are no longer selling are public (revealed) or
+    // useless (void): drop them, so the seed store stays small.
+    if (this.options.seeds.forget) {
+      const gone = view.draws.filter((d) => d.status !== DrawStatus.open).map((d) => d.seedCommitment);
+      try {
+        await this.options.seeds.forget(gone);
+      } catch (err) {
+        this.logger.error(`could not tidy the seed store: ${reasonOf(err)}`);
+      }
+    }
     const steps = dueSteps(view, now, { marginSecs: this.cfg.marginSecs, openNew: this.cfg.openNew });
     const keys = new Set(steps.map((s) => stepKey(s, view.lastDraw)));
     // Forget steps that are no longer due.

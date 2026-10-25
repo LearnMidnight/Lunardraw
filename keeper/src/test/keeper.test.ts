@@ -230,6 +230,34 @@ describe('the keeper', () => {
   });
 });
 
+describe('the seed store', () => {
+  it('only keeps the seeds of draws still selling', async () => {
+    const seeds = new MemorySeedStore();
+    const ctx = setup({ seeds });
+    const { sim, keeper } = ctx;
+    await keeper.tick();
+    expect(seeds.size).toBe(1);
+    passing(sim, sim.getLedger().draws.lookup(1n).salesClose);
+    await keeper.tick(); // reveal 1, open 2: draw 1's seed is public now
+    expect(seeds.size).toBe(2);
+    await keeper.tick();
+    expect(seeds.size).toBe(1);
+    expect(await seeds.find(sim.getLedger().draws.lookup(1n).seedCommitment)).toBeUndefined();
+    expect(await seeds.find(sim.getLedger().draws.lookup(2n).seedCommitment)).toBeDefined();
+  });
+
+  it('prunes the seed file', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lunardraw-seeds-'));
+    const store = new FileSeedStore(join(dir, 'seeds.json'));
+    const a = await store.create();
+    const b = await store.create();
+    expect(await store.forget([a.commitment])).toBe(1);
+    expect(await store.find(a.commitment)).toBeUndefined();
+    expect(await store.find(b.commitment)).toBeDefined();
+    expect(Object.keys(JSON.parse(readFileSync(store.path, 'utf8')).seeds)).toHaveLength(1);
+  });
+});
+
 describe('the background lane', () => {
   it('keeps revealing and opening draws while a slow numbers proof runs', async () => {
     const ctx = setup();
