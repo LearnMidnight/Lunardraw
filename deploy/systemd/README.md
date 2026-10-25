@@ -3,8 +3,9 @@
 On a Linux server, run the proof server, the keeper and the oracle as systemd
 services instead of in terminal windows: they start when the server boots,
 restart if they stop (including when the keeper's or the oracle's watchdog asks
-for a restart after its transactions kept failing, exit code 75), and their
-logs are kept by the journal.
+for a restart, exit code 75: after 3 minutes of failing transactions, or 15
+minutes with the wallet's sync not moving), and their logs are kept by the
+journal. Every 30 minutes each logs a `wallet sync:` line with its positions.
 
 The unit files assume the repository in `/root/Lunardraw`, secrets in
 `/root/lunardraw-secrets` and `/root/nightcast-secrets`, Preprod, and hourly draws.
