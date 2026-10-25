@@ -9,6 +9,10 @@
  *
  * Nobody may see a seed before its draw's sales close: whoever knew it, and
  * the oracle's key, would know the numbers. Keep the file private.
+ *
+ * Once a draw is revealed its seed is public on chain, so the keeper drops it
+ * (`forget`); the store only ever holds the seeds of draws still selling, and
+ * any created for a draw whose opening transaction hasn't shown up yet.
  */
 import { randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -22,6 +26,12 @@ export interface SeedStore {
   create(): Promise<SealedSeed>;
   /** The seed for a commitment, if this store has it. */
   find(commitment: Uint8Array): Promise<Uint8Array | undefined>;
+  /**
+   * Drop the seeds for these commitments (draws that are no longer selling:
+   * revealed, so the seed is public on chain, or void). Returns how many were
+   * dropped. Optional: a store that doesn't prune keeps everything.
+   */
+  forget?(commitments: Uint8Array[]): Promise<number>;
 }
 
 const hex = (b: Uint8Array): string => Buffer.from(b).toString('hex');
@@ -47,6 +57,16 @@ export class MemorySeedStore implements SeedStore {
 
   async find(commitment: Uint8Array): Promise<Uint8Array | undefined> {
     return this.seeds.get(hex(commitment));
+  }
+
+  async forget(commitments: Uint8Array[]): Promise<number> {
+    let n = 0;
+    for (const c of commitments) if (this.seeds.delete(hex(c))) n += 1;
+    return n;
+  }
+
+  get size(): number {
+    return this.seeds.size;
   }
 }
 
@@ -89,5 +109,18 @@ export class FileSeedStore implements SeedStore {
     // Never reveal a seed that doesn't match what was published.
     if (hex(commitmentOf(seed)) !== hex(commitment)) throw new Error(`${this.path}: the seed for ${hex(commitment)} is corrupt`);
     return seed;
+  }
+
+  async forget(commitments: Uint8Array[]): Promise<number> {
+    const data = this.read();
+    let n = 0;
+    for (const c of commitments) {
+      if (data.seeds[hex(c)]) {
+        delete data.seeds[hex(c)];
+        n += 1;
+      }
+    }
+    if (n > 0) this.write(data);
+    return n;
   }
 }

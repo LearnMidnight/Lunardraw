@@ -230,6 +230,105 @@ describe('the keeper', () => {
   });
 });
 
+describe('the seed store', () => {
+  it('only keeps the seeds of draws still selling', async () => {
+    const seeds = new MemorySeedStore();
+    const ctx = setup({ seeds });
+    const { sim, keeper } = ctx;
+    await keeper.tick();
+    expect(seeds.size).toBe(1);
+    passing(sim, sim.getLedger().draws.lookup(1n).salesClose);
+    await keeper.tick(); // reveal 1, open 2: draw 1's seed is public now
+    expect(seeds.size).toBe(2);
+    await keeper.tick();
+    expect(seeds.size).toBe(1);
+    expect(await seeds.find(sim.getLedger().draws.lookup(1n).seedCommitment)).toBeUndefined();
+    expect(await seeds.find(sim.getLedger().draws.lookup(2n).seedCommitment)).toBeDefined();
+  });
+
+  it('prunes the seed file', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lunardraw-seeds-'));
+    const store = new FileSeedStore(join(dir, 'seeds.json'));
+    const a = await store.create();
+    const b = await store.create();
+    expect(await store.forget([a.commitment])).toBe(1);
+    expect(await store.find(a.commitment)).toBeUndefined();
+    expect(await store.find(b.commitment)).toBeDefined();
+    expect(Object.keys(JSON.parse(readFileSync(store.path, 'utf8')).seeds)).toHaveLength(1);
+  });
+});
+
+describe('the background lane', () => {
+  it('keeps revealing and opening draws while a slow numbers proof runs', async () => {
+    const ctx = setup();
+    const { sim, chain, seeds } = ctx;
+    // A computeNumbers that only completes when the test says so.
+    let release: (() => void) | undefined;
+    const slow: LunardrawChain = Object.assign(Object.create(chain) as LunardrawChain, {
+      computeNumbers: (n: bigint) =>
+        new Promise<void>((res, rej) => {
+          release = () => {
+            try {
+              sim.computeNumbers(n);
+              res();
+            } catch (e) {
+              rej(e);
+            }
+          };
+        }),
+    });
+    const keeper = new Keeper({ chain: slow, seeds, schedule: every(SALES), clock: () => sim.now * 1000, background: ['compute'] });
+
+    expect((await keeper.tick()).done).toEqual(['open after 0']);
+    passing(sim, sim.getLedger().draws.lookup(1n).salesClose);
+    expect((await keeper.tick()).done).toEqual(['reveal 1']);
+    oracleAnswers(sim);
+
+    // The compute starts and the pass doesn't wait for it.
+    const started = await keeper.tick();
+    expect(started.skipped).toContainEqual({ step: 'compute 1', reason: 'started in the background' });
+    expect(keeper.inProgress()).toEqual(['compute 1']);
+
+    // Draw 2 closes while draw 1's proof is still running: it's revealed anyway.
+    passing(sim, sim.getLedger().draws.lookup(2n).salesClose);
+    const meanwhile = await keeper.tick();
+    expect(meanwhile.done).toEqual(['reveal 2']);
+    expect(meanwhile.skipped).toContainEqual({ step: 'compute 1', reason: 'proving in the background' });
+
+    // The proof lands; the next pass reports it.
+    release!();
+    await keeper.settled();
+    expect(statusOf(sim, 1n)).toBe(DrawStatus.drawn);
+    expect((await keeper.tick()).done).toContain('compute 1');
+    expect(keeper.inProgress()).toEqual([]);
+  });
+
+  it('reports a failed background proof and retries it later', async () => {
+    const ctx = setup();
+    const { sim, chain, seeds } = ctx;
+    let fail = true;
+    const flaky: LunardrawChain = Object.assign(Object.create(chain) as LunardrawChain, {
+      computeNumbers: async (n: bigint) => {
+        if (fail) throw new Error('proof server 500');
+        sim.computeNumbers(n);
+      },
+    });
+    const keeper = new Keeper({ chain: flaky, seeds, schedule: every(SALES), clock: () => sim.now * 1000, backoffMs: 1_000, background: ['compute'] });
+    await keeper.tick();
+    passing(sim, sim.getLedger().draws.lookup(1n).salesClose);
+    await keeper.tick();
+    oracleAnswers(sim);
+    await keeper.tick();
+    await keeper.settled();
+    expect((await keeper.tick()).failed).toEqual([{ step: 'compute 1', error: 'proof server 500' }]);
+    fail = false;
+    sim.advance(5);
+    await keeper.tick();
+    await keeper.settled();
+    expect(statusOf(sim, 1n)).toBe(DrawStatus.drawn);
+  });
+});
+
 describe('dueSteps', () => {
   const view = (draws: Partial<ChainView['draws'][number]>[], lastDraw = BigInt(draws.length)): ChainView => ({
     lastDraw,

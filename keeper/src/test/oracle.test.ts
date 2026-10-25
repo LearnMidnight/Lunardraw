@@ -40,15 +40,15 @@ const requested = async (ctx: ReturnType<typeof setup>) => {
 describe('the draw oracle', () => {
   it("answers a revealed draw with Nightcast's VRF, after letting the node catch up", async () => {
     const ctx = setup();
-    const { sim, oracle, seeds, oracleSecretKey } = ctx;
+    const { sim, oracle, oracleSecretKey } = ctx;
     await requested(ctx);
     expect((await oracle.tick()).skipped).toEqual([{ draw: 1n, reason: 'new; letting the node catch up' }]);
     sim.advance(21);
     expect((await oracle.tick()).fulfilled).toEqual([1n]);
     const d = sim.getLedger().draws.lookup(1n);
     expect(d.status).toBe(DrawStatus.fulfilled);
-    const seed = (await seeds.find(d.seedCommitment))!;
-    expect(hex(d.output)).toBe(hex(nightcast.evaluate(oracleSecretKey, sim.alphaOf(1n, seed))));
+    // The seed is public once revealed (the keeper drops its own copy).
+    expect(hex(d.output)).toBe(hex(nightcast.evaluate(oracleSecretKey, sim.alphaOf(1n, d.seed))));
   });
 
   it('ignores draws bound to another key, and draws too close to their deadline', async () => {
