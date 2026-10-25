@@ -175,6 +175,10 @@ After a day you'd expect about 24 draws, each **settled** (nobody bought tickets
 
 A draw shown as **voided** means a deadline was missed: the keeper didn't reveal in time, the oracle didn't answer in time, or nobody computed the numbers. One or two voids after a PC sleep or a network drop are expected and harmless (a void draw is refunded, never redrawn). Voids while everything was running are worth reporting.
 
+### On a server: run them as services
+
+On a Linux server (rather than a PC you watch), install the three programs as systemd services instead of terminal windows: they start at boot, restart if they stop, and restart themselves if their transactions keep failing for 10 minutes (a stale wallet sync does that: node error `1010 ... Custom error: 170`). See [deploy/systemd/README.md](../deploy/systemd/README.md).
+
 ### Stopping and restarting
 
 Ctrl+C once in each window stops it cleanly (a second Ctrl+C forces it). Start the same commands again to carry on (proof server first): the keeper reads everything it needs from the chain and its seeds file, so a stop in the middle of a draw costs at most that draw.

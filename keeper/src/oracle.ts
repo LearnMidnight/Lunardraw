@@ -13,7 +13,7 @@
  */
 import { DrawStatus } from '@lunardraw/contract';
 import type { ChainView, DrawOracleChain } from './chain.js';
-import { type KeeperLogger, reasonOf } from './keeper.js';
+import { type FailureStreak, type KeeperLogger, reasonOf, StreakCounter } from './keeper.js';
 
 export type DrawOracleOptions = {
   chain: DrawOracleChain;
@@ -55,6 +55,7 @@ export class DrawOracle {
   private busy: Promise<OracleReport> | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private running = false;
+  private readonly streak: StreakCounter;
 
   constructor(private readonly options: DrawOracleOptions) {
     this.cfg = {
@@ -67,6 +68,12 @@ export class DrawOracle {
       clock: options.clock ?? Date.now,
     };
     this.logger = options.logger ?? silent;
+    this.streak = new StreakCounter(this.cfg.clock);
+  }
+
+  /** Answers failing in a row (see {@link FailureStreak}). */
+  status(): { streak: FailureStreak } {
+    return { streak: this.streak.get() };
   }
 
   tick(): Promise<OracleReport> {
@@ -113,6 +120,7 @@ export class DrawOracle {
         await chain.fulfilDraw(d.id);
         this.answered.set(d.id, this.cfg.clock());
         this.failures.delete(d.id);
+        this.streak.ok();
         report.fulfilled.push(d.id);
         this.logger.info(`answered draw ${d.id} (${Math.round((Date.now() - startedAt) / 1000)} s)`);
       } catch (err) {
@@ -120,6 +128,7 @@ export class DrawOracle {
         const n = (failed?.failures ?? 0) + 1;
         const delay = Math.min(this.cfg.backoffMs * 2 ** (n - 1), this.cfg.maxBackoffMs);
         this.failures.set(d.id, { failures: n, nextTryAt: this.cfg.clock() + delay });
+        this.streak.failed();
         report.failed.push({ draw: d.id, error });
         this.logger.error(`could not answer draw ${d.id} (attempt ${n}, retrying in ${Math.round(delay / 1000)} s): ${error}`);
       }

@@ -419,3 +419,29 @@ describe('seed stores', () => {
     expect(Object.keys(JSON.parse(readFileSync(path, 'utf8')).seeds)).toHaveLength(2);
   });
 });
+
+describe('the failure streak', () => {
+  it('counts transactions failing in a row and resets on a success', async () => {
+    const ctx = setup();
+    const { sim, chain, seeds } = ctx;
+    let down = true;
+    const flaky: LunardrawChain = Object.assign(Object.create(chain) as LunardrawChain, {
+      openDraw: async (close: bigint, c: Uint8Array) => {
+        if (down) throw new Error('1010 custom 170');
+        await chain.openDraw(close, c);
+      },
+    });
+    const keeper = new Keeper({ chain: flaky, seeds, schedule: every(SALES), clock: () => sim.now * 1000, backoffMs: 1_000 });
+    const start = sim.now * 1000;
+    await keeper.tick();
+    sim.advance(2);
+    await keeper.tick();
+    sim.advance(5);
+    await keeper.tick();
+    expect(keeper.status().streak).toEqual({ since: start, failures: 3, lastSuccessAt: undefined });
+    down = false;
+    sim.advance(10);
+    await keeper.tick();
+    expect(keeper.status().streak).toMatchObject({ since: undefined, failures: 0, lastSuccessAt: sim.now * 1000 });
+  });
+});

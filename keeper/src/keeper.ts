@@ -181,10 +181,43 @@ export type KeeperOptions = {
 
 export type TickReport = { done: string[]; failed: { step: string; error: string }[]; skipped: { step: string; reason: string }[] };
 
+/**
+ * Transactions that keep failing with nothing succeeding in between: when the
+ * streak began (local clock, ms) and how long it is. A wallet whose sync has
+ * gone stale fails every fee proof (node error 1010 custom 170), so a long
+ * streak is the cue to restart and resync.
+ */
+export type FailureStreak = { since?: number; failures: number; lastSuccessAt?: number };
+
+export class StreakCounter {
+  private since: number | undefined;
+  private failures = 0;
+  private lastSuccessAt: number | undefined;
+
+  constructor(private readonly clock: () => number) {}
+
+  ok(): void {
+    this.since = undefined;
+    this.failures = 0;
+    this.lastSuccessAt = this.clock();
+  }
+
+  failed(): void {
+    if (this.failures === 0) this.since = this.clock();
+    this.failures += 1;
+  }
+
+  get(): FailureStreak {
+    return { since: this.since, failures: this.failures, lastSuccessAt: this.lastSuccessAt };
+  }
+}
+
 export type KeeperStatus = {
   /** When the last pass finished (ms), and whether it could read the chain. */
   lastTickAt?: number;
   lastTickOk: boolean;
+  /** Transactions failing in a row. */
+  streak: FailureStreak;
   /** Steps that keep failing, with their failure counts. */
   failing: { step: string; failures: number; error: string }[];
 };
@@ -204,6 +237,7 @@ export class Keeper {
   private lastTickOk = false;
   /** Background steps still running, by step key. */
   private readonly inFlight = new Map<string, Promise<void>>();
+  private readonly streak: StreakCounter;
   /** Background steps that finished since the last pass, for its report. */
   private readonly finished: { key: string; error?: string }[] = [];
 
@@ -220,6 +254,7 @@ export class Keeper {
       clock: options.clock ?? Date.now,
     };
     this.logger = options.logger ?? silent;
+    this.streak = new StreakCounter(this.cfg.clock);
   }
 
   /** One pass: read the chain, send every due step. Never runs twice at once. */
@@ -236,6 +271,7 @@ export class Keeper {
     return {
       lastTickAt: this.lastTickAt,
       lastTickOk: this.lastTickOk,
+      streak: this.streak.get(),
       failing: [...this.failures].map(([step, f]) => ({ step, failures: f.failures, error: f.error })),
     };
   }
@@ -324,6 +360,7 @@ export class Keeper {
         }
         this.done.set(key, this.cfg.clock());
         this.failures.delete(key);
+        this.streak.ok();
         report.done.push(key);
         // How long the proof and the transaction took (wall clock), for capacity planning.
         this.logger.info(`done: ${describeStep(step)} (${Math.round((Date.now() - startedAt) / 1000)} s)`);
@@ -332,6 +369,7 @@ export class Keeper {
         const n = (failed?.failures ?? 0) + 1;
         const delay = Math.min(this.cfg.backoffMs * 2 ** (n - 1), this.cfg.maxBackoffMs);
         this.failures.set(key, { failures: n, nextTryAt: this.cfg.clock() + delay, error });
+        this.streak.failed();
         report.failed.push({ step: key, error });
         this.logger.error(`could not ${describeStep(step)} (attempt ${n}, retrying in ${Math.round(delay / 1000)} s): ${error}`);
       }
@@ -352,6 +390,7 @@ export class Keeper {
         if (!sent) return;
         this.done.set(key, this.cfg.clock());
         this.failures.delete(key);
+        this.streak.ok();
         this.finished.push({ key });
         this.logger.info(`done: ${describeStep(step)} (${Math.round((Date.now() - startedAt) / 1000)} s)`);
         void this.publish();
@@ -361,6 +400,7 @@ export class Keeper {
         const n = failuresSoFar + 1;
         const delay = Math.min(this.cfg.backoffMs * 2 ** (n - 1), this.cfg.maxBackoffMs);
         this.failures.set(key, { failures: n, nextTryAt: this.cfg.clock() + delay, error });
+        this.streak.failed();
         this.finished.push({ key, error });
         this.logger.error(
           `could not ${describeStep(step)} after ${Math.round((Date.now() - startedAt) / 1000)} s (attempt ${n}, retrying in ${Math.round(delay / 1000)} s): ${error}`,

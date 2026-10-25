@@ -1,0 +1,20 @@
+# The draw oracle: answers each revealed draw with Nightcast's VRF.
+# In real use, run it on a different machine, under a different person, from the keeper.
+[Unit]
+Description=Lunardraw draw oracle
+After=lunardraw-proof.service network-online.target
+Wants=lunardraw-proof.service network-online.target
+
+[Service]
+WorkingDirectory=/root/Lunardraw
+Environment=HOME=/root
+ExecStart=/root/Lunardraw/lunardraw oracle --network preprod \
+  --oracle /root/lunardraw-secrets/oracle.secret \
+  --wallet /root/nightcast-secrets/oracle-wallet.secret \
+  --proof-server-port 6300
+Restart=always
+RestartSec=15
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

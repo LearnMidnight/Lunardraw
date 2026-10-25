@@ -84,6 +84,9 @@ back it up, keep it private. Run the oracle on a different machine from the keep
 On one PC, run \`./lunardraw proof-server\` once and give the keeper and the oracle --proof-server-port 6300,
 so they share it (each would otherwise start its own). --prove-lead <secs> (default 240) is how far ahead
 the keeper stamps the numbers proof's clock, since proving takes minutes and the contract allows 10 either way.
+--restart-after <minutes> (default 10, 0 = off): if the keeper's or the oracle's transactions keep
+failing for that long with nothing succeeding (a stale wallet sync does that), it exits with code 75
+so its service manager starts it again with a fresh sync. See deploy/systemd/.
 --feed <file> makes the keeper write the site feed (lunardraw-feed/1 JSON) there after every pass.
 --backup is a second organiser file (keygen organiser) whose holder can replace the organiser
 if its secret is lost or leaked: keep it offline. Its file may hold only the public commitment.`;
@@ -180,6 +183,47 @@ const untilStopped = () =>
     process.once('SIGTERM', resolve);
   });
 
+/** Exit code that asks the service manager (systemd, or the tmux loop) to start the program again. */
+const RESTART = 75;
+
+/**
+ * Resolves when a program's transactions have kept failing, with nothing
+ * succeeding, for `minutes` (and at least 3 attempts). The wallet's sync can go
+ * stale (every fee proof then fails, node error 1010 custom 170); restarting
+ * resyncs it. 0 turns this off.
+ */
+const untilFailingFor = (
+  minutes: number,
+  streak: () => { since?: number; failures: number },
+  logger: { error(msg: string): void },
+): { done: Promise<boolean>; cancel(): void } => {
+  let timer: ReturnType<typeof setInterval> | undefined;
+  const done = new Promise<boolean>((resolve) => {
+    if (!(minutes > 0)) return;
+    timer = setInterval(() => {
+      const s = streak();
+      if (s.since !== undefined && s.failures >= 3 && Date.now() - s.since >= minutes * 60_000) {
+        logger.error(
+          `${s.failures} transactions in a row have failed over ${Math.round((Date.now() - s.since) / 60_000)} minutes; restarting to resync the wallet`,
+        );
+        resolve(true);
+      }
+    }, 30_000);
+  });
+  return {
+    done,
+    cancel: () => {
+      if (timer) clearInterval(timer);
+    },
+  };
+};
+
+const restartAfter = (value: string | undefined): number => {
+  const m = value === undefined ? 10 : Number(value);
+  if (!(m >= 0)) throw new Error('--restart-after must be a number of minutes (0 to turn it off)');
+  return m;
+};
+
 const STATUS = ['open', 'requested', 'fulfilled', 'drawn', 'settled', 'voided'];
 
 const main = async (argv: string[]): Promise<number> => {
@@ -200,6 +244,7 @@ const main = async (argv: string[]): Promise<number> => {
       feed: { type: 'string' },
       'proof-server-port': { type: 'string' },
       'memory-limit': { type: 'string' },
+      'restart-after': { type: 'string' },
       'prove-lead': { type: 'string' },
       port: { type: 'string' },
       accept: { type: 'boolean', default: false },
@@ -362,10 +407,12 @@ const main = async (argv: string[]): Promise<number> => {
             `Keeper running for ${record.contractAddress} (${values.every ? `draws every ${values.every} s` : 'weekly Starfall'}; seeds in ${seeds.path}` +
               `${feedPath ? `; site feed written to ${feedPath}` : ''}). Press Ctrl+C to stop.`,
           );
-          await untilStopped();
+          const watchdog = untilFailingFor(restartAfter(values['restart-after']), () => keeper.status().streak, session.logger);
+          const restart = await Promise.race([untilStopped().then(() => false), watchdog.done]);
+          watchdog.cancel();
           session.logger.info('Stopping the keeper...');
           await keeper.stop();
-          return 0;
+          return restart ? RESTART : 0;
         } finally {
           await wallet.stop().catch(() => undefined);
         }
@@ -388,10 +435,12 @@ const main = async (argv: string[]): Promise<number> => {
           const oracle = new DrawOracle({ chain, publicKey: pk, logger: session.logger });
           oracle.start();
           session.logger.info(`Draw oracle running for ${record.contractAddress}. Press Ctrl+C to stop.`);
-          await untilStopped();
+          const watchdog = untilFailingFor(restartAfter(values['restart-after']), () => oracle.status().streak, session.logger);
+          const restart = await Promise.race([untilStopped().then(() => false), watchdog.done]);
+          watchdog.cancel();
           session.logger.info('Stopping the oracle...');
           await oracle.stop();
-          return 0;
+          return restart ? RESTART : 0;
         } finally {
           await wallet.stop().catch(() => undefined);
         }
