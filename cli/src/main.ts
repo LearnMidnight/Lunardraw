@@ -5,7 +5,7 @@
  *   ./lunardraw keygen organiser --out <file>        (also for the backup organiser)
  *   ./lunardraw deploy     --network <n> --organiser <file> --backup <file> --oracle <file> --wallet <file> [--accept] [parameters]
  *   ./lunardraw accept-key --network <n> --oracle <file> --wallet <file>
- *   ./lunardraw proof-server [--port 6300]
+ *   ./lunardraw proof-server [--port 6300] [--memory-limit <MiB>] [--memory-limit 3072]
  *   ./lunardraw keeper     --network <n> --organiser <file> --wallet <file> [--seeds <file>] [--every <seconds>] [--feed <file>] [--proof-server-port <port>] [--prove-lead <secs>]
  *   ./lunardraw oracle     --network <n> --oracle <file> --wallet <file> [--proof-server-port <port>]
  *   ./lunardraw status     --network <n>
@@ -46,6 +46,7 @@ import {
   walletBalances,
 } from '@nightcast/deploy';
 import { joinLunardraw, lunardrawProviders, MidnightLunardrawChain, readView, zkConfigPath } from './contract.js';
+import { PARAMS_VOLUME, ProofServer } from './proof-server.js';
 import {
   acceptOracleKey,
   currentCommit,
@@ -66,7 +67,7 @@ const USAGE = `usage:
   ./lunardraw deploy       --network <${NETWORKS.join('|')}> --organiser <file> --backup <file> --oracle <file> --wallet <file> [--accept]
                            [--price <STAR>] [--min-sales <s>] [--max-sales <s>] [--reveal <s>] [--draw <s>] [--claim <s>]
   ./lunardraw accept-key   --network <network> --oracle <oracle secret file> --wallet <file>
-  ./lunardraw proof-server [--port 6300]
+  ./lunardraw proof-server [--port 6300] [--memory-limit <MiB>]
   ./lunardraw keeper       --network <network> --organiser <file> --wallet <file> [--seeds <file>] [--every <seconds>] [--feed <file>] [--proof-server-port <port>] [--prove-lead <secs>]
   ./lunardraw oracle       --network <network> --oracle <oracle secret file> --wallet <file> [--proof-server-port <port>]
   ./lunardraw status       --network <network>
@@ -88,8 +89,6 @@ the keeper stamps the numbers proof's clock, since proving takes minutes and the
 if its secret is lost or leaked: keep it offline. Its file may hold only the public commitment.`;
 
 const hex = (b: Uint8Array): string => Buffer.from(b).toString('hex');
-/** The same image Nightcast's compose files use (Midnight's support matrix, October 2026). */
-const PROOF_SERVER_IMAGE = 'midnightntwrk/proof-server:8.1.3';
 const fromHex = (h: string): Uint8Array => Uint8Array.from(Buffer.from(h.replace(/^0x/, ''), 'hex'));
 const iso = (secs: bigint) => new Date(Number(secs) * 1000).toISOString();
 
@@ -200,6 +199,7 @@ const main = async (argv: string[]): Promise<number> => {
       every: { type: 'string' },
       feed: { type: 'string' },
       'proof-server-port': { type: 'string' },
+      'memory-limit': { type: 'string' },
       'prove-lead': { type: 'string' },
       port: { type: 'string' },
       accept: { type: 'boolean', default: false },
@@ -223,22 +223,19 @@ const main = async (argv: string[]): Promise<number> => {
     }
 
     case 'proof-server': {
-      // One proof server for the keeper and the oracle to share (each would
-      // otherwise start its own, about 1 GB each at peak). Listens on this
-      // machine only. Runs until Ctrl+C.
-      const port = values.port ?? '6300';
-      if (!/^\d+$/.test(port)) throw new Error('--port must be a number');
-      process.stdout.write(`Proof server on 127.0.0.1:${port}. Give the keeper and the oracle --proof-server-port ${port}. Press Ctrl+C to stop.\n`);
-      const { spawn } = await import('node:child_process');
-      const child = spawn(
-        'docker',
-        ['run', '--rm', '--name', `lunardraw-proof-server-${port}`, '-p', `127.0.0.1:${port}:6300`, PROOF_SERVER_IMAGE, 'midnight-proof-server'],
-        { stdio: 'inherit' },
+      const port = Number(values.port ?? '6300');
+      if (!Number.isInteger(port) || port <= 0) throw new Error('--port must be a port number');
+      const limit = Number(values['memory-limit'] ?? '3072');
+      if (!(limit > 0)) throw new Error('--memory-limit must be a number of MiB');
+      process.stdout.write(
+        `Proof server on 127.0.0.1:${port}. Give the keeper and the oracle --proof-server-port ${port}.\n` +
+          `It restarts itself when idle above ${limit} MiB, keeps its zk parameters in the Docker volume ${PARAMS_VOLUME}. Press Ctrl+C to stop.\n`,
       );
-      const stop = () => child.kill('SIGINT');
-      process.on('SIGINT', stop);
-      process.on('SIGTERM', stop);
-      return new Promise<number>((res) => child.on('exit', (code) => res(code ?? 0)));
+      const server = new ProofServer({ port, memoryLimitMiB: limit, log: (m) => process.stdout.write(`${new Date().toISOString()} ${m}\n`) });
+      process.on('SIGINT', () => server.stop());
+      process.on('SIGTERM', () => server.stop());
+      await server.run();
+      return 0;
     }
 
     case 'fingerprints': {
@@ -357,7 +354,9 @@ const main = async (argv: string[]): Promise<number> => {
           const onView = feedPath
             ? (view: ChainView, nowSecs: number) => writeFeed(feedPath, buildFeed(view, { network, contract: record.contractAddress, nowSecs }))
             : undefined;
-          const keeper = new Keeper({ chain, seeds, schedule, logger: session.logger, onView });
+          // The numbers proof takes minutes on a small machine: run it in the
+          // background so reveals and new draws never wait for it.
+          const keeper = new Keeper({ chain, seeds, schedule, logger: session.logger, onView, background: ['compute'] });
           keeper.start();
           session.logger.info(
             `Keeper running for ${record.contractAddress} (${values.every ? `draws every ${values.every} s` : 'weekly Starfall'}; seeds in ${seeds.path}` +

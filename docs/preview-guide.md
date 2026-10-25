@@ -128,7 +128,7 @@ Open **three Ubuntu windows**, all in `~/Lunardraw`.
 ./lunardraw proof-server
 ```
 
-The keeper and the oracle each need a proof server, and each would start its own in Docker. On one PC that's two of them fighting for memory (each peaks at about 1 GB), so run one and point both at it. Leave this window alone.
+The keeper and the oracle each need a proof server, and each would start its own in Docker. On one PC that's two of them fighting for memory (each peaks at about 1 GB), so run one and point both at it. Leave this window alone. It listens on this machine only, keeps the 100 MB of zk parameters it downloads in a Docker volume (so restarts don't fetch them again), and restarts itself when it's idle and using more than 3 GB (`--memory-limit <MiB>` to change).
 
 **Window 2, the keeper:**
 
@@ -157,10 +157,10 @@ Within a minute or two the keeper opens draw 1: `opened draw 1, selling until ..
 |---|---|---|
 | keeper | `done: reveal draw N's seed and open the next draw (70 s)` | right after the hour |
 | oracle | `answered draw N (33 s)` | within a minute of that |
-| keeper | `done: compute draw N's numbers (N s)` | minutes later: 2 on CI, 10 or more on an 8 GB PC |
+| keeper | `started: compute draw N's numbers (in the background)`, then `done: ... (N s)` | minutes later: 2 on CI, 10 or more on an 8 GB PC |
 | keeper | `done: settle draw N` | an hour and a bit after that (after the claim window) |
 
-The seconds in brackets are what one 8 GB PC and CI's machine took; yours will differ. **The numbers proof must land within about 14 minutes of starting** (the contract checks the keeper's clock stamp against block time, 10 minutes either way, and the keeper stamps it 4 minutes ahead). If it takes longer, the transaction is refused with `1010: Invalid Transaction: Custom error: 104`, the draw eventually voids, and the PC needs more memory or fewer things running: check with `free -h` that swap isn't in heavy use.
+The seconds in brackets are what one 8 GB PC and CI's machine took; yours will differ. The numbers proof runs in the background, so the keeper keeps revealing and opening draws while it works. **The numbers proof must land within about 14 minutes of starting** (the contract checks the keeper's clock stamp against block time, 10 minutes either way, and the keeper stamps it 4 minutes ahead). If it takes longer, the transaction is refused with `1010: Invalid Transaction: Custom error: 104`, the draw eventually voids, and the PC needs more memory or fewer things running: check with `free -h` that swap isn't in heavy use.
 
 **Checking** (any window, any time):
 
