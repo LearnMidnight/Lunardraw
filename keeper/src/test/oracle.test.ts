@@ -40,7 +40,7 @@ const requested = async (ctx: ReturnType<typeof setup>) => {
 describe('the draw oracle', () => {
   it("answers a revealed draw with Nightcast's VRF, after letting the node catch up", async () => {
     const ctx = setup();
-    const { sim, oracle, seeds, oracleSecretKey } = ctx;
+    const { sim, oracle, oracleSecretKey } = ctx;
     await requested(ctx);
     expect((await oracle.tick()).skipped).toEqual([{ draw: 1n, reason: 'new; letting the node catch up' }]);
     sim.advance(21);
