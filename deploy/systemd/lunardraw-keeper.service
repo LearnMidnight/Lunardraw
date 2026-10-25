@@ -1,0 +1,22 @@
+# The keeper: opens, reveals, computes, settles and voids draws, and writes the site feed.
+# Edit the network, schedule and file paths to match your setup.
+[Unit]
+Description=Lunardraw keeper
+After=lunardraw-proof.service network-online.target
+Wants=lunardraw-proof.service network-online.target
+
+[Service]
+WorkingDirectory=/root/Lunardraw
+Environment=HOME=/root
+ExecStart=/root/Lunardraw/lunardraw keeper --network preprod \
+  --organiser /root/lunardraw-secrets/organiser.secret \
+  --wallet /root/nightcast-secrets/requester-wallet.secret \
+  --every 3600 --proof-server-port 6300 \
+  --feed /root/lunardraw-feed/feed.json
+# Exit code 75 = "restart me" (the watchdog, after transactions kept failing).
+Restart=always
+RestartSec=15
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target
