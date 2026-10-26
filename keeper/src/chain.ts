@@ -98,9 +98,12 @@ export const viewOf = (l: Ledger): ChainView => ({
   wins: Array.from(l.wins, ([line, w]) => ({ line, drawId: w.drawId, paid: w.paid })),
 });
 
+/** What the draw oracle reads about each draw (v0 and Starfall alike). */
+export type OracleDrawView = { id: bigint; status: number; drawDeadline: bigint; oracleKey: { x: bigint; y: bigint } };
+
 /** What the draw oracle needs: the draws, the time, and `fulfilDraw`. */
 export interface DrawOracleChain {
-  view(): Promise<ChainView>;
+  view(): Promise<{ draws: OracleDrawView[] }>;
   now(): Promise<number>;
   /** Oracle only (its secret key answers the witness). Resolves once on chain. */
   fulfilDraw(n: bigint): Promise<void>;

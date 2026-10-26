@@ -14,7 +14,7 @@
  * (`forget`); the store only ever holds the seeds of draws still selling, and
  * any created for a draw whose opening transaction hasn't shown up yet.
  */
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { seedCommitment } from '@nightcast/sdk';
@@ -122,5 +122,66 @@ export class FileSeedStore implements SeedStore {
     }
     if (n > 0) this.write(data);
     return n;
+  }
+}
+
+// ------------------------------------------------------------ derived seeds
+
+/**
+ * Seeds for Starfall draws, worked out from the organiser secret instead of
+ * stored: draw `id`'s seed is SHA-256("starfall:seed:v1" ‖ secret ‖
+ * deployment ‖ id). Any keeper holding the organiser secret (the primary and
+ * its standby) knows every draw's seed with nothing to copy or back up, and
+ * nobody without the secret can work one out before it's revealed.
+ *
+ * The contract refuses a seed commitment it has seen before, so a seed is
+ * only ever revealed for one draw.
+ */
+export interface DrawSeeds {
+  /** The sealed seed for the draw that will be number `id`. */
+  forDraw(id: bigint): Promise<SealedSeed>;
+  /**
+   * The seed behind `commitment`, for draw `id`. Nearby ids are tried too, in
+   * case the draw got a different number than expected when it was opened
+   * (another opening landed first).
+   */
+  find(commitment: Uint8Array, id: bigint): Promise<Uint8Array | undefined>;
+}
+
+const SEED_DOMAIN = new TextEncoder().encode('starfall:seed:v1');
+
+export class DerivedSeeds implements DrawSeeds {
+  /**
+   * @param secret the organiser secret (32 bytes)
+   * @param deployment the contract's address (32 bytes), so two deployments never share seeds
+   */
+  constructor(
+    private readonly secret: Uint8Array,
+    private readonly deployment: Uint8Array,
+  ) {
+    if (secret.length !== 32) throw new Error('the organiser secret is 32 bytes');
+  }
+
+  seedFor(id: bigint): Uint8Array {
+    const n = Buffer.alloc(4);
+    n.writeUInt32BE(Number(id));
+    return Uint8Array.from(createHash('sha256').update(SEED_DOMAIN).update(this.secret).update(this.deployment).update(n).digest());
+  }
+
+  async forDraw(id: bigint): Promise<SealedSeed> {
+    const seed = this.seedFor(id);
+    return { seed, commitment: commitmentOf(seed) };
+  }
+
+  async find(commitment: Uint8Array, id: bigint): Promise<Uint8Array | undefined> {
+    const want = hex(commitment);
+    for (let d = 0n; d <= 4n; d++) {
+      for (const candidate of d === 0n ? [id] : [id - d, id + d]) {
+        if (candidate < 1n || candidate > 0xffffffffn) continue;
+        const seed = this.seedFor(candidate);
+        if (hex(commitmentOf(seed)) === want) return seed;
+      }
+    }
+    return undefined;
   }
 }

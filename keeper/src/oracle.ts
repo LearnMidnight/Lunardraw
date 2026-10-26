@@ -12,8 +12,8 @@
  * numbers before sales close.
  */
 import { DrawStatus } from '@lunardraw/contract';
-import type { ChainView, DrawOracleChain } from './chain.js';
-import { type FailureStreak, type KeeperLogger, reasonOf, StreakCounter } from './keeper.js';
+import type { DrawOracleChain, OracleDrawView } from './chain.js';
+import { type FailureStreak, type KeeperLogger, reasonOf, StreakCounter } from './engine.js';
 
 export type DrawOracleOptions = {
   chain: DrawOracleChain;
@@ -37,7 +37,7 @@ export type OracleReport = { fulfilled: bigint[]; failed: { draw: bigint; error:
 const silent: KeeperLogger = { info() {}, warn() {}, error() {} };
 
 /** Requested draws this oracle should answer at chain time `now`. */
-export const drawsToAnswer = (view: ChainView, key: { x: bigint; y: bigint }, now: number, safetyMarginSecs: number) =>
+export const drawsToAnswer = (view: { draws: OracleDrawView[] }, key: { x: bigint; y: bigint }, now: number, safetyMarginSecs: number) =>
   view.draws.filter(
     (d) =>
       d.status === DrawStatus.requested &&
