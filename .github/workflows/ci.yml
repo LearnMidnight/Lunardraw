@@ -206,6 +206,57 @@ jobs:
             echo "::warning title=logs $c::$tail"
           done
 
+  # Each Starfall circuit proved once on Midnight's real proof server (the
+  # circuit runs come from the simulator, no network), with its peak memory
+  # and time, for each settlement batch size in the matrix. Players prove
+  # purchases on their own machines and the keeper proves settlement on a
+  # small server, so these numbers decide the batch size.
+  prove-probe:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        batch: [25, 10]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          submodules: true
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+
+      - name: Install Compact toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf https://github.com/midnightntwrk/compact/releases/latest/download/compact-installer.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Select compiler ${{ env.COMPACT_TOOLCHAIN }}
+        run: compact update "$COMPACT_TOOLCHAIN"
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Settlement batch of ${{ matrix.batch }}
+        run: python3 contract/scripts/gen-batch.py ${{ matrix.batch }} 3
+
+      - name: Compile with proving keys
+        run: npm run compact:starfall > keys.log 2>&1 || { tail -c 2000 keys.log; exit 1; }
+
+      - name: Build
+        run: npm run build
+
+      - name: Pull the proof server
+        run: docker pull -q midnightntwrk/proof-server:8.1.3
+
+      - name: Prove each circuit
+        working-directory: cli
+        env:
+          LUNARDRAW_PROBE: '1'
+        run: npx vitest run src/test/prove-probe.test.ts --reporter=default
+
   # Starfall with private settlement (settlement.compact): builds its proving
   # keys and reports each circuit's key size (a deploy transaction carries
   # every circuit's verifier key and must fit Midnight's block limits: 12
