@@ -8,22 +8,16 @@ import { checkLine, divisionFor, quickPick, type PlainLine } from './tickets.js'
  */
 export const POWERBALL_SHARES_BP = [3350, 185, 230, 200, 150, 940, 730, 1550, 2665] as const;
 
-/** Up to three payees per ticket (a syndicate). */
+/** Up to three payees per ticket. */
 export const MAX_PAYEES = 3;
 /** Shares are in basis points: 10000 is the whole prize. */
 export const WHOLE = 10_000;
 
-/**
- * A payee as plain values: a 32-byte unshielded address, or a syndicate id,
- * with a share in basis points.
- */
-export type PlainPayee = { address?: Uint8Array; syndicate?: number | bigint; share: number };
+/** A payee as plain values: a 32-byte unshielded address with a share in basis points. */
+export type PlainPayee = { address: Uint8Array; share: number };
 
 const ZERO_ADDRESS = new Uint8Array(32);
-const NO_PAYEE: Payee = { address: { bytes: ZERO_ADDRESS }, share: 0n, syndicate: 0n };
-
-/** The payees of a syndicate's own ticket: the syndicate, for all of it. */
-export const syndicatePayees = (syndicate: number | bigint): PlainPayee[] => [{ syndicate, share: WHOLE }];
+const NO_PAYEE: Payee = { address: { bytes: ZERO_ADDRESS }, share: 0n };
 
 /**
  * Build a Starfall ticket (one line) for draw `drawId`, paid to `payees`: a
@@ -44,16 +38,10 @@ export const makeTicket = (
   if (list.length < 1 || list.length > MAX_PAYEES) throw new Error(`a ticket has 1 to ${MAX_PAYEES} payees`);
   for (const p of list) {
     if (!Number.isInteger(p.share) || p.share < 1 || p.share > WHOLE) throw new Error('each share is 1..10000 basis points');
-    if (p.syndicate !== undefined && p.syndicate !== 0 && p.syndicate !== 0n) {
-      if (p.address !== undefined) throw new Error('a syndicate payee has no address');
-    } else if (p.address === undefined || p.address.length !== 32) throw new Error('an address is 32 bytes');
+    if (p.address.length !== 32) throw new Error('an address is 32 bytes');
   }
   if (list.reduce((a, p) => a + p.share, 0) !== WHOLE) throw new Error('shares must add up to 10000');
-  const out: Payee[] = list.map((p) => ({
-    address: { bytes: p.address ?? ZERO_ADDRESS },
-    share: BigInt(p.share),
-    syndicate: BigInt(p.syndicate ?? 0),
-  }));
+  const out: Payee[] = list.map((p) => ({ address: { bytes: p.address }, share: BigInt(p.share) }));
   while (out.length < MAX_PAYEES) out.push(NO_PAYEE);
   return {
     drawId: BigInt(drawId),
@@ -117,10 +105,11 @@ export const splitPrize = (prize: bigint, shares: readonly bigint[]): bigint[] =
 
 /**
  * Prize per winning ticket per division, and the rollover, by Powerball's
- * rules as `finaliseDraw` applies them: each division gets its share of the
- * pool; the rollover joins division 1; an unwon division 2..8 falls to the
- * next lower division with a winner; an unwon division 1 or 9 and rounding
- * remainders roll over.
+ * rules as `finaliseDraw` applies them: each division gets its (floored)
+ * share of the pool; the rollover joins division 1; an unwon division 2..8
+ * falls to the next lower division with a winner; an unwon division 1 or 9,
+ * rounding remainders, and what the floored shares leave of the pool (at
+ * most 8 STAR) roll over.
  */
 export const prizesByPowerballRules = (
   pool: bigint,
@@ -130,8 +119,11 @@ export const prizesByPowerballRules = (
   const prizes: bigint[] = [];
   let cascade = 0n;
   let carry = 0n;
+  let allocated = 0n;
   POWERBALL_SHARES_BP.forEach((bp, j) => {
-    const amount = (pool * BigInt(bp)) / BigInt(WHOLE) + (j === 0 ? carryIn : cascade);
+    const share = (pool * BigInt(bp)) / BigInt(WHOLE);
+    allocated += share;
+    const amount = share + (j === 0 ? carryIn : cascade);
     const w = winners[j];
     if (w > 0n) {
       const per = amount / w;
@@ -146,7 +138,7 @@ export const prizesByPowerballRules = (
       } else cascade = amount;
     }
   });
-  return { prizes, carry };
+  return { prizes, carry: carry + (pool - allocated) };
 };
 
 /** What a draw's settlement must come to, worked out off-chain from the plain tickets. */
@@ -161,7 +153,7 @@ export type ExpectedSettlement = {
   prizes: bigint[];
   /** Rollover after this draw (into the next draw's jackpot). */
   carry: bigint;
-  /** Total owed to each payee address (hex) or syndicate ("syndicate:<id>"), over all winning tickets. */
+  /** Total owed to each payee address (hex), over all winning tickets. */
   payouts: Map<string, bigint>;
   /** Division of each ticket, in index order (0 for no prize). */
   divisions: number[];
@@ -191,17 +183,9 @@ export const expectedSettlement = (
     const amounts = splitPrize(prizes[divisions[i] - 1], t.payees.map((p) => p.share));
     t.payees.forEach((p, j) => {
       if (amounts[j] === 0n) return;
-      // A syndicate's part is keyed "syndicate:<id>"; its members' shares are worked out separately.
-      const k = p.syndicate !== 0n ? `syndicate:${p.syndicate}` : hex(p.address.bytes);
+      const k = hex(p.address.bytes);
       payouts.set(k, (payouts.get(k) ?? 0n) + amounts[j]);
     });
   });
   return { winners, sales, fee, pool, prizes, carry, payouts, divisions };
 };
-
-/**
- * A member's part of an amount owed to its syndicate, as the contract pays
- * it: floor(amount x shares / sold), where `sold` is the shares actually
- * sold (all of them once the syndicate is funded).
- */
-export const memberPart = (amount: bigint, shares: bigint, sold: bigint): bigint => (amount * shares) / sold;

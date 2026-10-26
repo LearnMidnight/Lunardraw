@@ -7,11 +7,11 @@ import { emptyTicket, randomScalar } from './settlement-tickets.js';
  * Private state of whoever runs a Starfall settlement circuit.
  *
  * - The oracle sets `oracleSecretKey` (for `acceptOracleKey` and `fulfilDraw`).
- * - The organiser sets `organiserSecret` (for `openDraw` and `requestDraw`).
- * - A player buying a ticket sets `pendingTicket` (one game) or
- *   `pendingTickets` (up to `maxGames()` games in one transaction), and
- *   optionally `sealingRandomness` (fresh randomness is drawn otherwise).
- * - A syndicate's creator sets `creatorSecret` (for `buySyndicateTickets`).
+ * - The organiser sets `organiserSecret` (for `requestDraw`, `proposeOracleKey`
+ *   and `changeOrganiser`); so do a proposed successor and the backup
+ *   organiser, with their own secrets, for `changeOrganiser`.
+ * - A player buying sets `pendingTickets` (1 to `maxGames()` games in one
+ *   transaction); fresh sealing randomness is drawn for each.
  * - The settler sets `settling`: a draw's tickets, decrypted from the chain
  *   with the settlement secret, in index order (see `decryptDrawTickets`).
  * - Anyone else (finalising, paying, voiding, refunding) needs nothing.
@@ -22,10 +22,7 @@ import { emptyTicket, randomScalar } from './settlement-tickets.js';
 export type SettlementPrivateState = {
   readonly oracleSecretKey?: bigint;
   readonly organiserSecret?: Uint8Array;
-  readonly pendingTicket?: TicketPreimage;
   readonly pendingTickets?: readonly TicketPreimage[];
-  readonly sealingRandomness?: bigint;
-  readonly creatorSecret?: Uint8Array;
   readonly settling?: { readonly drawId: bigint; readonly tickets: readonly TicketPreimage[] };
 };
 
@@ -42,16 +39,6 @@ export const settlementWitnesses = {
     return [privateState, privateState.organiserSecret];
   },
 
-  creatorSecret({ privateState }: Ctx): [SettlementPrivateState, Uint8Array] {
-    if (privateState.creatorSecret === undefined) throw new Error('Starfall: no syndicate creator secret in private state');
-    return [privateState, privateState.creatorSecret];
-  },
-
-  newTicket({ privateState }: Ctx): [SettlementPrivateState, TicketPreimage] {
-    if (privateState.pendingTicket === undefined) throw new Error('Starfall: no ticket to buy in private state');
-    return [privateState, privateState.pendingTicket];
-  },
-
   newTickets({ privateState }: Ctx): [SettlementPrivateState, TicketPreimage[]] {
     const ts = privateState.pendingTickets;
     if (ts === undefined || ts.length === 0) throw new Error('Starfall: no tickets to buy in private state');
@@ -64,10 +51,6 @@ export const settlementWitnesses = {
 
   sealingRandomnessFor({ privateState }: Ctx): [SettlementPrivateState, bigint[]] {
     return [privateState, Array.from({ length: Number(pureCircuits.maxGames()) }, () => randomScalar())];
-  },
-
-  sealingRandomness({ privateState }: Ctx): [SettlementPrivateState, bigint] {
-    return [privateState, privateState.sealingRandomness ?? randomScalar()];
   },
 
   settlementBatch({ privateState }: Ctx, drawId: bigint, first: bigint): [SettlementPrivateState, TicketPreimage[]] {

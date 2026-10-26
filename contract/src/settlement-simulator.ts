@@ -7,7 +7,7 @@ import {
   encodeContractAddress,
   sampleContractAddress,
 } from '@midnight-ntwrk/compact-runtime';
-import { oraclePublicKey } from '@nightcast/contract';
+import { generateOperatorSecret, oraclePublicKey } from '@nightcast/contract';
 import {
   Contract,
   type Ledger,
@@ -20,10 +20,13 @@ import {
 import { type SettlementPrivateState, settlementWitnesses } from './settlement-witnesses.js';
 
 const COIN_PUBLIC_KEY = '0'.repeat(64);
+const NO_NEXT = { is_some: false, value: { salesClose: 0n, seedCommitment: new Uint8Array(32) } };
 
 export type SettlementSimulatorOptions = {
   oracleSecretKey: bigint;
   organiserSecret: Uint8Array;
+  /** The backup organiser's secret (default: a fresh random one). */
+  backupSecret?: Uint8Array;
   /** Secret of the settlement key the tickets are encrypted to. */
   settlementSecret: bigint;
   /** Where operator fees go (32-byte unshielded address). */
@@ -104,6 +107,7 @@ export class SettlementSimulator {
   readonly address = sampleContractAddress();
   readonly addressBytes: Uint8Array;
   now: number;
+  readonly backupSecret: Uint8Array;
   /** Payments made by every successful call so far, if the runtime exposes them. */
   payments: Payment[] | undefined = [];
   private state: ContractState | ChargedState;
@@ -111,10 +115,12 @@ export class SettlementSimulator {
   constructor(readonly opts: SettlementSimulatorOptions) {
     this.now = opts.now ?? 1_800_000_000;
     this.addressBytes = encodeContractAddress(this.address);
+    this.backupSecret = opts.backupSecret ?? generateOperatorSecret();
     const result = this.contract.initialState(
       createConstructorContext<SettlementPrivateState>({}, COIN_PUBLIC_KEY),
       oraclePublicKey(opts.oracleSecretKey),
       pureCircuits.organiserCommitmentOf(opts.organiserSecret),
+      pureCircuits.organiserCommitmentOf(this.backupSecret),
       pureCircuits.settlementPublicKey(opts.settlementSecret),
       { bytes: opts.operator },
       opts.feePerGame ?? 200_000n,
@@ -135,6 +141,11 @@ export class SettlementSimulator {
 
   get organiser(): SettlementPrivateState {
     return { organiserSecret: this.opts.organiserSecret };
+  }
+
+  /** The backup organiser's private state (its secret goes in as `organiserSecret`). */
+  get backup(): SettlementPrivateState {
+    return { organiserSecret: this.backupSecret };
   }
 
   readonly anyone: SettlementPrivateState = {};
@@ -197,26 +208,62 @@ export class SettlementSimulator {
     return out.result;
   }
 
+  /** The proposed key's holder activates it, or the current oracle approves a hand-over. */
   acceptOracleKey(as: SettlementPrivateState = this.oracle): void {
     this.run(as, (ctx) => this.contract.impureCircuits.acceptOracleKey(ctx));
   }
 
-  openDraw(salesClose: bigint, seedCommitment: Uint8Array, as: SettlementPrivateState = this.organiser): bigint {
-    return this.run(as, (ctx) => this.contract.impureCircuits.openDraw(ctx, salesClose, seedCommitment));
+  /** Propose a new oracle key; `now` defaults to the simulator's clock. */
+  proposeOracleKey(
+    key: { x: bigint; y: bigint },
+    as: SettlementPrivateState = this.organiser,
+    now: bigint = BigInt(this.now),
+  ): void {
+    this.run(as, (ctx) => this.contract.impureCircuits.proposeOracleKey(ctx, key, now));
   }
 
-  /** Buy a ticket, with refunds going to `refundTo`; returns its commitment. */
-  buyTicket(
-    t: TicketPreimage,
-    refundTo: Uint8Array,
-    as: SettlementPrivateState = { pendingTicket: t },
-  ): Uint8Array {
-    return this.run(as, (ctx) => this.contract.impureCircuits.buyTicket(ctx, { bytes: refundTo }));
+  /** The current oracle approves the proposed key (`acceptOracleKey` by the current oracle). */
+  approveOracleKey(as: SettlementPrivateState = this.oracle): void {
+    this.acceptOracleKey(as);
+  }
+
+  changeOrganiser(commitment: Uint8Array, as: SettlementPrivateState): void {
+    this.run(as, (ctx) => this.contract.impureCircuits.changeOrganiser(ctx, commitment));
+  }
+
+  /** The organiser proposes a successor. */
+  proposeOrganiser(commitment: Uint8Array, as: SettlementPrivateState = this.organiser): void {
+    this.changeOrganiser(commitment, as);
+  }
+
+  /** The proposed organiser accepts (passing its own commitment). */
+  acceptOrganiser(as: SettlementPrivateState): void {
+    if (!as.organiserSecret) throw new Error('acceptOrganiser needs the accepting secret');
+    this.changeOrganiser(pureCircuits.organiserCommitmentOf(as.organiserSecret), as);
+  }
+
+  /** The backup organiser installs a new organiser. */
+  recoverOrganiser(commitment: Uint8Array, as: SettlementPrivateState = this.backup): void {
+    this.changeOrganiser(commitment, as);
+  }
+
+  /** Open the next draw without revealing one (`requestDraw(0, …, next)`); returns its number. */
+  openDraw(salesClose: bigint, seedCommitment: Uint8Array, as: SettlementPrivateState = this.organiser): bigint {
+    this.run(as, (ctx) =>
+      this.contract.impureCircuits.requestDraw(ctx, 0n, new Uint8Array(32), { is_some: true, value: { salesClose, seedCommitment } }),
+    );
+    return this.getLedger().lastDraw;
+  }
+
+  /** Buy one game, with refunds going to `refundTo`; returns its commitment. */
+  buyTicket(t: TicketPreimage, refundTo: Uint8Array): Uint8Array {
+    this.buyTickets([t], refundTo);
+    return this.commitmentOf(t);
   }
 
   /**
-   * Buy several games in one transaction (at most `maxGames()`), refundable
-   * to `refundTo`; returns how many were bought. `buyPackage` handles bigger
+   * Buy 1 to `maxGames()` games in one transaction, refundable to
+   * `refundTo`; returns the index of the first. `buyPackage` handles bigger
    * packages.
    */
   buyTickets(ts: readonly TicketPreimage[], refundTo: Uint8Array): bigint {
@@ -236,73 +283,8 @@ export class SettlementSimulator {
     return txs;
   }
 
-  /** Open a syndicate for draw `n`; returns its id. */
-  createSyndicate(
-    n: bigint,
-    creatorSecret: Uint8Array,
-    sharePrice: bigint,
-    totalShares: bigint,
-    games: bigint,
-    joinDeadline: bigint,
-  ): bigint {
-    return this.run(this.anyone, (ctx) =>
-      this.contract.impureCircuits.createSyndicate(
-        ctx,
-        n,
-        pureCircuits.creatorCommitmentOf(creatorSecret),
-        sharePrice,
-        totalShares,
-        games,
-        joinDeadline,
-      ),
-    );
-  }
-
-  /** Buy shares in a syndicate, paid to `payTo`; returns the member's index. */
-  joinSyndicate(syndicate: bigint, shares: bigint, payTo: Uint8Array): bigint {
-    return this.run(this.anyone, (ctx) => this.contract.impureCircuits.joinSyndicate(ctx, syndicate, shares, { bytes: payTo }));
-  }
-
-  /** The creator buys games for the syndicate (at most `maxGames()` per call). */
-  buySyndicateTickets(syndicate: bigint, creatorSecret: Uint8Array, ts: readonly TicketPreimage[]): bigint {
-    return this.run({ creatorSecret, pendingTickets: ts }, (ctx) =>
-      this.contract.impureCircuits.buySyndicateTickets(ctx, syndicate, BigInt(ts.length)),
-    );
-  }
-
-  paySyndicateMember(entitlement: Uint8Array, payee: bigint, member: bigint): bigint {
-    return this.run(this.anyone, (ctx) => this.contract.impureCircuits.paySyndicateMember(ctx, entitlement, payee, member));
-  }
-
-  refundSyndicateUnspent(syndicate: bigint, member: bigint): bigint {
-    return this.run(this.anyone, (ctx) => this.contract.impureCircuits.refundSyndicateUnspent(ctx, syndicate, member));
-  }
-
-  refundSyndicateVoid(syndicate: bigint, member: bigint): bigint {
-    return this.run(this.anyone, (ctx) => this.contract.impureCircuits.refundSyndicateVoid(ctx, syndicate, member));
-  }
-
-  /** Pay every member of every syndicate owed from the paid entitlements of draw `n`; returns the payments made. */
-  payAllSyndicateMembers(n: bigint): number {
-    const l = this.getLedger();
-    let paid = 0;
-    for (const [id, e] of l.entitlements) {
-      if (e.drawId !== n || !e.paid) continue;
-      e.payees.forEach((p, j) => {
-        if (p.syndicate === 0n || !l.syndicatePots.member(pureCircuits.potId(id, BigInt(j)))) return;
-        const sy = l.syndicates.lookup(p.syndicate);
-        for (let m = 0n; m < sy.members; m++) {
-          this.paySyndicateMember(id, BigInt(j), m);
-          paid++;
-        }
-      });
-    }
-    return paid;
-  }
-
   requestDraw(n: bigint, seed: Uint8Array, as: SettlementPrivateState = this.organiser): void {
-    const none = { is_some: false, value: { salesClose: 0n, seedCommitment: new Uint8Array(32) } };
-    this.run(as, (ctx) => this.contract.impureCircuits.requestDraw(ctx, n, seed, none));
+    this.run(as, (ctx) => this.contract.impureCircuits.requestDraw(ctx, n, seed, NO_NEXT));
   }
 
   requestAndOpenNext(n: bigint, seed: Uint8Array, next: NextDraw, as: SettlementPrivateState = this.organiser): void {
@@ -330,10 +312,6 @@ export class SettlementSimulator {
     this.run(as, (ctx) => this.contract.impureCircuits.payEntitlement(ctx, id));
   }
 
-  withdrawFees(as: SettlementPrivateState = this.anyone): bigint {
-    return this.run(as, (ctx) => this.contract.impureCircuits.withdrawFees(ctx));
-  }
-
   voidDraw(n: bigint, as: SettlementPrivateState = this.anyone): void {
     this.run(as, (ctx) => this.contract.impureCircuits.voidDraw(ctx, n));
   }
@@ -351,8 +329,8 @@ export class SettlementSimulator {
 
   /**
    * What the settlement engine does after a draw's numbers are in: decrypt
-   * every ticket, settle them batch by batch, finalise, pay every
-   * entitlement and every syndicate member. Returns the number of batches it took.
+   * every ticket, settle them batch by batch, finalise (which pays the
+   * operator fee) and pay every entitlement. Returns the number of batches it took.
    */
   settleAll(n: bigint): number {
     const tickets = this.decryptDrawTickets(n);
@@ -363,7 +341,6 @@ export class SettlementSimulator {
     }
     this.finaliseDraw(n);
     for (const id of this.entitlementsOf(n)) this.payEntitlement(id);
-    this.payAllSyndicateMembers(n);
     return batches;
   }
 }

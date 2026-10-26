@@ -1,4 +1,4 @@
-// Starfall with private, automatic settlement (prototype; docs/SETTLEMENT.md).
+// Starfall with private, automatic settlement (docs/SETTLEMENT.md).
 //
 // Same game and draw as Lunardraw v0 (7 from 35 + a Moonball from 20, a sealed
 // organiser seed and Nightcast's VRF embedded), but nobody claims a prize:
@@ -6,8 +6,7 @@
 //   1. A ticket is one line. Its buyer publishes a commitment to it and the
 //      same ticket encrypted to the settlement key, and proves in the purchase
 //      that both hold the same valid ticket. The ticket also fixes who gets
-//      its prize: up to three payees with shares, any of which may be a
-//      syndicate (below) instead of an address.
+//      its prize: up to three addresses with shares.
 //   2. Tickets are numbered 0, 1, 2, ... per draw as they're bought; the count
 //      is frozen when sales close.
 //   3. After the numbers are drawn, whoever holds the settlement key decrypts
@@ -17,25 +16,26 @@
 //      winning ticket's division and payees become public, under an id that
 //      can't be linked to the ticket. No numbers are ever disclosed.
 //   4. When the last ticket is settled, anyone finalises the draw: the prize
-//      per division follows from the counts, the operator fee is set aside,
-//      and unwon divisions roll over. Then anyone pays each entitlement to its
-//      payees. Nobody presses a claim button.
+//      per division follows from the counts by Powerball's rules, the operator
+//      fee is paid, and an unwon jackpot rolls over. Then anyone pays each
+//      entitlement to its payees. Nobody presses a claim button.
 //   5. If settlement isn't complete by the settlement deadline, the draw is
 //      void and anyone can refund every ticket to the address given at
 //      purchase. A draw is never redrawn.
-//   6. Syndicates: anyone opens one for a draw (share price, number of shares,
-//      number of games, join deadline). Members pay for shares; once every
-//      share is sold the creator buys the games from the syndicate's funds,
-//      with the syndicate as the payee. A prize to the syndicate is paid to
-//      each member in proportion to their shares. Unsold shares past the
-//      deadline, unspent funds and a void draw are refunded to members; the
-//      creator never holds the money.
 //
 // Correctness never depends on the settler: a batch with a missing, extra,
 // repeated, reordered or altered ticket has no valid proof, and the draw's
 // numbers are read from the ledger. The settler does see the tickets it
 // decrypts (stage 1); a TEE or MPC committee holding the settlement key
 // removes that later without changing this contract.
+//
+// A deploy transaction carries every circuit's verifier key and has to fit
+// Midnight's block limits: 12 circuits fit, 16 were rejected. This contract
+// has exactly 12, so circuits are merged by role as in v0 (acceptOracleKey
+// also approves a hand-over, changeOrganiser proposes, accepts and recovers,
+// requestDraw(0, ...) opens a draw, finaliseDraw pays the operator fee).
+// Syndicates (six more circuits) wait for a later contract: branch
+// starfall-syndicates.
 
 pragma language_version >= 0.22 && < 0.24;
 
@@ -58,39 +58,10 @@ export struct Line {
   moonball: Uint<8>;
 }
 
-// A share of a ticket's prize, in basis points (10000 = all of it), paid to
-// an address, or to a syndicate's members if `syndicate` is set (the address
-// is then all zeros).
+// A share of a ticket's prize, in basis points (10000 = all of it).
 export struct Payee {
   address: UserAddress;
   share: Uint<16>;
-  syndicate: Uint<32>;
-}
-
-export enum SyndicateStatus { filling, funded }
-
-// A group buying games together for one draw. Funding = shares x share
-// price = games x ticket price, held by the contract until the creator buys
-// the games or members are refunded.
-export struct Syndicate {
-  drawId: Uint<32>;
-  status: SyndicateStatus;
-  // SHA-256 commitment to the creator's secret; only the creator buys the games.
-  creator: Bytes<32>;
-  sharePrice: Uint<128>;
-  totalShares: Uint<32>;
-  sold: Uint<32>;
-  games: Uint<32>;
-  bought: Uint<32>;
-  // Members must join before this; it is never after the draw's sales close.
-  joinDeadline: Uint<64>;
-  // Member records so far (keyed memberKey(syndicate, 0..members-1)).
-  members: Uint<32>;
-}
-
-export struct Member {
-  payTo: UserAddress;
-  shares: Uint<32>;
 }
 
 // What a ticket commits to. Payees after the first may be empty (share 0 and
@@ -112,10 +83,8 @@ export struct SealedTicket {
 
 export struct TicketRecord {
   commitment: Bytes<32>;
-  // Where a refund goes if the draw is void (public, chosen by the buyer); for
-  // a syndicate's ticket the money stays for the members' refunds instead.
+  // Where a refund goes if the draw is void (public, chosen by the buyer).
   refundTo: UserAddress;
-  syndicate: Uint<32>;
   cipher: SealedTicket;
   refunded: Boolean;
 }
@@ -139,24 +108,6 @@ struct EntitlementPreimage {
   salt: Bytes<32>;
 }
 
-struct PotPreimage {
-  domain: Bytes<32>;
-  entitlement: Bytes<32>;
-  payee: Uint<8>;
-}
-
-struct MemberPayPreimage {
-  domain: Bytes<32>;
-  pot: Bytes<32>;
-  member: Uint<32>;
-}
-
-struct MemberRefundPreimage {
-  domain: Bytes<32>;
-  syndicate: Uint<32>;
-  member: Uint<32>;
-}
-
 // Changes only when the draw moves to its next stage.
 export struct Draw {
   status: DrawStatus;
@@ -170,7 +121,8 @@ export struct Draw {
   // SHA-256(seedHex), published before sales; the seed after they close.
   seedCommitment: Bytes<32>;
   seed: Bytes<32>;
-  // VRF input point and the oracle key the draw is bound to.
+  // The oracle key the draw was bound to when it opened, and the VRF input
+  // point once the seed is revealed.
   point: JubjubPoint;
   oracleKey: JubjubPoint;
   output: Bytes<32>;
@@ -240,27 +192,29 @@ export ledger tickets: Map<Uint<64>, TicketRecord>;
 export ledger ticketCommitments: Set<Bytes<32>>;
 export ledger progress: Map<Uint<32>, Progress>;
 export ledger entitlements: Map<Bytes<32>, Entitlement>;
-export ledger syndicates: Map<Uint<32>, Syndicate>;
-// The newest syndicate's id (0 before the first).
-export ledger lastSyndicate: Uint<32>;
-export ledger members: Map<Uint<64>, Member>;
-// A prize owed to a syndicate from one entitlement's payee, keyed potId(); its
-// members draw their shares of it one by one.
-export ledger syndicatePots: Map<Bytes<32>, Uint<128>>;
-// Member payments and refunds already made.
-export ledger memberPayments: Set<Bytes<32>>;
-export ledger memberRefunds: Set<Bytes<32>>;
 // Seed commitments already used, so a revealed seed can't be reused.
 export ledger usedCommitments: Set<Bytes<32>>;
 // Rollover waiting for the next draw to be finalised.
 export ledger carry: Uint<128>;
-// Operator fees not yet sent to the operator.
-export ledger feesOwed: Uint<128>;
+// The oracle key new draws are bound to. Each draw copies it when it opens,
+// so a later change never touches a draw that is selling or in progress.
 export ledger oracleKey: JubjubPoint;
 export ledger oracleKeyReady: Boolean;
+// A proposed replacement key, the earliest time it may take effect (block time
+// at the proposal plus oracleKeyDelay), and whether the current oracle has
+// agreed to it (which lifts the wait).
 export ledger proposedOracleKey: Maybe<JubjubPoint>;
-// SHA-256 commitment to the organiser's secret.
-export sealed ledger organiser: Bytes<32>;
+export ledger oracleKeyChangeAt: Uint<64>;
+export ledger oracleKeyApproved: Boolean;
+// How long a proposed oracle key must wait before it can be accepted: longer
+// than any draw can sell for, so a change is visible on chain for longer than
+// one draw and can't be slipped in quietly. Set at deployment.
+export sealed ledger oracleKeyDelay: Uint<64>;
+// Commitment to the organiser's secret (see organiserCommitmentOf), a
+// proposed replacement, and a backup organiser that can take over at any time.
+export ledger organiser: Bytes<32>;
+export ledger proposedOrganiser: Maybe<Bytes<32>>;
+export sealed ledger backupOrganiser: Bytes<32>;
 // Public key the tickets are encrypted to: the settler's (stage 1), a TEE's
 // or an MPC committee's joint key later.
 export sealed ledger settlementKey: JubjubPoint;
@@ -282,20 +236,19 @@ export sealed ledger drawWindow: Uint<64>;
 export sealed ledger settleWindow: Uint<64>;
 
 // -------------------------------------------------------------- witnesses
+//
+// The purchase and settlement witnesses (newTickets, sealingRandomnessFor,
+// settlementBatch) are declared in batch.compact with their sizes.
 
 witness oracleSecretKey(): Field;
 witness organiserSecret(): Bytes<32>;
-// The ticket to buy, and fresh randomness to encrypt it with.
-witness newTicket(): TicketPreimage;
-witness sealingRandomness(): Field;
-witness creatorSecret(): Bytes<32>;
 // floor(n / d) and n mod d for prize arithmetic.
 witness divModWide(n: Field, d: Uint<128>): [Uint<128>, Uint<128>];
 
 // ----------------------------------------------------------- constructor
 
-constructor(key: JubjubPoint, organiserCommitment: Bytes<32>, sealingKey: JubjubPoint,
-            operatorAddress: UserAddress, fee: Uint<128>, price: Uint<128>,
+constructor(key: JubjubPoint, organiserCommitment: Bytes<32>, backupCommitment: Bytes<32>,
+            sealingKey: JubjubPoint, operatorAddress: UserAddress, fee: Uint<128>, price: Uint<128>,
             salesMin: Uint<64>, salesMax: Uint<64>,
             reveal: Uint<64>, draw: Uint<64>, settle: Uint<64>) {
   assert(price > 0, "ticket price must be positive");
@@ -304,8 +257,15 @@ constructor(key: JubjubPoint, organiserCommitment: Bytes<32>, sealingKey: Jubjub
   assert(salesMin >= 60 && salesMin < salesMax && salesMax <= 7776000, "sales period must be 60 seconds to 90 days");
   assert(reveal >= 60 && draw >= 60, "reveal and draw windows must be at least 60 seconds");
   assert(settle >= 3600, "settlement window must be at least an hour");
+  assert(organiserCommitment != backupCommitment, "the backup organiser must differ from the organiser");
   proposedOracleKey = some<JubjubPoint>(disclose(key));
+  oracleKeyChangeAt = 0;
+  oracleKeyApproved = false;
+  // The first key has no wait: nothing can be bound to it until it's accepted.
+  oracleKeyDelay = disclose((salesMax + reveal) as Uint<64>);
   organiser = disclose(organiserCommitment);
+  proposedOrganiser = none<Bytes<32>>();
+  backupOrganiser = disclose(backupCommitment);
   settlementKey = disclose(sealingKey);
   operator = disclose(operatorAddress);
   feePerGame = disclose(fee);
@@ -341,28 +301,6 @@ export pure circuit entitlementId(commitment: Bytes<32>, salt: Bytes<32>): Bytes
   });
 }
 
-export pure circuit creatorCommitmentOf(secret: Bytes<32>): Bytes<32> {
-  return persistentHash<[Bytes<32>, Bytes<32>]>([pad(32, "starfall:creator:v1"), secret]);
-}
-
-// Id of the pot holding what one entitlement's payee owes a syndicate.
-export pure circuit potId(entitlement: Bytes<32>, payee: Uint<8>): Bytes<32> {
-  return persistentHash<PotPreimage>(PotPreimage { domain: pad(32, "starfall:pot:v1"), entitlement: entitlement, payee: payee });
-}
-
-export pure circuit memberPaymentId(pot: Bytes<32>, member: Uint<32>): Bytes<32> {
-  return persistentHash<MemberPayPreimage>(MemberPayPreimage { domain: pad(32, "starfall:member-pay:v1"), pot: pot, member: member });
-}
-
-export pure circuit memberRefundId(kind: Bytes<32>, syndicate: Uint<32>, member: Uint<32>): Bytes<32> {
-  return persistentHash<MemberRefundPreimage>(MemberRefundPreimage { domain: kind, syndicate: syndicate, member: member });
-}
-
-// Key of a syndicate's member in `members`.
-export pure circuit memberKey(syndicate: Uint<32>, index: Uint<32>): Uint<64> {
-  return ((syndicate as Uint<64>) * 4294967296 + index) as Uint<64>;
-}
-
 // The draw's VRF input.
 export pure circuit drawAlpha(deployment: ContractAddress, drawId: Uint<32>, seed: Bytes<32>): Bytes<32> {
   return persistentHash<AlphaPreimage>(AlphaPreimage {
@@ -384,32 +322,12 @@ pure circuit validLine(l: Line): Boolean {
     && n[6] <= 35 && l.moonball >= 1 && l.moonball <= 20;
 }
 
-// Each payee is an address with a share, a syndicate with a share (zero
-// address), or empty (share 0, zero address, no syndicate).
+// Each payee is an address with a share, or empty (share 0, zero address).
 pure circuit validPayees(p: Vector<3, Payee>): Boolean {
   const total = fold((acc: Uint<32>, x: Payee): Uint<32> => (acc + x.share) as Uint<32>, 0, p);
-  const tidy = fold((acc: Boolean, x: Payee): Boolean => acc
-                      && (x.share > 0 || (x.address == default<UserAddress> && x.syndicate == 0))
-                      && (x.syndicate == 0 || x.address == default<UserAddress>),
+  const tidy = fold((acc: Boolean, x: Payee): Boolean => acc && (x.share > 0 || x.address == default<UserAddress>),
                     true, p);
   return total == 10000 && p[0].share > 0 && tidy;
-}
-
-// A syndicate's tickets are paid to it alone.
-pure circuit syndicatePayees(id: Uint<32>): Vector<3, Payee> {
-  return [Payee { address: default<UserAddress>, share: 10000, syndicate: id },
-          default<Payee>, default<Payee>];
-}
-
-// Payees of an ordinary purchase: addresses only. A syndicate's games are
-// bought by its creator through buySyndicateTickets, from the syndicate's funds.
-pure circuit noSyndicate(p: Vector<3, Payee>): Boolean {
-  return fold((acc: Boolean, x: Payee): Boolean => acc && x.syndicate == 0, true, p);
-}
-
-pure circuit samePayees(a: Vector<3, Payee>, b: Vector<3, Payee>): Boolean {
-  return fold((acc: Boolean, x: Payee, y: Payee): Boolean => acc && x.address == y.address && x.share == y.share && x.syndicate == y.syndicate,
-              true, a, b);
 }
 
 export pure circuit validTicket(t: TicketPreimage): Boolean {
@@ -436,9 +354,8 @@ export pure circuit divisionOf(l: Line, numbers: Vector<7, Uint<8>>, moonball: U
 
 // --------------------------------------------------- ticket encryption
 //
-// A ticket packs into 9 field elements: the line, the three shares and the
-// three syndicate ids (26 bytes), each payee address as two 16-byte halves,
-// and the salt as two.
+// A ticket packs into 9 field elements: the line and the three 2-byte shares
+// (14 bytes), each payee address as two 16-byte halves, and the salt as two.
 // Encryption is ElGamal-style key agreement on Jubjub (the curve Nightcast's
 // VRF uses) with a Poseidon keystream: ephemeral R = r*G, shared S = r*K, and
 // body[i] = packed[i] + Poseidon(S.x, S.y, i). The settlement key holder
@@ -458,15 +375,15 @@ pure circuit join16(lo: Field, hi: Field): Bytes<32> {
   return v as Bytes<32>;
 }
 
-pure circuit payeeBytes(p: Payee): Vector<6, Uint<8>> {
-  return [...((p.share as Bytes<2>) as Vector<2, Uint<8>>), ...((p.syndicate as Bytes<4>) as Vector<4, Uint<8>>)];
+pure circuit shareBytes(p: Payee): Vector<2, Uint<8>> {
+  return (p.share as Bytes<2>) as Vector<2, Uint<8>>;
 }
 
 pure circuit packTicket(t: TicketPreimage): Vector<9, Field> {
-  const head: Vector<26, Uint<8>> = [...t.line.numbers, t.line.moonball,
-                                     ...payeeBytes(t.payees[0]), ...payeeBytes(t.payees[1]), ...payeeBytes(t.payees[2])];
+  const head: Vector<14, Uint<8>> = [...t.line.numbers, t.line.moonball,
+                                     ...shareBytes(t.payees[0]), ...shareBytes(t.payees[1]), ...shareBytes(t.payees[2])];
   return [
-    (head as Bytes<26>) as Field,
+    (head as Bytes<14>) as Field,
     lo16(t.payees[0].address.bytes), hi16(t.payees[0].address.bytes),
     lo16(t.payees[1].address.bytes), hi16(t.payees[1].address.bytes),
     lo16(t.payees[2].address.bytes), hi16(t.payees[2].address.bytes),
@@ -474,24 +391,19 @@ pure circuit packTicket(t: TicketPreimage): Vector<9, Field> {
   ];
 }
 
-pure circuit unpackPayee(h: Vector<26, Uint<8>>, at: Uint<8>, lo: Field, hi: Field): Payee {
-  const b: Vector<6, Uint<8>> = map((j: Uint<8>): Uint<8> =>
-                                      fold((acc: Uint<8>, x: Uint<8>, k: Uint<8>): Uint<8> => k == (at + j) as Uint<8> ? x : acc, 0, h,
-                                           [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]),
-                                    [0, 1, 2, 3, 4, 5]);
+pure circuit unpackPayee(b0: Uint<8>, b1: Uint<8>, lo: Field, hi: Field): Payee {
   return Payee {
     address: UserAddress { bytes: join16(lo, hi) },
-    share: ([b[0], b[1]] as Bytes<2>) as Uint<16>,
-    syndicate: ([b[2], b[3], b[4], b[5]] as Bytes<4>) as Uint<32>
+    share: ([b0, b1] as Bytes<2>) as Uint<16>
   };
 }
 
 pure circuit unpackTicket(drawId: Uint<32>, f: Vector<9, Field>): TicketPreimage {
-  const h = (f[0] as Bytes<26>) as Vector<26, Uint<8>>;
+  const h = (f[0] as Bytes<14>) as Vector<14, Uint<8>>;
   return TicketPreimage {
     drawId: drawId,
     line: Line { numbers: [h[0], h[1], h[2], h[3], h[4], h[5], h[6]], moonball: h[7] },
-    payees: [unpackPayee(h, 8, f[1], f[2]), unpackPayee(h, 14, f[3], f[4]), unpackPayee(h, 20, f[5], f[6])],
+    payees: [unpackPayee(h[8], h[9], f[1], f[2]), unpackPayee(h[10], h[11], f[3], f[4]), unpackPayee(h[12], h[13], f[5], f[6])],
     salt: join16(f[7], f[8])
   };
 }
@@ -541,6 +453,14 @@ circuit quotient(n: Field, d: Uint<128>): Uint<128> {
   return qr[0];
 }
 
+// The caller's clock `now` must be within `tolerance` seconds of block time.
+circuit assertClose(now: Uint<64>, tolerance: Uint<64>): [] {
+  assert(now > tolerance, "bad time");
+  assert(now < 18446744073709550000, "bad time");
+  assert(blockTimeGte((now - tolerance) as Uint<64>) && blockTimeLt((now + tolerance) as Uint<64>),
+         "clock is too far from block time");
+}
+
 // Division shares of the prize pool in basis points: Australian Powerball's
 // published allocation (The Lott, from draw 1410, 25 May 2023):
 // 33.5% / 1.85 / 2.3 / 2.0 / 1.5 / 9.4 / 7.3 / 15.5 / 26.65%.
@@ -557,6 +477,9 @@ struct PrizeCalc {
   // What rolls over to the next draw: an unwon jackpot, an unwon division 9
   // (plus anything cascading into it) and rounding remainders.
   carry: Uint<128>;
+  // The pool given out to divisions so far; what the floored shares leave
+  // over (at most 8 STAR) rolls over too.
+  allocated: Uint<128>;
 }
 
 pure circuit noWinners(): Vector<9, Uint<64>> {
@@ -564,30 +487,86 @@ pure circuit noWinners(): Vector<9, Uint<64>> {
 }
 
 // ---------------------------------------------------------------- oracle
+//
+// The oracle and organiser circuits each do more than one thing, chosen by
+// which secret the caller holds (as in v0), to stay within 12 circuits.
 
-// The oracle activates a proposed key by proving it holds the secret. A draw
-// keeps the key it was requested with.
+// Called by the holder of the *proposed* key: activates it, proving it holds
+// the secret. The first key is accepted at once. A replacement waits
+// oracleKeyDelay from its proposal, unless the current oracle approved it.
+// Called by the *current* oracle while a different key is proposed: approves
+// the change (a planned hand-over), so it needn't wait. Draws keep the key
+// they opened with.
 export circuit acceptOracleKey(): [] {
   assert(proposedOracleKey.is_some, "no key proposed");
   const key = proposedOracleKey.value;
   assert(!isIdentity(key), "identity key not allowed");
-  const sk = oracleSecretKey();
-  assert(disclose(sameKey(publicKey(sk), key)), "secret does not match the proposed key");
-  oracleKey = key;
-  oracleKeyReady = true;
-  proposedOracleKey = none<JubjubPoint>();
+  const pk = publicKey(oracleSecretKey());
+  const isCurrent = disclose(sameKey(pk, oracleKey));
+  const approving = oracleKeyReady && isCurrent && !sameKey(oracleKey, key);
+  if (approving) {
+    oracleKeyApproved = true;
+  } else {
+    assert(disclose(sameKey(pk, key)), "secret does not match the proposed key");
+    if (oracleKeyReady && !oracleKeyApproved) {
+      assert(blockTimeGte(oracleKeyChangeAt), "the new oracle key is still waiting");
+    }
+    oracleKey = key;
+    oracleKeyReady = true;
+    proposedOracleKey = none<JubjubPoint>();
+    oracleKeyApproved = false;
+  }
 }
 
-// The organiser proposes a new oracle key; it takes effect when the oracle accepts it.
-export circuit proposeOracleKey(key: JubjubPoint): [] {
+// The organiser proposes a new oracle key (e.g. after a loss or compromise).
+// `now` is the caller's clock, within 10 minutes of block time; the key can be
+// accepted from now + oracleKeyDelay, or sooner if the current oracle agrees.
+// Proposing again restarts the wait, so the organiser can't shorten it.
+export circuit proposeOracleKey(key: JubjubPoint, now: Uint<64>): [] {
   assertOrganiser();
+  const t = disclose(now);
+  assertClose(t, 600);
   proposedOracleKey = some<JubjubPoint>(disclose(key));
+  oracleKeyChangeAt = (t + oracleKeyDelay) as Uint<64>;
+  oracleKeyApproved = false;
+}
+
+// ------------------------------------------------------------- organiser
+
+// Who the organiser is, by the secret the caller holds:
+// - the backup organiser (a secret kept offline) installs `commitment` as the
+//   organiser at once: after a lost or leaked organiser secret, or a keeper
+//   that has stopped for good. The backup itself can't become the organiser,
+//   so it stays offline;
+// - the holder of a proposed organiser secret accepts the hand-over
+//   (`commitment` must be its own);
+// - the organiser proposes `commitment` as its successor.
+export circuit changeOrganiser(commitment: Bytes<32>): [] {
+  const mine = disclose(organiserCommitmentOf(organiserSecret()));
+  const c = disclose(commitment);
+  assert(c != backupOrganiser, "the backup organiser can't be the organiser");
+  if (mine == backupOrganiser) {
+    organiser = c;
+    proposedOrganiser = none<Bytes<32>>();
+  } else if (proposedOrganiser.is_some && mine == proposedOrganiser.value) {
+    assert(c == mine, "to accept, pass your own commitment");
+    organiser = mine;
+    proposedOrganiser = none<Bytes<32>>();
+  } else {
+    assert(mine == organiser, "not the organiser");
+    proposedOrganiser = some<Bytes<32>>(c);
+  }
 }
 
 // ----------------------------------------------------------------- draws
 
-// Open draw lastDraw + 1, selling tickets until `close` (as v0).
+// Open draw lastDraw + 1, selling tickets until `close`. Only one draw sells
+// at a time, and the sales period must be between minSales and maxSales from
+// now, so nobody can slip in a short draw at a quiet moment. The draw is bound
+// to the active oracle key from the start, so buyers can see which key will
+// answer it and no key change can reach it.
 circuit openNext(close: Uint<64>, commitment: Bytes<32>): Uint<32> {
+  assert(oracleKeyReady, "no active oracle key");
   if (lastDraw != 0) {
     assert(draws.lookup(lastDraw).status != DrawStatus.open, "the previous draw is still selling");
   }
@@ -607,7 +586,7 @@ circuit openNext(close: Uint<64>, commitment: Bytes<32>): Uint<32> {
     seedCommitment: commitment,
     seed: default<Bytes<32>>,
     point: default<JubjubPoint>,
-    oracleKey: default<JubjubPoint>,
+    oracleKey: oracleKey,
     output: default<Bytes<32>>,
     numbers: [0, 0, 0, 0, 0, 0, 0],
     moonball: 0,
@@ -622,47 +601,14 @@ circuit openNext(close: Uint<64>, commitment: Bytes<32>): Uint<32> {
   return id;
 }
 
-// The organiser opens the next draw: the first one, or after a draw that
-// wasn't followed by one. Returns the new draw's number.
-export circuit openDraw(salesClose: Uint<64>, seedCommitment: Bytes<32>): Uint<32> {
-  assertOrganiser();
-  return openNext(disclose(salesClose), disclose(seedCommitment));
-}
-
-// Buy a one-line ticket for an open draw, paying the ticket price in tNIGHT.
-// Publishes the ticket's commitment and the ticket encrypted to the
-// settlement key; the proof shows both hold the same valid ticket. Refunds of
-// a void draw go to `refundTo`. Returns the commitment.
-export circuit buyTicket(refundTo: UserAddress): Bytes<32> {
-  const t = newTicket();
-  assert(disclose(validTicket(t) && noSyndicate(t.payees)), "invalid ticket");
-  const id = disclose(t.drawId);
-  const d = drawFor(id);
-  assert(d.status == DrawStatus.open, "draw is not open");
-  assert(blockTimeLt(d.salesClose), "sales have closed");
-  const c = disclose(ticketCommitment(kernel.self(), t));
-  assert(!ticketCommitments.member(c), "ticket already bought");
-  const index = ticketCount.lookup(id);
-  assert(index < 4294967295, "draw is full");
-  const cipher = disclose(sealTicket(settlementKey, sealingRandomness(), t));
-  receiveUnshielded(nativeToken(), ticketPrice);
-  ticketCommitments.insert(c);
-  tickets.insert(ticketKey(id, index), TicketRecord {
-    commitment: c,
-    refundTo: disclose(refundTo),
-    syndicate: 0,
-    cipher: cipher,
-    refunded: false
-  });
-  ticketCount.insert(id, (index + 1) as Uint<64>);
-  return c;
-}
-
-// Buy up to maxGames() tickets for an open draw in one transaction (a
-// QuickPick package or several chosen lines), paying the ticket price for
-// each. Each game is a ticket of its own, so it settles like any other.
-// Returns the number of tickets bought.
-export circuit buyTickets(count: Uint<8>, refundTo: UserAddress): Uint<8> {
+// Buy 1 to maxGames() tickets (one line each) for an open draw in one
+// transaction, paying the ticket price for each: a single game, a QuickPick
+// package a few games at a time, or several chosen lines. Each game is a
+// ticket of its own, with its own index, and settles like any other. For each
+// one, publishes the commitment and the ticket encrypted to the settlement
+// key; the proof shows both hold the same valid ticket. Refunds of a void draw
+// go to `refundTo`. Returns the index of the first ticket bought.
+export circuit buyTickets(count: Uint<8>, refundTo: UserAddress): Uint<64> {
   const n = disclose(count);
   assert(n >= 1 && n <= maxGames(), "1 to maxGames() games per purchase");
   const ts = newTickets();
@@ -678,43 +624,50 @@ export circuit buyTickets(count: Uint<8>, refundTo: UserAddress): Uint<8> {
   for (const j of gameSlots()) {
     if (j < n) {
       const t = ts[j];
-      assert(disclose(validTicket(t) && noSyndicate(t.payees) && t.drawId == id), "invalid ticket");
+      assert(disclose(validTicket(t) && t.drawId == id), "invalid ticket");
       const c = disclose(ticketCommitment(kernel.self(), t));
       assert(!ticketCommitments.member(c), "ticket already bought");
       ticketCommitments.insert(c);
       tickets.insert(ticketKey(id, (first + (j as Uint<64>)) as Uint<64>), TicketRecord {
         commitment: c,
         refundTo: to,
-        syndicate: 0,
         cipher: disclose(sealTicket(settlementKey, rs[j], t)),
         refunded: false
       });
     }
   }
   ticketCount.insert(id, (first + (n as Uint<64>)) as Uint<64>);
-  return n;
+  return first;
 }
 
-// After sales close, the organiser reveals its seed, fixing the draw's VRF
-// input, and can open the next draw in the same transaction (as v0).
+// After sales close, the organiser reveals draw n's seed, fixing the draw's
+// VRF input, and can open the next draw in the same transaction. With n = 0
+// nothing is revealed and `next` just opens a draw: the first one, or one
+// after a draw that wasn't followed (its seed was revealed without a next
+// draw, or it was void). Only the organiser may reveal: it can't evaluate the
+// VRF, so it gains nothing from the freedom Compact's in-circuit hashToCurve
+// may allow (Nightcast SPEC §2), whereas the oracle could use that freedom to
+// pick an outcome.
 export circuit requestDraw(n: Uint<32>, seed: Bytes<32>, next: Maybe<NextDraw>): [] {
   assertOrganiser();
-  assert(oracleKeyReady, "no active oracle key");
   const id = disclose(n);
-  const s = disclose(seed);
-  const d = drawFor(id);
-  assert(d.status == DrawStatus.open, "draw is not open");
-  assert(blockTimeGte(d.salesClose), "sales are still open");
-  assert(blockTimeLt(d.revealDeadline), "reveal deadline has passed");
-  assert(seedCommitmentOf(s) == d.seedCommitment, "seed does not match the commitment");
-  draws.insert(id, Draw {
-    ...d,
-    status: DrawStatus.requested,
-    seed: s,
-    point: inputPoint(drawAlpha(kernel.self(), id, s)),
-    oracleKey: oracleKey
-  });
   const nx = disclose(next);
+  if (id == 0) {
+    assert(nx.is_some, "nothing to do");
+  } else {
+    const s = disclose(seed);
+    const d = drawFor(id);
+    assert(d.status == DrawStatus.open, "draw is not open");
+    assert(blockTimeGte(d.salesClose), "sales are still open");
+    assert(blockTimeLt(d.revealDeadline), "reveal deadline has passed");
+    assert(seedCommitmentOf(s) == d.seedCommitment, "seed does not match the commitment");
+    draws.insert(id, Draw {
+      ...d,
+      status: DrawStatus.requested,
+      seed: s,
+      point: inputPoint(drawAlpha(kernel.self(), id, s))
+    });
+  }
   if (nx.is_some) {
     openNext(nx.value.salesClose, nx.value.seedCommitment);
   }
@@ -735,16 +688,15 @@ export circuit fulfilDraw(n: Uint<32>): Bytes<32> {
 
 // Anyone turns the output into numbers with the site's rule, before the
 // settlement deadline; settlement then has settleWindow from `now` (the
-// caller's clock, within 10 minutes of block time).
+// caller's clock, within 30 minutes of block time, so a slow numbers proof
+// still lands; the stamp only moves the settlement deadline).
 export circuit computeNumbers(n: Uint<32>, now: Uint<64>): Numbers {
   const id = disclose(n);
   const t = disclose(now);
   const d = drawFor(id);
   assert(d.status == DrawStatus.fulfilled, "draw is not fulfilled");
   assert(blockTimeLt(d.settleDeadline), "too late to compute the numbers");
-  assert(t > 600, "bad time");
-  assert(t < 18446744073709550000, "bad time");
-  assert(blockTimeGte(t - 600) && blockTimeLt((t + 600) as Uint<64>), "clock is more than 10 minutes off");
+  assertClose(t, 1800);
   const nums = disclose(numbersOf(drawSeedOf(d.seed, d.output)));
   draws.insert(id, Draw {
     ...d,
@@ -820,9 +772,9 @@ export circuit settleBatch(n: Uint<32>): Uint<64> {
 }
 
 // Once every ticket is settled, anyone fixes each division's prize per
-// winning ticket. Draws are finalised in order: the previous draw must be
-// settled or void, and then all the rollover so far joins this draw's
-// jackpot. The operator fee (feePerGame per ticket sold) comes off sales first.
+// winning ticket and pays the draw's operator fee (feePerGame per ticket sold,
+// off sales first). Draws are finalised in order: the previous draw must be
+// settled or void, and then all the rollover so far joins this draw's jackpot.
 export circuit finaliseDraw(n: Uint<32>): [] {
   const id = disclose(n);
   const d = drawFor(id);
@@ -855,13 +807,16 @@ export circuit finaliseDraw(n: Uint<32>): [] {
       prizes: map((x: Uint<128>, k: Uint<8>): Uint<128> => k == j ? (won ? perTicket : 0) : x,
                   acc.prizes, [0, 1, 2, 3, 4, 5, 6, 7, 8]),
       cascade: (won || j == 0 || j == 8) ? 0 : amount,
-      carry: (acc.carry + toCarry) as Uint<128>
+      carry: (acc.carry + toCarry) as Uint<128>,
+      allocated: (acc.allocated + share) as Uint<128>
     };
-  }, PrizeCalc { prizes: [0, 0, 0, 0, 0, 0, 0, 0, 0], cascade: 0, carry: 0 },
+  }, PrizeCalc { prizes: [0, 0, 0, 0, 0, 0, 0, 0, 0], cascade: 0, carry: 0, allocated: 0 },
      shares(), p.winners, [0, 1, 2, 3, 4, 5, 6, 7, 8]);
-  carry = calc.carry;
-  feesOwed = (feesOwed + fee) as Uint<128>;
+  carry = (calc.carry + (pool - calc.allocated)) as Uint<128>;
   draws.insert(id, Draw { ...d, status: DrawStatus.settled, carried: carried, fee: fee, prizes: calc.prizes });
+  if (fee > 0) {
+    sendUnshielded(nativeToken(), fee, right<ContractAddress, UserAddress>(operator));
+  }
 }
 
 // Pay a winning ticket's prize to its payees. Anyone may call this (a keeper
@@ -881,218 +836,15 @@ export circuit payEntitlement(id: Bytes<32>): [] {
   const a2 = quotient((prize as Field) * (e.payees[2].share as Field), 10000);
   const a0 = (prize - a1 - a2) as Uint<128>;
   entitlements.insert(eid, Entitlement { ...e, paid: true });
-  payPayee(eid, 0, e.payees[0], a0);
-  payPayee(eid, 1, e.payees[1], a1);
-  payPayee(eid, 2, e.payees[2], a2);
-}
-
-// Send a payee its amount, or set it aside for a syndicate's members.
-circuit payPayee(eid: Bytes<32>, index: Uint<8>, p: Payee, amount: Uint<128>): [] {
-  if (amount > 0) {
-    if (p.syndicate == 0) {
-      sendUnshielded(nativeToken(), amount, right<ContractAddress, UserAddress>(p.address));
-    } else {
-      syndicatePots.insert(potId(eid, index), amount);
-    }
+  if (a0 > 0) {
+    sendUnshielded(nativeToken(), a0, right<ContractAddress, UserAddress>(e.payees[0].address));
   }
-}
-
-// ------------------------------------------------------------- syndicates
-
-// Open a syndicate for an open draw. Members join before `joinDeadline` (at
-// the latest when the draw's sales close); the games must be bought before
-// sales close, by whoever holds the creator secret. Returns the syndicate id.
-export circuit createSyndicate(drawId: Uint<32>, creatorCommitment: Bytes<32>, sharePrice: Uint<128>,
-                               totalShares: Uint<32>, games: Uint<32>, joinDeadline: Uint<64>): Uint<32> {
-  const id = disclose(drawId);
-  const d = drawFor(id);
-  assert(d.status == DrawStatus.open, "draw is not open");
-  const price = disclose(sharePrice);
-  const shares = disclose(totalShares);
-  const g = disclose(games);
-  const by = disclose(joinDeadline);
-  assert(shares >= 1 && g >= 1 && price > 0, "a syndicate has at least one share and one game");
-  assert((price as Field) * (shares as Field) == (ticketPrice as Field) * (g as Field), "shares x share price must equal games x ticket price");
-  assert(by <= d.salesClose, "members must join before sales close");
-  assert(blockTimeLt(by), "join deadline has passed");
-  const sid = (lastSyndicate + 1) as Uint<32>;
-  syndicates.insert(sid, Syndicate {
-    drawId: id,
-    status: SyndicateStatus.filling,
-    creator: disclose(creatorCommitment),
-    sharePrice: price,
-    totalShares: shares,
-    sold: 0,
-    games: g,
-    bought: 0,
-    joinDeadline: by,
-    members: 0
-  });
-  lastSyndicate = sid;
-  return sid;
-}
-
-circuit syndicateFor(id: Uint<32>): Syndicate {
-  assert(syndicates.member(id), "unknown syndicate");
-  return syndicates.lookup(id);
-}
-
-// Buy `shares` shares, paying share price x shares; prizes and refunds go to
-// `payTo`. Returns the member's index. The last share sold funds the syndicate.
-export circuit joinSyndicate(syndicate: Uint<32>, shares: Uint<32>, payTo: UserAddress): Uint<32> {
-  const sid = disclose(syndicate);
-  const n = disclose(shares);
-  const sy = syndicateFor(sid);
-  assert(sy.status == SyndicateStatus.filling, "syndicate is already funded");
-  assert(blockTimeLt(sy.joinDeadline), "join deadline has passed");
-  assert(n >= 1 && (sy.sold as Uint<64>) + (n as Uint<64>) <= (sy.totalShares as Uint<64>), "not that many shares left");
-  receiveUnshielded(nativeToken(), (sy.sharePrice * n) as Uint<128>);
-  const index = sy.members;
-  members.insert(memberKey(sid, index), Member { payTo: disclose(payTo), shares: n });
-  const sold = (sy.sold + n) as Uint<32>;
-  syndicates.insert(sid, Syndicate {
-    ...sy,
-    sold: sold,
-    status: sold == sy.totalShares ? SyndicateStatus.funded : SyndicateStatus.filling,
-    members: (index + 1) as Uint<32>
-  });
-  return index;
-}
-
-// The creator buys up to maxGames() of the syndicate's games in one
-// transaction, from its funds, with the syndicate as the only payee. Every
-// game is an ordinary ticket of the draw, settled like any other.
-export circuit buySyndicateTickets(syndicate: Uint<32>, count: Uint<8>): Uint<8> {
-  const sid = disclose(syndicate);
-  const n = disclose(count);
-  const sy = syndicateFor(sid);
-  assert(disclose(creatorCommitmentOf(creatorSecret()) == sy.creator), "not the syndicate's creator");
-  assert(sy.status == SyndicateStatus.funded, "syndicate is not funded");
-  assert(n >= 1 && n <= maxGames(), "1 to maxGames() games per purchase");
-  assert((sy.bought as Uint<64>) + (n as Uint<64>) <= (sy.games as Uint<64>), "more games than the syndicate funded");
-  const id = sy.drawId;
-  const d = drawFor(id);
-  assert(d.status == DrawStatus.open, "draw is not open");
-  assert(blockTimeLt(d.salesClose), "sales have closed");
-  const ts = newTickets();
-  const rs = sealingRandomnessFor();
-  const first = ticketCount.lookup(id);
-  assert(first + (n as Uint<64>) <= 4294967295, "draw is full");
-  for (const j of gameSlots()) {
-    if (j < n) {
-      const t = ts[j];
-      assert(disclose(validTicket(t) && t.drawId == id && samePayees(t.payees, syndicatePayees(sid))), "invalid syndicate ticket");
-      const c = disclose(ticketCommitment(kernel.self(), t));
-      assert(!ticketCommitments.member(c), "ticket already bought");
-      ticketCommitments.insert(c);
-      tickets.insert(ticketKey(id, (first + (j as Uint<64>)) as Uint<64>), TicketRecord {
-        commitment: c,
-        refundTo: default<UserAddress>,
-        syndicate: sid,
-        cipher: disclose(sealTicket(settlementKey, rs[j], t)),
-        refunded: false
-      });
-    }
+  if (a1 > 0) {
+    sendUnshielded(nativeToken(), a1, right<ContractAddress, UserAddress>(e.payees[1].address));
   }
-  ticketCount.insert(id, (first + (n as Uint<64>)) as Uint<64>);
-  syndicates.insert(sid, Syndicate { ...sy, bought: (sy.bought + (n as Uint<32>)) as Uint<32> });
-  return n;
-}
-
-circuit memberFor(sid: Uint<32>, index: Uint<32>): Member {
-  const key = memberKey(sid, index);
-  assert(members.member(key), "unknown member");
-  return members.lookup(key);
-}
-
-// floor(amount x shares / totalShares): a member's part of something owed to
-// the syndicate. Any rounding dust stays in the contract.
-// A member's part of an amount owed to its syndicate: in proportion to the
-// shares sold (all of them, once the syndicate is funded), so an unfilled
-// syndicate's members get back exactly what they paid.
-circuit memberPart(amount: Uint<128>, m: Member, sy: Syndicate): Uint<128> {
-  return quotient((amount as Field) * (m.shares as Field), sy.sold as Uint<128>);
-}
-
-// Pay a member its part of a prize owed to the syndicate (one entitlement
-// payee). Anyone may call this; each part is paid once.
-export circuit paySyndicateMember(entitlement: Bytes<32>, payee: Uint<8>, member: Uint<32>): Uint<128> {
-  const eid = disclose(entitlement);
-  const pi = disclose(payee);
-  const mi = disclose(member);
-  assert(entitlements.member(eid), "unknown entitlement");
-  const e = entitlements.lookup(eid);
-  assert(e.paid, "entitlement is not paid yet");
-  assert(pi < 3, "no such payee");
-  const p = fold((acc: Payee, x: Payee, k: Uint<8>): Payee => k == pi ? x : acc, e.payees[0], e.payees, [0, 1, 2]);
-  assert(p.syndicate != 0, "payee is not a syndicate");
-  const pot = potId(eid, pi);
-  assert(syndicatePots.member(pot), "nothing owed");
-  const owed = syndicatePots.lookup(pot);
-  const sy = syndicateFor(p.syndicate);
-  const m = memberFor(p.syndicate, mi);
-  const pay = memberPaymentId(pot, mi);
-  assert(!memberPayments.member(pay), "member already paid");
-  memberPayments.insert(pay);
-  const amount = memberPart(owed, m, sy);
-  if (amount > 0) {
-    sendUnshielded(nativeToken(), amount, right<ContractAddress, UserAddress>(m.payTo));
+  if (a2 > 0) {
+    sendUnshielded(nativeToken(), a2, right<ContractAddress, UserAddress>(e.payees[2].address));
   }
-  return amount;
-}
-
-// Refund a member's part of the syndicate's unspent funds: everything if the
-// syndicate never filled (after its join deadline), else whatever the
-// creator didn't spend on games (after sales close). Anyone may call this.
-export circuit refundSyndicateUnspent(syndicate: Uint<32>, member: Uint<32>): Uint<128> {
-  const sid = disclose(syndicate);
-  const mi = disclose(member);
-  const sy = syndicateFor(sid);
-  const d = drawFor(sy.drawId);
-  const unfilled = sy.status == SyndicateStatus.filling && blockTimeGte(sy.joinDeadline);
-  const closed = sy.status == SyndicateStatus.funded && blockTimeGte(d.salesClose);
-  assert(unfilled || closed, "the syndicate is still filling or buying");
-  const m = memberFor(sid, mi);
-  const rid = memberRefundId(pad(32, "starfall:unspent:v1"), sid, mi);
-  assert(!memberRefunds.member(rid), "member already refunded");
-  memberRefunds.insert(rid);
-  const spent = (ticketPrice * sy.bought) as Uint<128>;
-  const funded = (sy.sharePrice * sy.sold) as Uint<128>;
-  const unspent = (funded - spent) as Uint<128>;
-  const amount = memberPart(unspent, m, sy);
-  if (amount > 0) {
-    sendUnshielded(nativeToken(), amount, right<ContractAddress, UserAddress>(m.payTo));
-  }
-  return amount;
-}
-
-// Refund a member's part of what the syndicate spent on a draw that was
-// voided. Anyone may call this.
-export circuit refundSyndicateVoid(syndicate: Uint<32>, member: Uint<32>): Uint<128> {
-  const sid = disclose(syndicate);
-  const mi = disclose(member);
-  const sy = syndicateFor(sid);
-  const d = drawFor(sy.drawId);
-  assert(d.status == DrawStatus.voided, "draw is not void");
-  const m = memberFor(sid, mi);
-  const rid = memberRefundId(pad(32, "starfall:void:v1"), sid, mi);
-  assert(!memberRefunds.member(rid), "member already refunded");
-  memberRefunds.insert(rid);
-  const amount = memberPart((ticketPrice * sy.bought) as Uint<128>, m, sy);
-  if (amount > 0) {
-    sendUnshielded(nativeToken(), amount, right<ContractAddress, UserAddress>(m.payTo));
-  }
-  return amount;
-}
-
-// Send the operator fees collected so far to the operator. Anyone may call this.
-export circuit withdrawFees(): Uint<128> {
-  const amount = feesOwed;
-  feesOwed = 0;
-  if (amount > 0) {
-    sendUnshielded(nativeToken(), amount, right<ContractAddress, UserAddress>(operator));
-  }
-  return amount;
 }
 
 // ---------------------------------------------------------------- refunds
@@ -1113,8 +865,7 @@ export circuit voidDraw(n: Uint<32>): [] {
 }
 
 // Refund ticket `index` of a void draw to the address given when it was
-// bought. Anyone may call this (a keeper does, for every ticket). A
-// syndicate's tickets are refunded to its members with refundSyndicateVoid.
+// bought. Anyone may call this (a keeper does, for every ticket).
 export circuit refundTicket(n: Uint<32>, index: Uint<64>): [] {
   const id = disclose(n);
   const i = disclose(index);
@@ -1125,8 +876,5 @@ export circuit refundTicket(n: Uint<32>, index: Uint<64>): [] {
   const rec = tickets.lookup(key);
   assert(!rec.refunded, "already refunded");
   tickets.insert(key, TicketRecord { ...rec, refunded: true });
-  if (rec.syndicate == 0) {
-    sendUnshielded(nativeToken(), ticketPrice, right<ContractAddress, UserAddress>(rec.refundTo));
-  }
-  // A syndicate's ticket price stays in the contract for refundSyndicateVoid.
+  sendUnshielded(nativeToken(), ticketPrice, right<ContractAddress, UserAddress>(rec.refundTo));
 }

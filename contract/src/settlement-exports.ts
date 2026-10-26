@@ -1,4 +1,4 @@
-// Starfall with private, automatic settlement (prototype): see docs/SETTLEMENT.md.
+// Starfall with private, automatic settlement: see docs/SETTLEMENT.md.
 export * as Contract from './managed/settlement/contract/index.js';
 export { DrawStatus, pureCircuits, ledger } from './managed/settlement/contract/index.js';
 export type {

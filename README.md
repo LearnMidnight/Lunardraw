@@ -18,7 +18,7 @@ Pick 7 numbers from 1–35 and a Moonball from 1–20. Tickets cost a fixed pric
 
 The full design, including the trust that remains, is in [docs/DESIGN.md](docs/DESIGN.md).
 
-## Prototype: private, automatic settlement
+## Next: private, automatic settlement
 
 Where Starfall is heading: no claim button, and no ticket's numbers ever made public. `contract/src/settlement.compact` is a second contract built on the same draw, in which:
 
@@ -26,10 +26,9 @@ Where Starfall is heading: no claim button, and no ticket's numbers ever made pu
 - every ticket is published as a commitment plus the ticket encrypted to a settlement key; up to 4 games per transaction, with QuickPick packages from Single (1) to Maxi (50);
 - a settler works through every ticket in order, 25 per proof, and the contract checks that each one matches its commitment, so no ticket can be left out, counted twice or altered;
 - prizes are then paid automatically by anyone;
-- syndicates own ordinary tickets together: shares are locked before sales close, all shares must sell or everyone is refunded, only the creator can buy the agreed games from the pooled funds, and winnings are paid to members in proportion;
 - if settlement misses its deadline, every ticket is refunded.
 
-It's tested in the simulator with 100 private tickets, the spec's 20-share syndicate, and every failure case. Design, guarantees and the privacy that remains: [docs/SETTLEMENT.md](docs/SETTLEMENT.md).
+It has 12 circuits, the most that fit in a deploy transaction, and v0's oracle-key and organiser fixes. It's tested in the simulator with 100 private tickets and every failure case; not deployed yet. Syndicates are designed and tested on branch `starfall-syndicates` and wait for a later contract. Design, guarantees and the privacy that remains: [docs/SETTLEMENT.md](docs/SETTLEMENT.md).
 
 ## Repository
 
