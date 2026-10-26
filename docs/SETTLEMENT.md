@@ -80,7 +80,7 @@ A deploy transaction carries every circuit's verifier key and must fit Midnight'
 | `voidDraw` | anyone | void a draw past its deadline |
 | `refundTicket` | anyone | refund a ticket of a void draw |
 
-A test checks the list, and the CI `settlement-keys` job fails if the compiled contract has more than 12 verifier keys. Adding a circuit means merging another or dropping one.
+A test checks the list, and the CI `settlement-keys` job fails if the compiled contract has more than 12 verifier keys. Adding a circuit means merging another or dropping one. The 12 verifier keys come to **22,404 bytes** (1,351–2,311 each), about the same as v0's 12, which deployed.
 
 ## Syndicates
 
@@ -144,24 +144,26 @@ Encryption works like this:
 
 The settler recovers `S = k·R`. Both directions are pure circuits in the contract (`sealTicket`, `openTicket`), so off-chain code never re-implements them. The purchase proof computes the ciphertext from the same ticket it commits to, so a buyer can't publish a ticket the settler can't open. A buyer who chooses a weak `r` only exposes their own ticket.
 
-## Circuit sizes (mock-compiled, Compact 0.31.1)
+## Circuit sizes (Compact 0.31.1)
 
-| Circuit | k | Rows |
-|---|---|---|
-| `buyTickets`, 4 games | 20 | 594,601 |
-| `settleBatch`, 25 tickets | 19 | 353,320 |
-| `computeNumbers` (same as v0) | 19 | 323,756 |
-| `requestDraw` (reveal + open) | 16 | 62,325 |
-| `finaliseDraw` (Powerball rules, pays the fee) | 14 | 11,284 |
-| `fulfilDraw` | 13 | 5,816 |
-| `changeOrganiser` | 13 | 4,781 |
-| `proposeOracleKey` | 13 | 4,481 |
-| `payEntitlement` | 11 | 1,818 |
-| `acceptOracleKey` | 10 | 922 |
-| `refundTicket` | 9 | 271 |
-| `voidDraw` | 9 | 252 |
+Rows and k mock-compiled; proving keys built by the CI `settlement-keys` job (26 Oct 2026, 23 minutes for all 12).
 
-A ticket costs about 14,000 rows of settlement and about 148,000 rows of purchase. The batch size and the games per purchase are fixed at compile time (`npm run gen:batch -w @lunardraw/contract -- <batch> <games>` regenerates `src/batch.compact`). Measured batches: 10 tickets k=18, 25 k=19, 50 k=20, 100 k=21. Purchases: **3 games would be k=19 (446,109 rows)**, 4 games k=20, 8 games k=21. Buyers prove their own purchases (Lace proves on the buyer's machine), so 3 games per transaction would halve the purchase key and proving time at the cost of more transactions per package (a Maxi: 17 instead of 13); decide once the CI `settlement-keys` job reports real key sizes and the Preprod run measures proving time. A 10,000-ticket draw takes 400 batch transactions until recursion is available.
+| Circuit | k | Rows | Proving key |
+|---|---|---|---|
+| `buyTickets`, 4 games | 20 | 594,601 | 322 MiB |
+| `settleBatch`, 25 tickets | 19 | 353,320 | 145 MiB |
+| `computeNumbers` (same as v0) | 19 | 323,756 | 145 MiB |
+| `requestDraw` (reveal + open) | 16 | 62,325 | 20 MiB |
+| `finaliseDraw` (Powerball rules, pays the fee) | 14 | 11,284 | 4 MiB |
+| `fulfilDraw` | 13 | 5,816 | 2 MiB |
+| `changeOrganiser` | 13 | 4,781 | 2 MiB |
+| `proposeOracleKey` | 13 | 4,481 | 2 MiB |
+| `payEntitlement` | 11 | 1,818 | < 1 MiB |
+| `acceptOracleKey` | 10 | 922 | < 1 MiB |
+| `refundTicket` | 9 | 271 | < 1 MiB |
+| `voidDraw` | 9 | 252 | < 1 MiB |
+
+A ticket costs about 14,000 rows of settlement and about 148,000 rows of purchase. The batch size and the games per purchase are fixed at compile time (`npm run gen:batch -w @lunardraw/contract -- <batch> <games>` regenerates `src/batch.compact`). Measured batches: 10 tickets k=18, 25 k=19, 50 k=20, 100 k=21. Purchases: **3 games would be k=19 (446,109 rows)**, 4 games k=20, 8 games k=21. Buyers prove their own purchases (Lace proves on the buyer's machine), so the 322 MiB purchase key is the one every buyer's proof server loads; 3 games per transaction would roughly halve it (k=19, like `settleBatch`'s 145 MiB) and the proving time, at the cost of more transactions per package (a Maxi: 17 instead of 13). Decide once the Preprod run measures proving time on an ordinary PC. A 10,000-ticket draw takes 400 batch transactions until recursion is available.
 
 ## Other limits
 
