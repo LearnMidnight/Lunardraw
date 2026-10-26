@@ -1,0 +1,26 @@
+# The Starfall keeper: opens and reveals draws, computes the numbers, decrypts
+# and settles the tickets, finalises, pays winners, voids and refunds late
+# draws, and writes the site feed. It uses the same wallet as the v0 keeper,
+# so the two never run at once. Edit the network, schedule and paths to match.
+[Unit]
+Description=Lunardraw Starfall keeper
+After=lunardraw-proof.service network-online.target
+Wants=lunardraw-proof.service network-online.target
+Conflicts=lunardraw-keeper.service
+
+[Service]
+WorkingDirectory=/root/Lunardraw
+Environment=HOME=/root
+ExecStart=/root/Lunardraw/lunardraw starfall keeper --network preprod \
+  --organiser /root/lunardraw-secrets/organiser.secret \
+  --settlement /root/lunardraw-secrets/settlement.secret \
+  --wallet /root/nightcast-secrets/requester-wallet.secret \
+  --every 3600 --proof-server-port 6300 \
+  --feed /root/lunardraw-feed/feed.json
+# Exit code 75 = "restart me" (the watchdog, after transactions kept failing).
+Restart=always
+RestartSec=15
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

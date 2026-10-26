@@ -36,3 +36,20 @@ systemctl status lunardraw-proof lunardraw-keeper lunardraw-oracle --no-pager | 
 | Stop all | `systemctl stop lunardraw-keeper lunardraw-oracle lunardraw-proof` |
 | After `git pull && npm run build` | `systemctl restart lunardraw-keeper lunardraw-oracle` |
 | After editing a unit file | `systemctl daemon-reload` and restart it |
+
+## Starfall
+
+`lunardraw-starfall-keeper` and `lunardraw-starfall-oracle` run the Starfall
+contract instead of v0 (see [docs/starfall-preprod-guide.md](../../docs/starfall-preprod-guide.md)).
+They use the v0 services' wallets, so each is marked as conflicting with its v0
+twin: starting one stops the other. The proof server is shared.
+
+```bash
+systemctl disable --now lunardraw-keeper lunardraw-oracle
+cp deploy/systemd/lunardraw-starfall-*.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now lunardraw-starfall-keeper lunardraw-starfall-oracle
+```
+
+The everyday commands are the same with `lunardraw-starfall-keeper` and
+`lunardraw-starfall-oracle` in place of `lunardraw-keeper` and `lunardraw-oracle`.

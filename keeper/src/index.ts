@@ -6,3 +6,4 @@ export * from './seeds.js';
 export * from './oracle.js';
 export * from './feed.js';
 export * from './starfall.js';
+export * from './starfall-feed.js';

@@ -44,6 +44,20 @@ export type SettlementSimulatorOptions = {
   now?: number;
   /** Activate the oracle key right after deployment (default true). */
   acceptKey?: boolean;
+  /**
+   * Called with every successful circuit call's name and proof data (what a
+   * proof server would be asked to prove), so tests can check each run
+   * against the circuit's zkir.
+   */
+  onProof?: (circuit: string, proofData: ProofData) => void;
+};
+
+/** What a circuit call hands the prover. */
+export type ProofData = {
+  input: unknown;
+  output: unknown;
+  publicTranscript: unknown[];
+  privateTranscriptOutputs: unknown[];
 };
 
 type Result<R> = { result: R; context: CircuitContext<SettlementPrivateState> };
@@ -116,6 +130,18 @@ export class SettlementSimulator {
     this.now = opts.now ?? 1_800_000_000;
     this.addressBytes = encodeContractAddress(this.address);
     this.backupSecret = opts.backupSecret ?? generateOperatorSecret();
+    if (opts.onProof) {
+      const report = opts.onProof;
+      const circuits = this.contract.impureCircuits as unknown as Record<string, (...args: unknown[]) => { proofData: ProofData }>;
+      for (const name of Object.keys(circuits)) {
+        const circuit = circuits[name];
+        circuits[name] = (...args: unknown[]) => {
+          const out = circuit(...args);
+          report(name, out.proofData);
+          return out;
+        };
+      }
+    }
     const result = this.contract.initialState(
       createConstructorContext<SettlementPrivateState>({}, COIN_PUBLIC_KEY),
       oraclePublicKey(opts.oracleSecretKey),

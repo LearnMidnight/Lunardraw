@@ -128,7 +128,7 @@ Open **three Ubuntu windows**, all in `~/Lunardraw`.
 ./lunardraw proof-server
 ```
 
-The keeper and the oracle each need a proof server, and each would start its own in Docker. On one PC that's two of them fighting for memory (each peaks at about 1 GB), so run one and point both at it. Leave this window alone. It listens on this machine only, keeps the 100 MB of zk parameters it downloads in a Docker volume (so restarts don't fetch them again), and restarts itself when it's idle and using more than 3 GB (`--memory-limit <MiB>` to change).
+The keeper and the oracle each need a proof server, and each would start its own in Docker. On one PC that's two of them fighting for memory (the numbers proof peaks at about 7 GB), so run one and point both at it. Leave this window alone. It listens on this machine only, keeps the 100 MB of zk parameters it downloads in a Docker volume (so restarts don't fetch them again), and restarts itself when it's idle and using more than 3 GB (`--memory-limit <MiB>` to change).
 
 **Window 2, the keeper:**
 

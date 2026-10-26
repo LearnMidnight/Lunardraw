@@ -108,6 +108,18 @@ export type EngineOptions<V, S extends { kind: string }> = EngineTiming & {
   /** Step kinds started in a pass but not waited for (slow proofs). */
   background?: string[];
   /**
+   * At most this many background steps at once (default: no limit). Each big
+   * proof takes about 7 GB on Midnight's proof server, so a keeper on one
+   * small server proves them one at a time.
+   */
+  backgroundLimit?: number;
+  /**
+   * Wait this long (ms) after a background step ends before starting another
+   * (default 0): the proof server keeps memory after a proof, and its
+   * supervisor restarts it only once it has been idle for a few seconds.
+   */
+  backgroundGapMs?: number;
+  /**
    * Whether a step is this keeper's to send straight away. Other steps wait
    * until they have been due for `takeOverAfterMs`. Default: every step.
    */
@@ -147,6 +159,8 @@ export class StepEngine<V, S extends { kind: string }> {
   private readonly streak: StreakCounter;
   /** Background steps that finished since the last pass, for its report. */
   private readonly finished: { key: string; error?: string }[] = [];
+  /** When the last background step ended (local clock). */
+  private lastBackgroundEndAt: number | undefined;
 
   constructor(private readonly options: EngineOptions<V, S>) {
     this.clock = options.clock ?? Date.now;
@@ -259,6 +273,14 @@ export class StepEngine<V, S extends { kind: string }> {
         continue;
       }
       if (background.includes(step.kind)) {
+        if (o.backgroundLimit !== undefined && this.inFlight.size >= o.backgroundLimit) {
+          report.skipped.push({ step: key, reason: 'another proof is running' });
+          continue;
+        }
+        if (o.backgroundGapMs && this.lastBackgroundEndAt !== undefined && at - this.lastBackgroundEndAt < o.backgroundGapMs) {
+          report.skipped.push({ step: key, reason: 'letting the proof server rest' });
+          continue;
+        }
         this.startInBackground(step, key, view, now, failed?.failures ?? 0);
         report.skipped.push({ step: key, reason: 'started in the background' });
         continue;
@@ -323,7 +345,10 @@ export class StepEngine<V, S extends { kind: string }> {
     );
     this.inFlight.set(
       key,
-      job.finally(() => this.inFlight.delete(key)),
+      job.finally(() => {
+        this.inFlight.delete(key);
+        this.lastBackgroundEndAt = this.clock();
+      }),
     );
   }
 

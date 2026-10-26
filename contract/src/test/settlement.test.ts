@@ -173,13 +173,14 @@ describe('sealed tickets', () => {
 });
 
 describe('multi-game purchases', () => {
-  it('buys a QuickPick package four games at a time, each game a ticket of its own', () => {
+  it('buys a QuickPick package three games at a time, each game a ticket of its own', () => {
     const { sim, oracleSecretKey, settlementSecret } = setup();
     const { n } = openWithSeed(sim, oracleSecretKey);
     const me = randomAddress();
     const games = quickPickPackage(n, 'regular', me);
     expect(games.length).toBe(12);
-    expect(sim.buyPackage(games, me)).toBe(3);
+    expect(Number(pureCircuits.maxGames())).toBe(3);
+    expect(sim.buyPackage(games, me)).toBe(4);
     expect(sim.ticketsSold(n)).toBe(12n);
     const opened = sim.decryptDrawTickets(n, settlementSecret);
     expect(opened.map((t) => hex(sim.commitmentOf(t)))).toEqual(games.map((t) => hex(sim.commitmentOf(t))));

@@ -621,6 +621,12 @@ export circuit buyTickets(count: Uint<8>, refundTo: UserAddress): Uint<64> {
   assert(first + (n as Uint<64>) <= 4294967295, "draw is full");
   receiveUnshielded(nativeToken(), (ticketPrice * n) as Uint<128>);
   const to = disclose(refundTo);
+  // Read the settlement key before the loop, not inside `if (j < n)`. A ledger
+  // read inside a branch that isn't taken has no value in the transcript, so
+  // the circuit sees (0, 0), which isn't a curve point, and sealing an unused
+  // slot with it makes the prover fail (any purchase of fewer than maxGames()
+  // games). Found by the first end-to-end run; the zk check test covers it.
+  const key = settlementKey;
   for (const j of gameSlots()) {
     if (j < n) {
       const t = ts[j];
@@ -631,7 +637,7 @@ export circuit buyTickets(count: Uint<8>, refundTo: UserAddress): Uint<64> {
       tickets.insert(ticketKey(id, (first + (j as Uint<64>)) as Uint<64>), TicketRecord {
         commitment: c,
         refundTo: to,
-        cipher: disclose(sealTicket(settlementKey, rs[j], t)),
+        cipher: disclose(sealTicket(key, rs[j], t)),
         refunded: false
       });
     }

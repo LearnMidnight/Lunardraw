@@ -4,6 +4,7 @@ import { quickPick, type PlainLine, Starfall } from '@lunardraw/contract';
 import { generateOperatorSecret, generateOracleSecretKey, pureCircuits as nightcast } from '@nightcast/contract';
 import { combineDrawSeed, drawStarfall } from '@nightcast/sdk';
 import { every } from '../schedule.js';
+import { buildStarfallFeed } from '../starfall-feed.js';
 import { commitmentOf, DerivedSeeds } from '../seeds.js';
 import {
   decryptTickets,
@@ -221,7 +222,10 @@ describe('the standby keeper', () => {
     let r = await both();
     expect(r.p.done).toEqual(['open after 0']);
     expect(r.s.done).toEqual([]);
-    sim.buyTickets([makeTicket(1n, quickPick(), BUYER)], BUYER);
+    // A game that can't win, so there's nothing to pay (a payment could be the standby's share).
+    const { numbers, moonball } = numbersOf(ctx, 1n);
+    const loser = { ...lineHitting(numbers, moonball, 0), moonball: (moonball % 20) + 1 };
+    sim.buyTickets([makeTicket(1n, loser, BUYER)], BUYER);
     passing(sim, draw(sim, 1n).salesClose);
     r = await both();
     expect(r.p.done).toEqual(['reveal 1']);
@@ -399,4 +403,64 @@ describe('the Starfall plan', () => {
     expect(starfallSteps(view, 200, { ...opts, openNew: true })).toEqual([{ kind: 'reveal', draw: 1n, openNext: true }]);
     expect(starfallSteps(view, 200, { ...opts, openNew: true, organise: false })).toEqual([]);
   });
+});
+
+describe('the Starfall site feed', () => {
+  it('shows settlement progress, then a settled draw whose prizes and rollover check out', async () => {
+    const ctx = setup();
+    const { sim, chain } = ctx;
+    const keeper = ctx.keeper();
+    const feed = async () => buildStarfallFeed(await chain.view(), { network: 'local', contract: sim.address, nowSecs: sim.now });
+    await keeper.tick();
+    const { numbers, moonball } = numbersOf(ctx, 1n);
+    const games = [makeTicket(1n, lineHitting(numbers, moonball, 3), randomAddress())];
+    for (let i = 0; i < 29; i++) games.push(makeTicket(1n, quickPick(), randomAddress()));
+    sim.buyPackage(games, BUYER);
+
+    let f = await feed();
+    const game = f.games.starfall;
+    expect(game.price_star).toBe(1_200_000);
+    expect(game.fee_star).toBe(200_000);
+    expect(game.allocation_bp).toEqual([3350, 185, 230, 200, 150, 940, 730, 1550, 2665]);
+    expect(game.open).toMatchObject({ num: 1, games_sold: 30 });
+    expect(game.draws).toEqual([]);
+
+    passing(sim, draw(sim, 1n).salesClose);
+    await keeper.tick();
+    oracleAnswers(sim);
+    await keeper.tick(); // numbers
+    f = await feed();
+    let d1 = f.games.starfall.draws.find((d) => d.num === 1)!;
+    expect(d1).toMatchObject({ status: 'drawn', numbers, moonball, batches: 2, batches_done: 0 });
+    expect(d1.settle_deadline).toBeDefined();
+    expect(f.games.starfall.open?.num).toBe(2);
+
+    await keeper.tick(); // first batch
+    d1 = (await feed()).games.starfall.draws.find((d) => d.num === 1)!;
+    expect(d1).toMatchObject({ status: 'settling', batches: 2, batches_done: 1 });
+
+    await keeper.tick();
+    await keeper.tick(); // finalise
+    d1 = (await feed()).games.starfall.draws.find((d) => d.num === 1)!;
+    expect(d1.status).toBe('settled');
+    // The site's check: prizes and rollover by Powerball's rules from the games sold and the winners.
+    const pool = 30n * (PRICE - FEE);
+    const expected = Starfall.prizesByPowerballRules(pool, BigInt(d1.carried_in_star!), d1.winners!.map(BigInt));
+    expect(d1.prizes_star).toEqual(expected.prizes.map(Number));
+    expect(d1.carry_out_star).toBe(Number(expected.carry));
+    expect(d1.winners![7]).toBeGreaterThanOrEqual(1); // the sure 3 + Moonball
+  }, 60_000);
+
+  it('counts refunds of a void draw', async () => {
+    const ctx = setup();
+    const { sim, chain } = ctx;
+    const keeper = ctx.keeper({ openNew: false, paymentsPerPass: 1 });
+    openFirst(ctx);
+    sim.buyTickets([makeTicket(1n, quickPick(), BUYER), makeTicket(1n, quickPick(), BUYER)], BUYER);
+    passing(sim, draw(sim, 1n).revealDeadline);
+    await keeper.tick(); // void
+    await keeper.tick(); // one refund
+    const f = buildStarfallFeed(await chain.view(), { network: 'local', contract: sim.address, nowSecs: sim.now });
+    expect(f.games.starfall.draws[0]).toMatchObject({ num: 1, status: 'void', games_sold: 2, refunded: 1 });
+  }, 60_000);
 });
