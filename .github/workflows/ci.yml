@@ -205,3 +205,49 @@ jobs:
             tail=$(docker logs --tail 25 "$c" 2>&1 | tail -c 2500 | sed 's/%/%25/g' | awk 'BEGIN{ORS="%0A"} {print}')
             echo "::warning title=logs $c::$tail"
           done
+
+  # Starfall with private settlement (settlement.compact): builds its proving
+  # keys and reports each circuit's key size. A deploy transaction carries every
+  # circuit's verifier key and must fit Midnight's block limits (12 circuits
+  # fit, 16 were rejected), so the job fails if the contract has more than 12.
+  settlement-keys:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          submodules: true
+
+      - name: Install Compact toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf https://github.com/midnightntwrk/compact/releases/latest/download/compact-installer.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Select compiler ${{ env.COMPACT_TOOLCHAIN }}
+        run: compact update "$COMPACT_TOOLCHAIN"
+
+      - name: Compile with proving keys
+        working-directory: contract
+        shell: bash
+        run: |
+          # GitHub keeps at most 10 annotations per step: one notice lists every key.
+          set -o pipefail
+          start=$SECONDS
+          if ! compact compile src/settlement.compact src/managed/settlement 2>&1 | tee keys.log; then
+            echo "::error title=settlement keys::compile failed: $(tail -c 800 keys.log | tr '\n' ' ')"
+            exit 1
+          fi
+          sizes=""
+          for f in src/managed/settlement/keys/*.prover; do
+            c=$(basename "$f" .prover)
+            p=$(stat -c %s "$f"); v=$(stat -c %s "src/managed/settlement/keys/$c.verifier")
+            sizes="$sizes $c: $((p / 1024 / 1024)) MiB (verifier $v B);"
+          done
+          echo "::notice title=settlement keys::built in $((SECONDS - start))s;$sizes"
+          n=$(ls src/managed/settlement/keys/*.verifier | wc -l)
+          total=$(cat src/managed/settlement/keys/*.verifier | wc -c)
+          echo "::notice title=settlement deploy size::$n circuits, verifier keys $total bytes in all"
+          if [ "$n" -gt 12 ]; then
+            echo "::error title=settlement circuits::$n circuits; at most 12 fit in a deploy transaction"
+            exit 1
+          fi

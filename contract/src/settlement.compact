@@ -1,0 +1,880 @@
+// Starfall with private, automatic settlement (docs/SETTLEMENT.md).
+//
+// Same game and draw as Lunardraw v0 (7 from 35 + a Moonball from 20, a sealed
+// organiser seed and Nightcast's VRF embedded), but nobody claims a prize:
+//
+//   1. A ticket is one line. Its buyer publishes a commitment to it and the
+//      same ticket encrypted to the settlement key, and proves in the purchase
+//      that both hold the same valid ticket. The ticket also fixes who gets
+//      its prize: up to three addresses with shares.
+//   2. Tickets are numbered 0, 1, 2, ... per draw as they're bought; the count
+//      is frozen when sales close.
+//   3. After the numbers are drawn, whoever holds the settlement key decrypts
+//      the tickets and settles them in order, a batch at a time. Each batch
+//      proof shows every ticket in it matches the commitment stored at its
+//      index, and counts the winners per division. Only the totals and each
+//      winning ticket's division and payees become public, under an id that
+//      can't be linked to the ticket. No numbers are ever disclosed.
+//   4. When the last ticket is settled, anyone finalises the draw: the prize
+//      per division follows from the counts by Powerball's rules, the operator
+//      fee is paid, and an unwon jackpot rolls over. Then anyone pays each
+//      entitlement to its payees. Nobody presses a claim button.
+//   5. If settlement isn't complete by the settlement deadline, the draw is
+//      void and anyone can refund every ticket to the address given at
+//      purchase. A draw is never redrawn.
+//
+// Correctness never depends on the settler: a batch with a missing, extra,
+// repeated, reordered or altered ticket has no valid proof, and the draw's
+// numbers are read from the ledger. The settler does see the tickets it
+// decrypts (stage 1); a TEE or MPC committee holding the settlement key
+// removes that later without changing this contract.
+//
+// A deploy transaction carries every circuit's verifier key and has to fit
+// Midnight's block limits: 12 circuits fit, 16 were rejected. This contract
+// has exactly 12, so circuits are merged by role as in v0 (acceptOracleKey
+// also approves a hand-over, changeOrganiser proposes, accepts and recovers,
+// requestDraw(0, ...) opens a draw, finaliseDraw pays the operator fee).
+// Syndicates (six more circuits) wait for a later contract: branch
+// starfall-syndicates.
+
+pragma language_version >= 0.22 && < 0.24;
+
+import CompactStandardLibrary;
+include "vrf";
+include "draw";
+import NightcastVrf;
+import StarfallDraw;
+
+export { Numbers };
+
+// ---------------------------------------------------------------- types
+
+export enum DrawStatus { open, requested, fulfilled, drawn, settled, voided }
+
+// One Starfall line: 7 numbers from 1..35 in increasing order, and a
+// Moonball from 1..20.
+export struct Line {
+  numbers: Vector<7, Uint<8>>;
+  moonball: Uint<8>;
+}
+
+// A share of a ticket's prize, in basis points (10000 = all of it).
+export struct Payee {
+  address: UserAddress;
+  share: Uint<16>;
+}
+
+// What a ticket commits to. Payees after the first may be empty (share 0 and
+// an all-zero address); the shares add up to 10000. Known to the buyer, and
+// to the settlement key holder once decrypted.
+export struct TicketPreimage {
+  drawId: Uint<32>;
+  line: Line;
+  payees: Vector<3, Payee>;
+  salt: Bytes<32>;
+}
+
+// A ticket encrypted to the settlement key: ephemeral = r*G, and each packed
+// field of the ticket plus a keystream from the shared point r*K.
+export struct SealedTicket {
+  ephemeral: JubjubPoint;
+  body: Vector<9, Field>;
+}
+
+export struct TicketRecord {
+  commitment: Bytes<32>;
+  // Where a refund goes if the draw is void (public, chosen by the buyer).
+  refundTo: UserAddress;
+  cipher: SealedTicket;
+  refunded: Boolean;
+}
+
+struct TicketHashInput {
+  domain: Bytes<32>;
+  deployment: ContractAddress;
+  ticket: TicketPreimage;
+}
+
+struct AlphaPreimage {
+  domain: Bytes<32>;
+  deployment: ContractAddress;
+  drawId: Uint<32>;
+  seed: Bytes<32>;
+}
+
+struct EntitlementPreimage {
+  domain: Bytes<32>;
+  commitment: Bytes<32>;
+  salt: Bytes<32>;
+}
+
+// Changes only when the draw moves to its next stage.
+export struct Draw {
+  status: DrawStatus;
+  // Seconds since the epoch.
+  salesClose: Uint<64>;
+  revealDeadline: Uint<64>;
+  drawDeadline: Uint<64>;
+  // Last moment to compute the numbers; once they are, settlement must be
+  // complete by this time (settleWindow after the numbers).
+  settleDeadline: Uint<64>;
+  // SHA-256(seedHex), published before sales; the seed after they close.
+  seedCommitment: Bytes<32>;
+  seed: Bytes<32>;
+  // The oracle key the draw was bound to when it opened, and the VRF input
+  // point once the seed is revealed.
+  point: JubjubPoint;
+  oracleKey: JubjubPoint;
+  output: Bytes<32>;
+  numbers: Vector<7, Uint<8>>;
+  moonball: Uint<8>;
+  // Rollover from earlier draws added to this draw's division 1 (the
+  // jackpot), and the operator's fee from its sales, both fixed when the draw
+  // is finalised.
+  carried: Uint<128>;
+  fee: Uint<128>;
+  // Each division's prize per winning ticket, once finalised.
+  prizes: Vector<9, Uint<128>>;
+}
+
+// How far a draw's settlement has got.
+export struct Progress {
+  // Index of the next ticket to settle; settlement is complete when this
+  // reaches the draw's ticket count.
+  next: Uint<64>;
+  // Winning tickets per division so far (division 1 first).
+  winners: Vector<9, Uint<64>>;
+}
+
+// A winning ticket's prize: its division and the payees it named. Keyed by
+// an id derived from the ticket's commitment and secret salt, so it can't be
+// linked to the purchase.
+export struct Entitlement {
+  drawId: Uint<32>;
+  // 1 (7 + Moonball) to 9 (2 + Moonball).
+  division: Uint<8>;
+  payees: Vector<3, Payee>;
+  paid: Boolean;
+}
+
+// The next draw to open when a draw's seed is revealed.
+export struct NextDraw {
+  salesClose: Uint<64>;
+  seedCommitment: Bytes<32>;
+}
+
+// A batch slot: the ticket the settler supplied and its offset in the batch.
+struct Slot {
+  ticket: TicketPreimage;
+  offset: Uint<64>;
+}
+
+// A settled slot: its division (0 for no prize or an empty slot), and for a
+// winner the entitlement id and payees to record.
+struct Settled {
+  division: Uint<8>;
+  id: Bytes<32>;
+  payees: Vector<3, Payee>;
+}
+
+include "batch";
+
+// --------------------------------------------------------------- ledger
+
+export ledger draws: Map<Uint<32>, Draw>;
+// The newest draw's number (0 before the first).
+export ledger lastDraw: Uint<32>;
+// Tickets sold per draw; also the index the next ticket gets.
+export ledger ticketCount: Map<Uint<32>, Uint<64>>;
+// Every ticket, keyed by ticketKey(draw, index).
+export ledger tickets: Map<Uint<64>, TicketRecord>;
+// Commitments already bought, so no ticket is sold (or settled) twice.
+export ledger ticketCommitments: Set<Bytes<32>>;
+export ledger progress: Map<Uint<32>, Progress>;
+export ledger entitlements: Map<Bytes<32>, Entitlement>;
+// Seed commitments already used, so a revealed seed can't be reused.
+export ledger usedCommitments: Set<Bytes<32>>;
+// Rollover waiting for the next draw to be finalised.
+export ledger carry: Uint<128>;
+// The oracle key new draws are bound to. Each draw copies it when it opens,
+// so a later change never touches a draw that is selling or in progress.
+export ledger oracleKey: JubjubPoint;
+export ledger oracleKeyReady: Boolean;
+// A proposed replacement key, the earliest time it may take effect (block time
+// at the proposal plus oracleKeyDelay), and whether the current oracle has
+// agreed to it (which lifts the wait).
+export ledger proposedOracleKey: Maybe<JubjubPoint>;
+export ledger oracleKeyChangeAt: Uint<64>;
+export ledger oracleKeyApproved: Boolean;
+// How long a proposed oracle key must wait before it can be accepted: longer
+// than any draw can sell for, so a change is visible on chain for longer than
+// one draw and can't be slipped in quietly. Set at deployment.
+export sealed ledger oracleKeyDelay: Uint<64>;
+// Commitment to the organiser's secret (see organiserCommitmentOf), a
+// proposed replacement, and a backup organiser that can take over at any time.
+export ledger organiser: Bytes<32>;
+export ledger proposedOrganiser: Maybe<Bytes<32>>;
+export sealed ledger backupOrganiser: Bytes<32>;
+// Public key the tickets are encrypted to: the settler's (stage 1), a TEE's
+// or an MPC committee's joint key later.
+export sealed ledger settlementKey: JubjubPoint;
+// Where the operator fee goes, and the fee per game (one line), in STAR: a
+// flat amount out of each game's price, so a ticket of several lines pays it
+// several times. The rest of the price is the prize pool's. Starfall's
+// numbers: a game costs 1.2 tNIGHT, 1 tNIGHT to the pool and 0.2 to the
+// operator.
+export sealed ledger operator: UserAddress;
+export sealed ledger feePerGame: Uint<128>;
+// Price of one ticket (one line), in STAR (1 tNIGHT = 1,000,000 STAR).
+export sealed ledger ticketPrice: Uint<128>;
+// Shortest and longest time a draw may sell tickets for, from when it opens.
+export sealed ledger minSales: Uint<64>;
+export sealed ledger maxSales: Uint<64>;
+// Windows after sales close, and for settlement after the numbers, in seconds.
+export sealed ledger revealWindow: Uint<64>;
+export sealed ledger drawWindow: Uint<64>;
+export sealed ledger settleWindow: Uint<64>;
+
+// -------------------------------------------------------------- witnesses
+//
+// The purchase and settlement witnesses (newTickets, sealingRandomnessFor,
+// settlementBatch) are declared in batch.compact with their sizes.
+
+witness oracleSecretKey(): Field;
+witness organiserSecret(): Bytes<32>;
+// floor(n / d) and n mod d for prize arithmetic.
+witness divModWide(n: Field, d: Uint<128>): [Uint<128>, Uint<128>];
+
+// ----------------------------------------------------------- constructor
+
+constructor(key: JubjubPoint, organiserCommitment: Bytes<32>, backupCommitment: Bytes<32>,
+            sealingKey: JubjubPoint, operatorAddress: UserAddress, fee: Uint<128>, price: Uint<128>,
+            salesMin: Uint<64>, salesMax: Uint<64>,
+            reveal: Uint<64>, draw: Uint<64>, settle: Uint<64>) {
+  assert(price > 0, "ticket price must be positive");
+  assert(fee < price, "operator fee per game must be below the ticket price");
+  assert(!isIdentity(sealingKey), "identity settlement key not allowed");
+  assert(salesMin >= 60 && salesMin < salesMax && salesMax <= 7776000, "sales period must be 60 seconds to 90 days");
+  assert(reveal >= 60 && draw >= 60, "reveal and draw windows must be at least 60 seconds");
+  assert(settle >= 3600, "settlement window must be at least an hour");
+  assert(organiserCommitment != backupCommitment, "the backup organiser must differ from the organiser");
+  proposedOracleKey = some<JubjubPoint>(disclose(key));
+  oracleKeyChangeAt = 0;
+  oracleKeyApproved = false;
+  // The first key has no wait: nothing can be bound to it until it's accepted.
+  oracleKeyDelay = disclose((salesMax + reveal) as Uint<64>);
+  organiser = disclose(organiserCommitment);
+  proposedOrganiser = none<Bytes<32>>();
+  backupOrganiser = disclose(backupCommitment);
+  settlementKey = disclose(sealingKey);
+  operator = disclose(operatorAddress);
+  feePerGame = disclose(fee);
+  ticketPrice = disclose(price);
+  minSales = disclose(salesMin);
+  maxSales = disclose(salesMax);
+  revealWindow = disclose(reveal);
+  drawWindow = disclose(draw);
+  settleWindow = disclose(settle);
+}
+
+// ------------------------------------------------------- pure functions
+
+export pure circuit organiserCommitmentOf(secret: Bytes<32>): Bytes<32> {
+  return persistentHash<[Bytes<32>, Bytes<32>]>([pad(32, "starfall:organiser:v1"), secret]);
+}
+
+export pure circuit ticketCommitment(deployment: ContractAddress, t: TicketPreimage): Bytes<32> {
+  return persistentHash<TicketHashInput>(TicketHashInput {
+    domain: pad(32, "starfall:ticket:v1"),
+    deployment: deployment,
+    ticket: t
+  });
+}
+
+// The id a winning ticket's entitlement is stored under. Needs the ticket's
+// secret salt, so nobody else can tell which purchase it came from.
+export pure circuit entitlementId(commitment: Bytes<32>, salt: Bytes<32>): Bytes<32> {
+  return persistentHash<EntitlementPreimage>(EntitlementPreimage {
+    domain: pad(32, "starfall:entitlement:v1"),
+    commitment: commitment,
+    salt: salt
+  });
+}
+
+// The draw's VRF input.
+export pure circuit drawAlpha(deployment: ContractAddress, drawId: Uint<32>, seed: Bytes<32>): Bytes<32> {
+  return persistentHash<AlphaPreimage>(AlphaPreimage {
+    domain: pad(32, "starfall:alpha:v1"),
+    deployment: deployment,
+    drawId: drawId,
+    seed: seed
+  });
+}
+
+// Key of a draw's ticket in `tickets`.
+export pure circuit ticketKey(drawId: Uint<32>, index: Uint<64>): Uint<64> {
+  return ((drawId as Uint<64>) * 4294967296 + index) as Uint<64>;
+}
+
+pure circuit validLine(l: Line): Boolean {
+  const n = l.numbers;
+  return n[0] >= 1 && n[0] < n[1] && n[1] < n[2] && n[2] < n[3] && n[3] < n[4] && n[4] < n[5] && n[5] < n[6]
+    && n[6] <= 35 && l.moonball >= 1 && l.moonball <= 20;
+}
+
+// Each payee is an address with a share, or empty (share 0, zero address).
+pure circuit validPayees(p: Vector<3, Payee>): Boolean {
+  const total = fold((acc: Uint<32>, x: Payee): Uint<32> => (acc + x.share) as Uint<32>, 0, p);
+  const tidy = fold((acc: Boolean, x: Payee): Boolean => acc && (x.share > 0 || x.address == default<UserAddress>),
+                    true, p);
+  return total == 10000 && p[0].share > 0 && tidy;
+}
+
+export pure circuit validTicket(t: TicketPreimage): Boolean {
+  return validLine(t.line) && validPayees(t.payees);
+}
+
+pure circuit has(v: Vector<7, Uint<8>>, n: Uint<8>): Boolean {
+  return fold((acc: Boolean, x: Uint<8>): Boolean => acc || x == n, false, v);
+}
+
+// Division for a line against a draw's numbers, or 0 for no prize. Lines have
+// distinct numbers (validLine), so no number is counted twice.
+export pure circuit divisionOf(l: Line, numbers: Vector<7, Uint<8>>, moonball: Uint<8>): Uint<8> {
+  const m = fold((acc: Uint<8>, x: Uint<8>): Uint<8> => has(numbers, x) ? (acc + 1) as Uint<8> : acc, 0, l.numbers);
+  const mb = l.moonball == moonball;
+  return m == 7 ? (mb ? 1 : 2)
+       : m == 6 ? (mb ? 3 : 4)
+       : m == 5 ? (mb ? 5 : 7)
+       : m == 4 ? (mb ? 6 : 0)
+       : m == 3 ? (mb ? 8 : 0)
+       : m == 2 ? (mb ? 9 : 0)
+       : 0;
+}
+
+// --------------------------------------------------- ticket encryption
+//
+// A ticket packs into 9 field elements: the line and the three 2-byte shares
+// (14 bytes), each payee address as two 16-byte halves, and the salt as two.
+// Encryption is ElGamal-style key agreement on Jubjub (the curve Nightcast's
+// VRF uses) with a Poseidon keystream: ephemeral R = r*G, shared S = r*K, and
+// body[i] = packed[i] + Poseidon(S.x, S.y, i). The settlement key holder
+// recovers S = k*R. Keeping this in circuits means off-chain code never
+// reimplements it.
+
+pure circuit lo16(b: Bytes<32>): Field {
+  return slice<16>(b, 0) as Field;
+}
+
+pure circuit hi16(b: Bytes<32>): Field {
+  return slice<16>(b, 16) as Field;
+}
+
+pure circuit join16(lo: Field, hi: Field): Bytes<32> {
+  const v: Vector<32, Uint<8>> = [...((lo as Bytes<16>) as Vector<16, Uint<8>>), ...((hi as Bytes<16>) as Vector<16, Uint<8>>)];
+  return v as Bytes<32>;
+}
+
+pure circuit shareBytes(p: Payee): Vector<2, Uint<8>> {
+  return (p.share as Bytes<2>) as Vector<2, Uint<8>>;
+}
+
+pure circuit packTicket(t: TicketPreimage): Vector<9, Field> {
+  const head: Vector<14, Uint<8>> = [...t.line.numbers, t.line.moonball,
+                                     ...shareBytes(t.payees[0]), ...shareBytes(t.payees[1]), ...shareBytes(t.payees[2])];
+  return [
+    (head as Bytes<14>) as Field,
+    lo16(t.payees[0].address.bytes), hi16(t.payees[0].address.bytes),
+    lo16(t.payees[1].address.bytes), hi16(t.payees[1].address.bytes),
+    lo16(t.payees[2].address.bytes), hi16(t.payees[2].address.bytes),
+    lo16(t.salt), hi16(t.salt)
+  ];
+}
+
+pure circuit unpackPayee(b0: Uint<8>, b1: Uint<8>, lo: Field, hi: Field): Payee {
+  return Payee {
+    address: UserAddress { bytes: join16(lo, hi) },
+    share: ([b0, b1] as Bytes<2>) as Uint<16>
+  };
+}
+
+pure circuit unpackTicket(drawId: Uint<32>, f: Vector<9, Field>): TicketPreimage {
+  const h = (f[0] as Bytes<14>) as Vector<14, Uint<8>>;
+  return TicketPreimage {
+    drawId: drawId,
+    line: Line { numbers: [h[0], h[1], h[2], h[3], h[4], h[5], h[6]], moonball: h[7] },
+    payees: [unpackPayee(h[8], h[9], f[1], f[2]), unpackPayee(h[10], h[11], f[3], f[4]), unpackPayee(h[12], h[13], f[5], f[6])],
+    salt: join16(f[7], f[8])
+  };
+}
+
+pure circuit keystream(shared: JubjubPoint): Vector<9, Field> {
+  const x = jubjubPointX(shared);
+  const y = jubjubPointY(shared);
+  return map((i: Field): Field => transientHash<[Field, Field, Field]>([x, y, i]), [0, 1, 2, 3, 4, 5, 6, 7, 8]);
+}
+
+// Encrypt a ticket to `key` with randomness r.
+export pure circuit sealTicket(key: JubjubPoint, r: Field, t: TicketPreimage): SealedTicket {
+  const k = keystream(ecMul(key, r));
+  return SealedTicket {
+    ephemeral: ecMulGenerator(r),
+    body: map((m: Field, s: Field): Field => m + s, packTicket(t), k)
+  };
+}
+
+// Decrypt a sealed ticket with the settlement secret (off-chain, by the settler).
+export pure circuit openTicket(secret: Field, drawId: Uint<32>, s: SealedTicket): TicketPreimage {
+  const k = keystream(ecMul(s.ephemeral, secret));
+  return unpackTicket(drawId, map((c: Field, x: Field): Field => c - x, s.body, k));
+}
+
+export pure circuit settlementPublicKey(secret: Field): JubjubPoint {
+  return ecMulGenerator(secret);
+}
+
+// ------------------------------------------------------------- helpers
+
+circuit assertOrganiser(): [] {
+  assert(disclose(organiserCommitmentOf(organiserSecret()) == organiser), "not the organiser");
+}
+
+circuit drawFor(n: Uint<32>): Draw {
+  assert(draws.member(n), "unknown draw");
+  return draws.lookup(n);
+}
+
+// floor(n / d), checked. Sound while q*d + r can't wrap the field: here d is
+// at most a 64-bit count or 10000, and q and r are 128-bit.
+circuit quotient(n: Field, d: Uint<128>): Uint<128> {
+  const qr = disclose(divModWide(n, d));
+  assert(qr[1] < d, "bad remainder");
+  assert((qr[0] as Field) * (d as Field) + (qr[1] as Field) == n, "bad quotient");
+  return qr[0];
+}
+
+// The caller's clock `now` must be within `tolerance` seconds of block time.
+circuit assertClose(now: Uint<64>, tolerance: Uint<64>): [] {
+  assert(now > tolerance, "bad time");
+  assert(now < 18446744073709550000, "bad time");
+  assert(blockTimeGte((now - tolerance) as Uint<64>) && blockTimeLt((now + tolerance) as Uint<64>),
+         "clock is too far from block time");
+}
+
+// Division shares of the prize pool in basis points: Australian Powerball's
+// published allocation (The Lott, from draw 1410, 25 May 2023):
+// 33.5% / 1.85 / 2.3 / 2.0 / 1.5 / 9.4 / 7.3 / 15.5 / 26.65%.
+pure circuit shares(): Vector<9, Uint<16>> {
+  return [3350, 185, 230, 200, 150, 940, 730, 1550, 2665];
+}
+
+// Running state while prizes are worked out division by division.
+struct PrizeCalc {
+  // Prize per winning ticket so far (division 1 first).
+  prizes: Vector<9, Uint<128>>;
+  // Money from unwon divisions 2..8 falling to the next lower division with a winner.
+  cascade: Uint<128>;
+  // What rolls over to the next draw: an unwon jackpot, an unwon division 9
+  // (plus anything cascading into it) and rounding remainders.
+  carry: Uint<128>;
+  // The pool given out to divisions so far; what the floored shares leave
+  // over (at most 8 STAR) rolls over too.
+  allocated: Uint<128>;
+}
+
+pure circuit noWinners(): Vector<9, Uint<64>> {
+  return [0, 0, 0, 0, 0, 0, 0, 0, 0];
+}
+
+// ---------------------------------------------------------------- oracle
+//
+// The oracle and organiser circuits each do more than one thing, chosen by
+// which secret the caller holds (as in v0), to stay within 12 circuits.
+
+// Called by the holder of the *proposed* key: activates it, proving it holds
+// the secret. The first key is accepted at once. A replacement waits
+// oracleKeyDelay from its proposal, unless the current oracle approved it.
+// Called by the *current* oracle while a different key is proposed: approves
+// the change (a planned hand-over), so it needn't wait. Draws keep the key
+// they opened with.
+export circuit acceptOracleKey(): [] {
+  assert(proposedOracleKey.is_some, "no key proposed");
+  const key = proposedOracleKey.value;
+  assert(!isIdentity(key), "identity key not allowed");
+  const pk = publicKey(oracleSecretKey());
+  const isCurrent = disclose(sameKey(pk, oracleKey));
+  const approving = oracleKeyReady && isCurrent && !sameKey(oracleKey, key);
+  if (approving) {
+    oracleKeyApproved = true;
+  } else {
+    assert(disclose(sameKey(pk, key)), "secret does not match the proposed key");
+    if (oracleKeyReady && !oracleKeyApproved) {
+      assert(blockTimeGte(oracleKeyChangeAt), "the new oracle key is still waiting");
+    }
+    oracleKey = key;
+    oracleKeyReady = true;
+    proposedOracleKey = none<JubjubPoint>();
+    oracleKeyApproved = false;
+  }
+}
+
+// The organiser proposes a new oracle key (e.g. after a loss or compromise).
+// `now` is the caller's clock, within 10 minutes of block time; the key can be
+// accepted from now + oracleKeyDelay, or sooner if the current oracle agrees.
+// Proposing again restarts the wait, so the organiser can't shorten it.
+export circuit proposeOracleKey(key: JubjubPoint, now: Uint<64>): [] {
+  assertOrganiser();
+  const t = disclose(now);
+  assertClose(t, 600);
+  proposedOracleKey = some<JubjubPoint>(disclose(key));
+  oracleKeyChangeAt = (t + oracleKeyDelay) as Uint<64>;
+  oracleKeyApproved = false;
+}
+
+// ------------------------------------------------------------- organiser
+
+// Who the organiser is, by the secret the caller holds:
+// - the backup organiser (a secret kept offline) installs `commitment` as the
+//   organiser at once: after a lost or leaked organiser secret, or a keeper
+//   that has stopped for good. The backup itself can't become the organiser,
+//   so it stays offline;
+// - the holder of a proposed organiser secret accepts the hand-over
+//   (`commitment` must be its own);
+// - the organiser proposes `commitment` as its successor.
+export circuit changeOrganiser(commitment: Bytes<32>): [] {
+  const mine = disclose(organiserCommitmentOf(organiserSecret()));
+  const c = disclose(commitment);
+  assert(c != backupOrganiser, "the backup organiser can't be the organiser");
+  if (mine == backupOrganiser) {
+    organiser = c;
+    proposedOrganiser = none<Bytes<32>>();
+  } else if (proposedOrganiser.is_some && mine == proposedOrganiser.value) {
+    assert(c == mine, "to accept, pass your own commitment");
+    organiser = mine;
+    proposedOrganiser = none<Bytes<32>>();
+  } else {
+    assert(mine == organiser, "not the organiser");
+    proposedOrganiser = some<Bytes<32>>(c);
+  }
+}
+
+// ----------------------------------------------------------------- draws
+
+// Open draw lastDraw + 1, selling tickets until `close`. Only one draw sells
+// at a time, and the sales period must be between minSales and maxSales from
+// now, so nobody can slip in a short draw at a quiet moment. The draw is bound
+// to the active oracle key from the start, so buyers can see which key will
+// answer it and no key change can reach it.
+circuit openNext(close: Uint<64>, commitment: Bytes<32>): Uint<32> {
+  assert(oracleKeyReady, "no active oracle key");
+  if (lastDraw != 0) {
+    assert(draws.lookup(lastDraw).status != DrawStatus.open, "the previous draw is still selling");
+  }
+  assert(close > maxSales, "sales close is out of range");
+  assert(blockTimeLt(close - minSales), "sales period is too short");
+  assert(blockTimeGte(close - maxSales), "sales period is too long");
+  assert(!usedCommitments.member(commitment), "seed commitment already used");
+  const id = (lastDraw + 1) as Uint<32>;
+  const reveal = (close + revealWindow) as Uint<64>;
+  const drawBy = (reveal + drawWindow) as Uint<64>;
+  draws.insert(id, Draw {
+    status: DrawStatus.open,
+    salesClose: close,
+    revealDeadline: reveal,
+    drawDeadline: drawBy,
+    settleDeadline: (drawBy + settleWindow) as Uint<64>,
+    seedCommitment: commitment,
+    seed: default<Bytes<32>>,
+    point: default<JubjubPoint>,
+    oracleKey: oracleKey,
+    output: default<Bytes<32>>,
+    numbers: [0, 0, 0, 0, 0, 0, 0],
+    moonball: 0,
+    carried: 0,
+    fee: 0,
+    prizes: [0, 0, 0, 0, 0, 0, 0, 0, 0]
+  });
+  ticketCount.insert(id, 0);
+  progress.insert(id, Progress { next: 0, winners: noWinners() });
+  usedCommitments.insert(commitment);
+  lastDraw = id;
+  return id;
+}
+
+// Buy 1 to maxGames() tickets (one line each) for an open draw in one
+// transaction, paying the ticket price for each: a single game, a QuickPick
+// package a few games at a time, or several chosen lines. Each game is a
+// ticket of its own, with its own index, and settles like any other. For each
+// one, publishes the commitment and the ticket encrypted to the settlement
+// key; the proof shows both hold the same valid ticket. Refunds of a void draw
+// go to `refundTo`. Returns the index of the first ticket bought.
+export circuit buyTickets(count: Uint<8>, refundTo: UserAddress): Uint<64> {
+  const n = disclose(count);
+  assert(n >= 1 && n <= maxGames(), "1 to maxGames() games per purchase");
+  const ts = newTickets();
+  const rs = sealingRandomnessFor();
+  const id = disclose(ts[0].drawId);
+  const d = drawFor(id);
+  assert(d.status == DrawStatus.open, "draw is not open");
+  assert(blockTimeLt(d.salesClose), "sales have closed");
+  const first = ticketCount.lookup(id);
+  assert(first + (n as Uint<64>) <= 4294967295, "draw is full");
+  receiveUnshielded(nativeToken(), (ticketPrice * n) as Uint<128>);
+  const to = disclose(refundTo);
+  for (const j of gameSlots()) {
+    if (j < n) {
+      const t = ts[j];
+      assert(disclose(validTicket(t) && t.drawId == id), "invalid ticket");
+      const c = disclose(ticketCommitment(kernel.self(), t));
+      assert(!ticketCommitments.member(c), "ticket already bought");
+      ticketCommitments.insert(c);
+      tickets.insert(ticketKey(id, (first + (j as Uint<64>)) as Uint<64>), TicketRecord {
+        commitment: c,
+        refundTo: to,
+        cipher: disclose(sealTicket(settlementKey, rs[j], t)),
+        refunded: false
+      });
+    }
+  }
+  ticketCount.insert(id, (first + (n as Uint<64>)) as Uint<64>);
+  return first;
+}
+
+// After sales close, the organiser reveals draw n's seed, fixing the draw's
+// VRF input, and can open the next draw in the same transaction. With n = 0
+// nothing is revealed and `next` just opens a draw: the first one, or one
+// after a draw that wasn't followed (its seed was revealed without a next
+// draw, or it was void). Only the organiser may reveal: it can't evaluate the
+// VRF, so it gains nothing from the freedom Compact's in-circuit hashToCurve
+// may allow (Nightcast SPEC §2), whereas the oracle could use that freedom to
+// pick an outcome.
+export circuit requestDraw(n: Uint<32>, seed: Bytes<32>, next: Maybe<NextDraw>): [] {
+  assertOrganiser();
+  const id = disclose(n);
+  const nx = disclose(next);
+  if (id == 0) {
+    assert(nx.is_some, "nothing to do");
+  } else {
+    const s = disclose(seed);
+    const d = drawFor(id);
+    assert(d.status == DrawStatus.open, "draw is not open");
+    assert(blockTimeGte(d.salesClose), "sales are still open");
+    assert(blockTimeLt(d.revealDeadline), "reveal deadline has passed");
+    assert(seedCommitmentOf(s) == d.seedCommitment, "seed does not match the commitment");
+    draws.insert(id, Draw {
+      ...d,
+      status: DrawStatus.requested,
+      seed: s,
+      point: inputPoint(drawAlpha(kernel.self(), id, s))
+    });
+  }
+  if (nx.is_some) {
+    openNext(nx.value.salesClose, nx.value.seedCommitment);
+  }
+}
+
+// The oracle answers: the output is fixed by its key and the stored point.
+export circuit fulfilDraw(n: Uint<32>): Bytes<32> {
+  const id = disclose(n);
+  const d = drawFor(id);
+  assert(d.status == DrawStatus.requested, "draw is not requested");
+  assert(blockTimeLt(d.drawDeadline), "draw deadline has passed");
+  const sk = oracleSecretKey();
+  assert(disclose(sameKey(publicKey(sk), d.oracleKey)), "not the oracle for this draw");
+  const out = disclose(evaluateAt(sk, d.point));
+  draws.insert(id, Draw { ...d, status: DrawStatus.fulfilled, output: out });
+  return out;
+}
+
+// Anyone turns the output into numbers with the site's rule, before the
+// settlement deadline; settlement then has settleWindow from `now` (the
+// caller's clock, within 30 minutes of block time, so a slow numbers proof
+// still lands; the stamp only moves the settlement deadline).
+export circuit computeNumbers(n: Uint<32>, now: Uint<64>): Numbers {
+  const id = disclose(n);
+  const t = disclose(now);
+  const d = drawFor(id);
+  assert(d.status == DrawStatus.fulfilled, "draw is not fulfilled");
+  assert(blockTimeLt(d.settleDeadline), "too late to compute the numbers");
+  assertClose(t, 1800);
+  const nums = disclose(numbersOf(drawSeedOf(d.seed, d.output)));
+  draws.insert(id, Draw {
+    ...d,
+    status: DrawStatus.drawn,
+    numbers: nums.main,
+    moonball: nums.moonball,
+    settleDeadline: (t + settleWindow) as Uint<64>
+  });
+  return nums;
+}
+
+// ------------------------------------------------------------ settlement
+
+// Settle the draw's next batch of tickets, in index order. The settler
+// supplies the decrypted tickets (witness); each must match the commitment
+// stored at its index. Counts the winners per division and records each
+// winning ticket's entitlement. Discloses no ticket's numbers. Anyone holding
+// the decrypted tickets may call this; a wrong ticket only makes the proof
+// fail. Returns the index of the next ticket to settle.
+export circuit settleBatch(n: Uint<32>): Uint<64> {
+  const id = disclose(n);
+  const d = drawFor(id);
+  assert(d.status == DrawStatus.drawn, "draw is not drawn");
+  assert(blockTimeLt(d.settleDeadline), "settlement deadline has passed");
+  const p = progress.lookup(id);
+  const total = ticketCount.lookup(id);
+  assert(p.next < total, "every ticket is already settled");
+  const slots = map((t: TicketPreimage, o: Uint<64>): Slot => Slot { ticket: t, offset: o },
+                    settlementBatch(id, p.next), batchSlots());
+
+  // Check every ticket against the commitment stored at its index and work
+  // out its division. Every slot reads the ledger the same way whether or not
+  // its ticket won, so the public transcript doesn't show which one did.
+  const settled = map((s: Slot): Settled => {
+    const index = (p.next + s.offset) as Uint<64>;
+    if (index < total) {
+      const rec = tickets.lookup(ticketKey(id, index));
+      assert(disclose(ticketCommitment(kernel.self(), s.ticket) == rec.commitment),
+             "ticket does not match its commitment");
+      return Settled {
+        division: divisionOf(s.ticket.line, d.numbers, d.moonball),
+        id: entitlementId(rec.commitment, s.ticket.salt),
+        payees: s.ticket.payees
+      };
+    }
+    return Settled { division: 0, id: default<Bytes<32>>, payees: default<Vector<3, Payee>> };
+  }, slots);
+
+  // Record the winners, after all the reads. An entitlement's id needs the
+  // ticket's secret salt, so it can't be linked to the purchase.
+  for (const w of settled) {
+    if (disclose(w.division) != 0) {
+      entitlements.insert(disclose(w.id), Entitlement {
+        drawId: id,
+        division: disclose(w.division),
+        payees: disclose(w.payees),
+        paid: false
+      });
+    }
+  }
+
+  const added = map((div: Uint<8>): Uint<64> =>
+                      fold((acc: Uint<64>, w: Settled): Uint<64> => disclose(w.division) == div ? (acc + 1) as Uint<64> : acc,
+                           0, settled),
+                    [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  const after = (p.next + batchSize()) as Uint<64>;
+  const next = after < total ? after : total;
+  progress.insert(id, Progress {
+    next: next,
+    winners: map((a: Uint<64>, b: Uint<64>): Uint<64> => (a + b) as Uint<64>, p.winners, added)
+  });
+  return next;
+}
+
+// Once every ticket is settled, anyone fixes each division's prize per
+// winning ticket and pays the draw's operator fee (feePerGame per ticket sold,
+// off sales first). Draws are finalised in order: the previous draw must be
+// settled or void, and then all the rollover so far joins this draw's jackpot.
+export circuit finaliseDraw(n: Uint<32>): [] {
+  const id = disclose(n);
+  const d = drawFor(id);
+  assert(d.status == DrawStatus.drawn, "draw is not drawn");
+  assert(blockTimeLt(d.settleDeadline), "settlement deadline has passed");
+  const p = progress.lookup(id);
+  const total = ticketCount.lookup(id);
+  assert(p.next == total, "not every ticket is settled");
+  if (id > 1) {
+    const prev = draws.lookup((id - 1) as Uint<32>).status;
+    assert(prev == DrawStatus.settled || prev == DrawStatus.voided, "the previous draw isn't finalised yet");
+  }
+  const carried = carry;
+  const sales = (ticketPrice * total) as Uint<128>;
+  const fee = (feePerGame * total) as Uint<128>;
+  const pool = (sales - fee) as Uint<128>;
+  // Powerball's rules: each division gets its share of the pool; the rollover
+  // (jackpot) joins division 1 only; an unwon division 2..8 falls to the next
+  // lower division with a winner; an unwon division 1 or 9, and rounding
+  // remainders, roll over to the next draw. Divide by 1, not 0, for a
+  // division nobody won; the result is then dropped.
+  const calc = fold((acc: PrizeCalc, bp: Uint<16>, w: Uint<64>, j: Uint<8>): PrizeCalc => {
+    const share = quotient((pool as Field) * (bp as Field), 10000);
+    const amount = (share + (j == 0 ? carried : acc.cascade)) as Uint<128>;
+    const perTicket = quotient(amount as Field, w == 0 ? 1 : w);
+    const won = w != 0;
+    const remainder = won ? (amount - perTicket * w) as Uint<128> : 0;
+    const toCarry = (won || (j > 0 && j < 8)) ? remainder : amount;
+    return PrizeCalc {
+      prizes: map((x: Uint<128>, k: Uint<8>): Uint<128> => k == j ? (won ? perTicket : 0) : x,
+                  acc.prizes, [0, 1, 2, 3, 4, 5, 6, 7, 8]),
+      cascade: (won || j == 0 || j == 8) ? 0 : amount,
+      carry: (acc.carry + toCarry) as Uint<128>,
+      allocated: (acc.allocated + share) as Uint<128>
+    };
+  }, PrizeCalc { prizes: [0, 0, 0, 0, 0, 0, 0, 0, 0], cascade: 0, carry: 0, allocated: 0 },
+     shares(), p.winners, [0, 1, 2, 3, 4, 5, 6, 7, 8]);
+  carry = (calc.carry + (pool - calc.allocated)) as Uint<128>;
+  draws.insert(id, Draw { ...d, status: DrawStatus.settled, carried: carried, fee: fee, prizes: calc.prizes });
+  if (fee > 0) {
+    sendUnshielded(nativeToken(), fee, right<ContractAddress, UserAddress>(operator));
+  }
+}
+
+// Pay a winning ticket's prize to its payees. Anyone may call this (a keeper
+// does, for every entitlement); each entitlement is paid once. Each payee
+// after the first gets floor(prize * share / 10000) and the first gets the
+// rest, so the prize is paid exactly.
+export circuit payEntitlement(id: Bytes<32>): [] {
+  const eid = disclose(id);
+  assert(entitlements.member(eid), "unknown entitlement");
+  const e = entitlements.lookup(eid);
+  assert(!e.paid, "already paid");
+  const d = drawFor(e.drawId);
+  assert(d.status == DrawStatus.settled, "draw is not finalised");
+  const prize = fold((acc: Uint<128>, x: Uint<128>, j: Uint<8>): Uint<128> => j == e.division - 1 ? x : acc,
+                     0, d.prizes, [0, 1, 2, 3, 4, 5, 6, 7, 8]);
+  const a1 = quotient((prize as Field) * (e.payees[1].share as Field), 10000);
+  const a2 = quotient((prize as Field) * (e.payees[2].share as Field), 10000);
+  const a0 = (prize - a1 - a2) as Uint<128>;
+  entitlements.insert(eid, Entitlement { ...e, paid: true });
+  if (a0 > 0) {
+    sendUnshielded(nativeToken(), a0, right<ContractAddress, UserAddress>(e.payees[0].address));
+  }
+  if (a1 > 0) {
+    sendUnshielded(nativeToken(), a1, right<ContractAddress, UserAddress>(e.payees[1].address));
+  }
+  if (a2 > 0) {
+    sendUnshielded(nativeToken(), a2, right<ContractAddress, UserAddress>(e.payees[2].address));
+  }
+}
+
+// ---------------------------------------------------------------- refunds
+
+// Void a draw that missed a deadline. Anyone may call this. A void draw is
+// refunded, never redrawn. Computing the numbers and settling are only
+// possible before the deadline that makes the draw voidable, so nobody can
+// choose between finishing a draw and cancelling it once the outcome is known.
+export circuit voidDraw(n: Uint<32>): [] {
+  const id = disclose(n);
+  const d = drawFor(id);
+  const unrevealed = d.status == DrawStatus.open && blockTimeGte(d.revealDeadline);
+  const unanswered = d.status == DrawStatus.requested && blockTimeGte(d.drawDeadline);
+  const uncomputed = d.status == DrawStatus.fulfilled && blockTimeGte(d.settleDeadline);
+  const unsettled = d.status == DrawStatus.drawn && blockTimeGte(d.settleDeadline);
+  assert(unrevealed || unanswered || uncomputed || unsettled, "draw can't be voided");
+  draws.insert(id, Draw { ...d, status: DrawStatus.voided });
+}
+
+// Refund ticket `index` of a void draw to the address given when it was
+// bought. Anyone may call this (a keeper does, for every ticket).
+export circuit refundTicket(n: Uint<32>, index: Uint<64>): [] {
+  const id = disclose(n);
+  const i = disclose(index);
+  const d = drawFor(id);
+  assert(d.status == DrawStatus.voided, "draw is not void");
+  const key = ticketKey(id, i);
+  assert(tickets.member(key), "unknown ticket");
+  const rec = tickets.lookup(key);
+  assert(!rec.refunded, "already refunded");
+  tickets.insert(key, TicketRecord { ...rec, refunded: true });
+  sendUnshielded(nativeToken(), ticketPrice, right<ContractAddress, UserAddress>(rec.refundTo));
+}

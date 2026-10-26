@@ -18,6 +18,18 @@ Pick 7 numbers from 1–35 and a Moonball from 1–20. Tickets cost a fixed pric
 
 The full design, including the trust that remains, is in [docs/DESIGN.md](docs/DESIGN.md).
 
+## Next: private, automatic settlement
+
+Where Starfall is heading: no claim button, and no ticket's numbers ever made public. `contract/src/settlement.compact` is a second contract built on the same draw, in which:
+
+- the game is Australian Powerball's: 7 from 35 plus a Moonball from 20, nine divisions, Powerball's prize-pool allocation, jackpot rollover and no-winner rules, a game costs 1.2 tNIGHT, of which 1 tNIGHT goes to the prize pool and 0.2 tNIGHT to the operator, per line;
+- every ticket is published as a commitment plus the ticket encrypted to a settlement key; up to 4 games per transaction, with QuickPick packages from Single (1) to Maxi (50);
+- a settler works through every ticket in order, 25 per proof, and the contract checks that each one matches its commitment, so no ticket can be left out, counted twice or altered;
+- prizes are then paid automatically by anyone;
+- if settlement misses its deadline, every ticket is refunded.
+
+It has 12 circuits, the most that fit in a deploy transaction, and v0's oracle-key and organiser fixes. It's tested in the simulator with 100 private tickets and every failure case; not deployed yet. Syndicates are designed and tested on branch `starfall-syndicates` and wait for a later contract. Design, guarantees and the privacy that remains: [docs/SETTLEMENT.md](docs/SETTLEMENT.md).
+
 ## Repository
 
 | Path | What it is |
@@ -27,6 +39,7 @@ The full design, including the trust that remains, is in [docs/DESIGN.md](docs/D
 | `cli/` | `./lunardraw`: deploy the contract locked, activate the oracle key, run the keeper and the draw oracle, check a deployment. Its end-to-end test runs a real draw on a local Midnight network |
 | `docs/DESIGN.md` | Design: draw life cycle, number rule, prize divisions, privacy, remaining trust |
 | `docs/preview-guide.md` | Running it on Preview with 30-minute draws, step by step |
+| `contract/src/settlement.compact` | Starfall with private, automatic settlement, no claims ([docs/SETTLEMENT.md](docs/SETTLEMENT.md)) |
 | `nightcast/` | [Nightcast](https://github.com/LearnMidnight/Nightcast) as a git submodule, pinned to a tested commit: its contract and SDK are used for keys and test vectors |
 
 ## Building and testing
