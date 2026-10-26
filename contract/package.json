@@ -18,7 +18,7 @@
     "dist"
   ],
   "scripts": {
-    "compact": "compact compile src/lunardraw.compact src/managed/lunardraw",
+    "compact": "compact compile src/lunardraw.compact src/managed/lunardraw && compact compile --skip-zk src/settlement.compact src/managed/settlement",
     "compact:fast": "compact compile --skip-zk src/lunardraw.compact src/managed/lunardraw && compact compile --skip-zk src/settlement.compact src/managed/settlement",
     "build": "rm -rf dist && tsc -p tsconfig.build.json && cp -R src/managed dist/managed && cp src/*.compact dist/",
     "typecheck": "tsc -p tsconfig.json --noEmit",
