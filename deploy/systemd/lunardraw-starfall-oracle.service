@@ -1,0 +1,21 @@
+# The draw oracle for Starfall: answers each revealed draw with Nightcast's VRF.
+# Same key and wallet as the v0 oracle, so the two never run at once.
+[Unit]
+Description=Lunardraw Starfall draw oracle
+After=lunardraw-proof.service network-online.target
+Wants=lunardraw-proof.service network-online.target
+Conflicts=lunardraw-oracle.service
+
+[Service]
+WorkingDirectory=/root/Lunardraw
+Environment=HOME=/root
+ExecStart=/root/Lunardraw/lunardraw starfall oracle --network preprod \
+  --oracle /root/lunardraw-secrets/oracle.secret \
+  --wallet /root/nightcast-secrets/oracle-wallet.secret \
+  --proof-server-port 6300
+Restart=always
+RestartSec=15
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

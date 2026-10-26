@@ -66,7 +66,7 @@ jobs:
       - name: Test the CLI (offline)
         if: ${{ !cancelled() }}
         working-directory: cli
-        run: npx vitest run src/test/offline.test.ts --reporter=default --reporter=github-actions --reporter=json --outputFile.json=../reports/cli.json
+        run: npx vitest run src/test/offline.test.ts src/test/starfall-offline.test.ts --reporter=default --reporter=github-actions --reporter=json --outputFile.json=../reports/cli.json
 
       - name: Summarise tests
         if: always()
@@ -207,16 +207,24 @@ jobs:
           done
 
   # Starfall with private settlement (settlement.compact): builds its proving
-  # keys and reports each circuit's key size. A deploy transaction carries every
-  # circuit's verifier key and must fit Midnight's block limits (12 circuits
-  # fit, 16 were rejected), so the job fails if the contract has more than 12.
-  settlement-keys:
+  # keys and reports each circuit's key size (a deploy transaction carries
+  # every circuit's verifier key and must fit Midnight's block limits: 12
+  # circuits fit, 16 were rejected, so the job fails if there are more than
+  # 12), then runs Starfall end to end on a throwaway local network: deploy,
+  # buy games, reveal, answer, numbers, settle, finalise, pay; then a draw the
+  # oracle never answers is voided and refunded.
+  starfall-e2e:
+    needs: test
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           submodules: true
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
 
       - name: Install Compact toolchain
         run: |
@@ -226,28 +234,108 @@ jobs:
       - name: Select compiler ${{ env.COMPACT_TOOLCHAIN }}
         run: compact update "$COMPACT_TOOLCHAIN"
 
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
       - name: Compile with proving keys
-        working-directory: contract
         shell: bash
         run: |
           # GitHub keeps at most 10 annotations per step: one notice lists every key.
           set -o pipefail
           start=$SECONDS
-          if ! compact compile src/settlement.compact src/managed/settlement 2>&1 | tee keys.log; then
+          if ! npm run compact:starfall 2>&1 | tee keys.log; then
             echo "::error title=settlement keys::compile failed: $(tail -c 800 keys.log | tr '\n' ' ')"
             exit 1
           fi
+          keys=contract/src/managed/settlement/keys
           sizes=""
-          for f in src/managed/settlement/keys/*.prover; do
+          for f in $keys/*.prover; do
             c=$(basename "$f" .prover)
-            p=$(stat -c %s "$f"); v=$(stat -c %s "src/managed/settlement/keys/$c.verifier")
+            p=$(stat -c %s "$f"); v=$(stat -c %s "$keys/$c.verifier")
             sizes="$sizes $c: $((p / 1024 / 1024)) MiB (verifier $v B);"
           done
           echo "::notice title=settlement keys::built in $((SECONDS - start))s;$sizes"
-          n=$(ls src/managed/settlement/keys/*.verifier | wc -l)
-          total=$(cat src/managed/settlement/keys/*.verifier | wc -c)
+          n=$(ls $keys/*.verifier | wc -l)
+          total=$(cat $keys/*.verifier | wc -c)
           echo "::notice title=settlement deploy size::$n circuits, verifier keys $total bytes in all"
           if [ "$n" -gt 12 ]; then
             echo "::error title=settlement circuits::$n circuits; at most 12 fit in a deploy transaction"
             exit 1
           fi
+
+      - name: Build
+        run: npm run build
+
+      - name: Pull network images
+        run: |
+          status=0
+          for img in $(grep -o 'image: "[^"]*"' nightcast/deploy/docker/compose.yml nightcast/deploy/docker/proof-server.yml | sed 's/.*image: "//; s/"$//' | sort -u); do
+            if docker pull -q "$img" > /dev/null 2>pull-err.txt; then
+              echo "::notice title=image::$img pulled"
+            else
+              echo "::error title=image::$img: $(head -c 400 pull-err.txt | tr '\n' ' ')"
+              status=1
+            fi
+          done
+          exit $status
+
+      - name: End-to-end test on a local network
+        working-directory: cli
+        env:
+          LUNARDRAW_E2E: '1'
+          TESTCONTAINERS_RYUK_DISABLED: 'true'
+        shell: bash
+        run: |
+          set -o pipefail
+          ( set +e; while true; do docker stats --no-stream --format '{{.Name}} {{.MemUsage}}' 2>/dev/null | grep '^proof-server' >> ../proof-mem.log; sleep 2; done ) &
+          sampler=$!
+          status=0
+          npx vitest run src/test/starfall-e2e.test.ts --reporter=default --reporter=github-actions --reporter=json --outputFile.json=../reports/starfall-e2e.json 2>&1 | tee ../e2e.log || status=$?
+          kill $sampler 2>/dev/null || true
+          exit $status
+
+      - name: Proof sizes and times
+        if: always()
+        shell: bash
+        run: |
+          if [ -s proof-mem.log ]; then
+            peak=$(awk '{ v=$2; u=v; gsub(/[0-9.]/, "", u); gsub(/[A-Za-z]/, "", v); m = (u=="GiB") ? v*1024 : (u=="MiB") ? v : (u=="KiB") ? v/1024 : v/1048576; if (m>max) max=m } END { printf "%.0f", max }' proof-mem.log)
+            echo "::notice title=proof server peak memory::${peak} MiB ($(wc -l < proof-mem.log) samples)"
+          fi
+          # One notice with every step and how long its proof and transaction took.
+          steps=$(sed 's/\x1b\[[0-9;]*m//g' e2e.log | grep -oE '(done: .*|answered draw .*|bought [0-9]+ of [0-9]+ .*)\([0-9]+ s\)' | head -20 | sed 's/%/%25/g' | awk 'BEGIN{ORS="%0A"} {print}')
+          [ -n "$steps" ] && echo "::notice title=step times::$steps"
+          exit 0
+
+      - name: Summarise tests
+        if: always()
+        run: |
+          for f in reports/*.json; do
+            [ -f "$f" ] || continue
+            node -e '
+              const r = require(process.argv[1]);
+              const name = process.argv[1].split("/").pop().replace(".json", "");
+              console.log(`::notice title=${name} tests::${r.numPassedTests} passed, ${r.numFailedTests} failed, ${r.numTotalTests} total`);
+            ' "$PWD/$f"
+          done
+
+      - name: Test output
+        if: failure()
+        run: |
+          [ -f e2e.log ] || exit 0
+          sed 's/\x1b\[[0-9;]*m//g' e2e.log | grep -v '^\s*$' | grep -iE 'error|fail|exception|cause|at |✗|×|timeout|refused|unhealthy|exited|done:|could not|rejected|bought' | head -60 > e2e-errors.txt || true
+          n=0
+          while [ $n -lt 4 ]; do
+            chunk=$(sed -n "$((n*15+1)),$((n*15+15))p" e2e-errors.txt | sed 's/%/%25/g' | awk 'BEGIN{ORS="%0A"} {print substr($0,1,300)}')
+            [ -n "$chunk" ] && echo "::error title=e2e output $n::$chunk"
+            n=$((n+1))
+          done
+
+      - name: Container logs
+        if: failure()
+        run: |
+          echo "::warning title=logs containers::$(docker ps -a --format '{{.Names}}: {{.Status}}' | awk 'BEGIN{ORS="%0A"} {print}')"
+          for c in $(docker ps -a --format '{{.Names}}'); do
+            tail=$(docker logs --tail 25 "$c" 2>&1 | tail -c 2500 | sed 's/%/%25/g' | awk 'BEGIN{ORS="%0A"} {print}')
+            echo "::warning title=logs $c::$tail"
+          done

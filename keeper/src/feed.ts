@@ -147,7 +147,7 @@ export const buildFeed = (
 };
 
 /** Write the feed to `path` atomically (write beside it, then rename). */
-export const writeFeed = (path: string, feed: Feed): void => {
+export const writeFeed = (path: string, feed: object): void => {
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.tmp`;
   writeFileSync(tmp, JSON.stringify(feed, null, 2) + '\n');

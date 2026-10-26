@@ -15,8 +15,8 @@
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json && chmod +x dist/main.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run src/test/offline.test.ts",
-    "test:e2e": "LUNARDRAW_E2E=1 vitest run src/test/e2e.test.ts"
+    "test": "vitest run src/test/offline.test.ts src/test/starfall-offline.test.ts",
+    "test:e2e": "LUNARDRAW_E2E=1 vitest run src/test/e2e.test.ts src/test/starfall-e2e.test.ts"
   },
   "dependencies": {
     "@lunardraw/contract": "0.1.0",
@@ -27,6 +27,7 @@
     "@midnight-ntwrk/midnight-js-indexer-public-data-provider": "4.1.1",
     "@midnight-ntwrk/midnight-js-protocol": "4.1.1",
     "@midnight-ntwrk/testkit-js": "4.1.1",
+    "@midnight-ntwrk/wallet-sdk-address-format": "3.1.2",
     "@nightcast/contract": "0.1.0",
     "@nightcast/deploy": "0.1.0",
     "@nightcast/sdk": "0.1.0"
