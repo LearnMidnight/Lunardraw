@@ -78,7 +78,8 @@ export struct Draw {
   // SHA-256(seedHex), published before sales; the seed after they close.
   seedCommitment: Bytes<32>;
   seed: Bytes<32>;
-  // VRF input point and the oracle key the draw is bound to.
+  // The oracle key the draw was bound to when it opened, and the VRF input
+  // point once the seed is revealed.
   point: JubjubPoint;
   oracleKey: JubjubPoint;
   output: Bytes<32>;
@@ -125,11 +126,25 @@ export ledger wins: Map<Bytes<32>, Win>;
 export ledger usedCommitments: Set<Bytes<32>>;
 // Rollover waiting for the next draw to settle.
 export ledger carry: Uint<128>;
+// The oracle key new draws are bound to. Each draw copies it when it opens,
+// so a later change never touches a draw that is selling or in progress.
 export ledger oracleKey: JubjubPoint;
 export ledger oracleKeyReady: Boolean;
+// A proposed replacement key, the earliest time it may take effect (block time
+// at the proposal plus oracleKeyDelay), and whether the current oracle has
+// agreed to it (which lifts the wait).
 export ledger proposedOracleKey: Maybe<JubjubPoint>;
-// SHA-256 commitment to the organiser's secret.
-export sealed ledger organiser: Bytes<32>;
+export ledger oracleKeyChangeAt: Uint<64>;
+export ledger oracleKeyApproved: Boolean;
+// How long a proposed oracle key must wait before it can be accepted: longer
+// than any draw can sell for, so a change is visible on chain for longer than
+// one draw and can't be slipped in quietly. Set at deployment.
+export sealed ledger oracleKeyDelay: Uint<64>;
+// Commitment to the organiser's secret (see organiserCommitmentOf), a
+// proposed replacement, and a backup organiser that can take over at any time.
+export ledger organiser: Bytes<32>;
+export ledger proposedOrganiser: Maybe<Bytes<32>>;
+export sealed ledger backupOrganiser: Bytes<32>;
 // Price of one line, in STAR (1 tNIGHT = 1,000,000 STAR).
 export sealed ledger linePrice: Uint<128>;
 // Shortest and longest time a draw may sell tickets for, from when it opens.
@@ -153,15 +168,22 @@ witness divModWide(n: Field, d: Uint<128>): [Uint<128>, Uint<128>];
 
 // ----------------------------------------------------------- constructor
 
-constructor(key: JubjubPoint, organiserCommitment: Bytes<32>, price: Uint<128>,
-            salesMin: Uint<64>, salesMax: Uint<64>,
+constructor(key: JubjubPoint, organiserCommitment: Bytes<32>, backupCommitment: Bytes<32>,
+            price: Uint<128>, salesMin: Uint<64>, salesMax: Uint<64>,
             reveal: Uint<64>, draw: Uint<64>, claim: Uint<64>) {
   assert(price > 0, "line price must be positive");
   assert(salesMin >= 60 && salesMin < salesMax && salesMax <= 7776000, "sales period must be 60 seconds to 90 days");
   assert(reveal >= 60 && draw >= 60, "reveal and draw windows must be at least 60 seconds");
   assert(claim >= 3600, "claim window must be at least an hour");
+  assert(organiserCommitment != backupCommitment, "the backup organiser must differ from the organiser");
   proposedOracleKey = some<JubjubPoint>(disclose(key));
+  oracleKeyChangeAt = 0;
+  oracleKeyApproved = false;
+  // The first key has no wait: nothing can be bound to it until it's accepted.
+  oracleKeyDelay = disclose((salesMax + reveal) as Uint<64>);
   organiser = disclose(organiserCommitment);
+  proposedOrganiser = none<Bytes<32>>();
+  backupOrganiser = disclose(backupCommitment);
   linePrice = disclose(price);
   minSales = disclose(salesMin);
   maxSales = disclose(salesMax);
@@ -273,33 +295,90 @@ pure circuit shares(): Vector<9, Uint<16>> {
 }
 
 // ---------------------------------------------------------------- oracle
+//
+// A deploy transaction has to fit Midnight's block limits, and 12 circuits'
+// verifier keys is about the most that fits (16 was rejected). So the
+// oracle and organiser circuits each do more than one thing, chosen by which
+// secret the caller holds.
 
-// The oracle activates a proposed key by proving it holds the secret. A draw
-// keeps the key it was requested with.
+// Called by the holder of the *proposed* key: activates it, proving it holds
+// the secret. The first key is accepted at once. A replacement waits
+// oracleKeyDelay from its proposal, unless the current oracle approved it.
+// Called by the *current* oracle while a different key is proposed: approves
+// the change (a planned hand-over), so it needn't wait. Draws keep the key
+// they opened with.
 export circuit acceptOracleKey(): [] {
   assert(proposedOracleKey.is_some, "no key proposed");
   const key = proposedOracleKey.value;
   assert(!isIdentity(key), "identity key not allowed");
-  const sk = oracleSecretKey();
-  assert(disclose(sameKey(publicKey(sk), key)), "secret does not match the proposed key");
-  oracleKey = key;
-  oracleKeyReady = true;
-  proposedOracleKey = none<JubjubPoint>();
+  const pk = publicKey(oracleSecretKey());
+  const isCurrent = disclose(sameKey(pk, oracleKey));
+  const approving = oracleKeyReady && isCurrent && !sameKey(oracleKey, key);
+  if (approving) {
+    oracleKeyApproved = true;
+  } else {
+    assert(disclose(sameKey(pk, key)), "secret does not match the proposed key");
+    if (oracleKeyReady && !oracleKeyApproved) {
+      assert(blockTimeGte(oracleKeyChangeAt), "the new oracle key is still waiting");
+    }
+    oracleKey = key;
+    oracleKeyReady = true;
+    proposedOracleKey = none<JubjubPoint>();
+    oracleKeyApproved = false;
+  }
 }
 
-// The organiser proposes a new oracle key (e.g. after a loss or compromise);
-// it takes effect when the oracle accepts it.
-export circuit proposeOracleKey(key: JubjubPoint): [] {
+// The organiser proposes a new oracle key (e.g. after a loss or compromise).
+// `now` is the caller's clock, within 10 minutes of block time; the key can be
+// accepted from now + oracleKeyDelay, or sooner if the current oracle agrees.
+// Proposing again restarts the wait, so the organiser can't shorten it.
+export circuit proposeOracleKey(key: JubjubPoint, now: Uint<64>): [] {
   assertOrganiser();
+  const t = disclose(now);
+  assert(t > 600, "bad time");
+  assert(t < 18446744073709550000, "bad time");
+  assert(blockTimeGte(t - 600) && blockTimeLt((t + 600) as Uint<64>), "clock is more than 10 minutes off");
   proposedOracleKey = some<JubjubPoint>(disclose(key));
+  oracleKeyChangeAt = (t + oracleKeyDelay) as Uint<64>;
+  oracleKeyApproved = false;
+}
+
+// ------------------------------------------------------------- organiser
+
+// Who the organiser is, by the secret the caller holds:
+// - the backup organiser (a secret kept offline) installs `commitment` as the
+//   organiser at once: after a lost or leaked organiser secret, or a keeper
+//   that has stopped for good. The backup itself can't become the organiser,
+//   so it stays offline;
+// - the holder of a proposed organiser secret accepts the hand-over
+//   (`commitment` must be its own);
+// - the organiser proposes `commitment` as its successor.
+export circuit changeOrganiser(commitment: Bytes<32>): [] {
+  const mine = disclose(organiserCommitmentOf(organiserSecret()));
+  const c = disclose(commitment);
+  assert(c != backupOrganiser, "the backup organiser can't be the organiser");
+  if (mine == backupOrganiser) {
+    organiser = c;
+    proposedOrganiser = none<Bytes<32>>();
+  } else if (proposedOrganiser.is_some && mine == proposedOrganiser.value) {
+    assert(c == mine, "to accept, pass your own commitment");
+    organiser = mine;
+    proposedOrganiser = none<Bytes<32>>();
+  } else {
+    assert(mine == organiser, "not the organiser");
+    proposedOrganiser = some<Bytes<32>>(c);
+  }
 }
 
 // ----------------------------------------------------------------- draws
 
 // Open draw lastDraw + 1, selling tickets until `close`. Only one draw sells
 // at a time, and the sales period must be between minSales and maxSales from
-// now, so nobody can slip in a short draw at a quiet moment.
+// now, so nobody can slip in a short draw at a quiet moment. The draw is bound
+// to the active oracle key from the start, so buyers can see which key will
+// answer it and no key change can reach it.
 circuit openNext(close: Uint<64>, commitment: Bytes<32>): Uint<32> {
+  assert(oracleKeyReady, "no active oracle key");
   if (lastDraw != 0) {
     assert(draws.lookup(lastDraw).status != DrawStatus.open, "the previous draw is still selling");
   }
@@ -319,7 +398,7 @@ circuit openNext(close: Uint<64>, commitment: Bytes<32>): Uint<32> {
     seedCommitment: commitment,
     seed: default<Bytes<32>>,
     point: default<JubjubPoint>,
-    oracleKey: default<JubjubPoint>,
+    oracleKey: oracleKey,
     output: default<Bytes<32>>,
     numbers: [0, 0, 0, 0, 0, 0, 0],
     moonball: 0,
@@ -333,14 +412,6 @@ circuit openNext(close: Uint<64>, commitment: Bytes<32>): Uint<32> {
   usedCommitments.insert(commitment);
   lastDraw = id;
   return id;
-}
-
-// The organiser opens the next draw: the first one, or after a draw that
-// wasn't followed (its seed was revealed without a next draw, or it was void).
-// Returns the new draw's number.
-export circuit openDraw(salesClose: Uint<64>, seedCommitment: Bytes<32>): Uint<32> {
-  assertOrganiser();
-  return openNext(disclose(salesClose), disclose(seedCommitment));
 }
 
 // Buy a ticket (1 to 5 lines) for an open draw, paying price x lines in tNIGHT.
@@ -361,29 +432,34 @@ export circuit buyTicket(): Bytes<32> {
   return c;
 }
 
-// After sales close, the organiser reveals its seed, fixing the draw's VRF
-// input, and can open the next draw in the same transaction. Only the
-// organiser may reveal: it can't evaluate the VRF, so it gains nothing from
-// the freedom Compact's in-circuit hashToCurve may allow (Nightcast SPEC §2), whereas
-// the oracle could use that freedom to pick an outcome.
+// After sales close, the organiser reveals draw n's seed, fixing the draw's
+// VRF input, and can open the next draw in the same transaction. With n = 0
+// nothing is revealed and `next` just opens a draw: the first one, or one
+// after a draw that wasn't followed (its seed was revealed without a next
+// draw, or it was void). Only the organiser may reveal: it can't evaluate the
+// VRF, so it gains nothing from the freedom Compact's in-circuit hashToCurve
+// may allow (Nightcast SPEC §2), whereas the oracle could use that freedom to
+// pick an outcome.
 export circuit requestDraw(n: Uint<32>, seed: Bytes<32>, next: Maybe<NextDraw>): [] {
   assertOrganiser();
-  assert(oracleKeyReady, "no active oracle key");
   const id = disclose(n);
-  const s = disclose(seed);
-  const d = drawFor(id);
-  assert(d.status == DrawStatus.open, "draw is not open");
-  assert(blockTimeGte(d.salesClose), "sales are still open");
-  assert(blockTimeLt(d.revealDeadline), "reveal deadline has passed");
-  assert(seedCommitmentOf(s) == d.seedCommitment, "seed does not match the commitment");
-  draws.insert(id, Draw {
-    ...d,
-    status: DrawStatus.requested,
-    seed: s,
-    point: inputPoint(drawAlpha(kernel.self(), id, s)),
-    oracleKey: oracleKey
-  });
   const nx = disclose(next);
+  if (id == 0) {
+    assert(nx.is_some, "nothing to do");
+  } else {
+    const s = disclose(seed);
+    const d = drawFor(id);
+    assert(d.status == DrawStatus.open, "draw is not open");
+    assert(blockTimeGte(d.salesClose), "sales are still open");
+    assert(blockTimeLt(d.revealDeadline), "reveal deadline has passed");
+    assert(seedCommitmentOf(s) == d.seedCommitment, "seed does not match the commitment");
+    draws.insert(id, Draw {
+      ...d,
+      status: DrawStatus.requested,
+      seed: s,
+      point: inputPoint(drawAlpha(kernel.self(), id, s))
+    });
+  }
   if (nx.is_some) {
     openNext(nx.value.salesClose, nx.value.seedCommitment);
   }

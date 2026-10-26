@@ -18,12 +18,13 @@
     "dist"
   ],
   "scripts": {
-    "compact": "compact compile src/lunardraw.compact src/managed/lunardraw && compact compile src/settlement.compact src/managed/settlement",
+    "compact": "compact compile src/lunardraw.compact src/managed/lunardraw",
     "compact:fast": "compact compile --skip-zk src/lunardraw.compact src/managed/lunardraw && compact compile --skip-zk src/settlement.compact src/managed/settlement",
     "build": "rm -rf dist && tsc -p tsconfig.build.json && cp -R src/managed dist/managed && cp src/*.compact dist/",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "gen:batch": "python3 scripts/gen-batch.py"
+    "gen:batch": "python3 scripts/gen-batch.py",
+    "compact:settlement": "compact compile src/settlement.compact src/managed/settlement"
   },
   "dependencies": {
     "@midnight-ntwrk/compact-runtime": "0.16.0",

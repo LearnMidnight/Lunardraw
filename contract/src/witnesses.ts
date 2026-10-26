@@ -5,12 +5,13 @@ import type { Ledger, TicketPreimage } from './managed/lunardraw/contract/index.
  * Private state of whoever runs a Lunardraw circuit.
  *
  * - The oracle sets `oracleSecretKey` (for `acceptOracleKey` and `fulfilDraw`).
- * - The organiser sets `organiserSecret` (for `openDraw`).
+ * - The organiser (the keeper bot) sets `organiserSecret` (for `requestDraw`,
+ *   `proposeOracleKey` and `changeOrganiser`). A proposed organiser accepting,
+ *   or the backup organiser recovering, puts its own secret in the same field.
  * - A player buying a ticket sets `pendingTicket`; to claim or be refunded they
  *   keep every ticket they bought in `tickets` (hex commitment -> preimage).
  *   Losing a preimage means losing the ability to claim or be refunded.
- * - Anyone else (requesting a draw with the published seed, computing numbers,
- *   settling, paying, voiding) needs nothing.
+ * - Anyone else (computing numbers, settling, paying, voiding) needs nothing.
  *
  * The arithmetic witnesses (`splitByte`, `divMod16`, `sortSeven`, `divModWide`)
  * only offer answers the circuits check; a wrong answer makes the proof fail.

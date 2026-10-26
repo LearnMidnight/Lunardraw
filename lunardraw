@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Run Lunardraw's command-line tools from a checkout:
+#   ./lunardraw <keygen|wallet|deploy|accept-key|keeper|oracle|status|verify|fingerprints> ...
+# Build first: npm install && npm run compact:keys && npm run build
+set -euo pipefail
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ ! -f "$DIR/cli/dist/main.js" ]; then
+  echo "Lunardraw isn't built yet. Run: npm install && npm run compact:keys && npm run build" >&2
+  exit 1
+fi
+# Fix the dust wallet's endless fee loop in the installed library (see
+# nightcast/deploy/scripts/patch-dust-fee-loop.mjs). Quick, and does nothing once applied.
+node "$DIR/nightcast/deploy/scripts/patch-dust-fee-loop.mjs" --quiet --root "$DIR" || true
+# Let Node use up to 3 GB unless told otherwise: syncing a Preprod wallet needs more than the default.
+export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=3072}"
+exec node "$DIR/cli/dist/main.js" "$@"

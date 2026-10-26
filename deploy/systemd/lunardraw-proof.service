@@ -1,0 +1,18 @@
+# One proof server for the keeper and the oracle (see `./lunardraw proof-server`).
+# Install: see deploy/systemd/README.md. Paths assume the repo in /root/Lunardraw.
+[Unit]
+Description=Lunardraw proof server (Midnight, 127.0.0.1:6300)
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/root/Lunardraw
+Environment=HOME=/root
+ExecStart=/root/Lunardraw/lunardraw proof-server --port 6300
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

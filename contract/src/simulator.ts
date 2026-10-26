@@ -7,7 +7,7 @@ import {
   encodeContractAddress,
   sampleContractAddress,
 } from '@midnight-ntwrk/compact-runtime';
-import { oraclePublicKey } from '@nightcast/contract';
+import { generateOperatorSecret, oraclePublicKey } from '@nightcast/contract';
 import {
   Contract,
   type Ledger,
@@ -24,6 +24,8 @@ const COIN_PUBLIC_KEY = '0'.repeat(64);
 export type LottoSimulatorOptions = {
   oracleSecretKey: bigint;
   organiserSecret: Uint8Array;
+  /** The backup organiser's secret (default: a fresh random one). */
+  backupSecret?: Uint8Array;
   /** Price of one line in STAR (default 1 tNIGHT). */
   linePrice?: bigint;
   minSales?: bigint;
@@ -52,15 +54,18 @@ export class LottoSimulator {
   readonly address = sampleContractAddress();
   readonly addressBytes: Uint8Array;
   now: number;
+  readonly backupSecret: Uint8Array;
   private state: ContractState | ChargedState;
 
   constructor(readonly opts: LottoSimulatorOptions) {
     this.now = opts.now ?? 1_800_000_000;
     this.addressBytes = encodeContractAddress(this.address);
+    this.backupSecret = opts.backupSecret ?? generateOperatorSecret();
     const result = this.contract.initialState(
       createConstructorContext<LottoPrivateState>({}, COIN_PUBLIC_KEY),
       oraclePublicKey(opts.oracleSecretKey),
       pureCircuits.organiserCommitmentOf(opts.organiserSecret),
+      pureCircuits.organiserCommitmentOf(this.backupSecret),
       opts.linePrice ?? 1_000_000n,
       opts.minSales ?? 600n,
       opts.maxSales ?? 2_592_000n,
@@ -78,6 +83,11 @@ export class LottoSimulator {
 
   get organiser(): LottoPrivateState {
     return { organiserSecret: this.opts.organiserSecret };
+  }
+
+  /** The backup organiser's private state (its secret goes in as `organiserSecret`). */
+  get backup(): LottoPrivateState {
+    return { organiserSecret: this.backupSecret };
   }
 
   readonly anyone: LottoPrivateState = {};
@@ -138,13 +148,41 @@ export class LottoSimulator {
     this.run(as, (ctx) => this.contract.impureCircuits.acceptOracleKey(ctx));
   }
 
-  proposeOracleKey(key: { x: bigint; y: bigint }, as: LottoPrivateState = this.organiser): void {
-    this.run(as, (ctx) => this.contract.impureCircuits.proposeOracleKey(ctx, key));
+  /** Propose a new oracle key; `now` defaults to the simulator's clock. */
+  proposeOracleKey(key: { x: bigint; y: bigint }, as: LottoPrivateState = this.organiser, now: bigint = BigInt(this.now)): void {
+    this.run(as, (ctx) => this.contract.impureCircuits.proposeOracleKey(ctx, key, now));
   }
 
-  /** Open the next draw; returns its number. */
+  /** The current oracle approves the proposed key (`acceptOracleKey` by the current oracle). */
+  approveOracleKey(as: LottoPrivateState = this.oracle): void {
+    this.acceptOracleKey(as);
+  }
+
+  changeOrganiser(commitment: Uint8Array, as: LottoPrivateState): void {
+    this.run(as, (ctx) => this.contract.impureCircuits.changeOrganiser(ctx, commitment));
+  }
+
+  /** The organiser proposes a successor. */
+  proposeOrganiser(commitment: Uint8Array, as: LottoPrivateState = this.organiser): void {
+    this.changeOrganiser(commitment, as);
+  }
+
+  /** The proposed organiser accepts (passing its own commitment). */
+  acceptOrganiser(as: LottoPrivateState): void {
+    if (!as.organiserSecret) throw new Error('acceptOrganiser needs the accepting secret');
+    this.changeOrganiser(pureCircuits.organiserCommitmentOf(as.organiserSecret), as);
+  }
+
+  /** The backup organiser installs a new organiser. */
+  recoverOrganiser(commitment: Uint8Array, as: LottoPrivateState = this.backup): void {
+    this.changeOrganiser(commitment, as);
+  }
+
+  /** Open the next draw without revealing one (`requestDraw` with n = 0); returns its number. */
   openDraw(salesClose: bigint, seedCommitment: Uint8Array, as: LottoPrivateState = this.organiser): bigint {
-    return this.run(as, (ctx) => this.contract.impureCircuits.openDraw(ctx, salesClose, seedCommitment));
+    const next = { is_some: true, value: { salesClose, seedCommitment } };
+    this.run(as, (ctx) => this.contract.impureCircuits.requestDraw(ctx, 0n, new Uint8Array(32), next));
+    return this.getLedger().lastDraw;
   }
 
   buyTicket(t: TicketPreimage, as: LottoPrivateState = { pendingTicket: t }): Uint8Array {
