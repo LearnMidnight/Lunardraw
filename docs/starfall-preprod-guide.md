@@ -4,6 +4,8 @@ This replaces the v0 soak with **Starfall**, the real game (docs/SETTLEMENT.md):
 
 It assumes the setup from [preview-guide.md](preview-guide.md) and [deploy/systemd/README.md](../deploy/systemd/README.md): the repo in `/root/Lunardraw`, secrets in `/root/lunardraw-secrets` and `/root/nightcast-secrets`, the three v0 services running.
 
+**Memory:** Starfall's big proofs (the numbers, each settlement batch, each purchase) need about 7 GB each on the proof server, one at a time. The server needs about 8 GB free; check with `free -h` (the `available` column). The keeper proves one at a time and the proof server restarts itself between them to free memory.
+
 **Run every command in `~/Lunardraw` unless it says otherwise.**
 
 ---

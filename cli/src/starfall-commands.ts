@@ -296,8 +296,11 @@ export const starfall = async (argv: string[]): Promise<number> => {
           const onView = feedPath
             ? (view: StarfallView, nowSecs: number) => writeFeed(feedPath, buildStarfallFeed(view, { network, contract: record.contractAddress, nowSecs }))
             : undefined;
-          // The numbers and the settlement batches are the big proofs: run them
-          // in the background so reveals and new draws never wait for them.
+          // The numbers and the settlement batches are the big proofs (about
+          // 7 GB each on the proof server): run them in the background so
+          // reveals and new draws never wait for them, one at a time, with a
+          // pause after each so the proof server can be restarted to free its
+          // memory (see proof-server.ts).
           const keeper = new StarfallKeeper({
             chain,
             seeds,
@@ -306,6 +309,8 @@ export const starfall = async (argv: string[]): Promise<number> => {
             logger: session.logger,
             onView,
             background: ['compute', 'settle'],
+            backgroundLimit: 1,
+            backgroundGapMs: 30_000,
           });
           keeper.start();
           session.logger.info(

@@ -207,10 +207,11 @@ jobs:
           done
 
   # Each Starfall circuit proved once on Midnight's real proof server (the
-  # circuit runs come from the simulator, no network), with its peak memory
-  # and time, for each settlement batch size in the matrix. Players prove
-  # purchases on their own machines and the keeper proves settlement on a
-  # small server, so these numbers decide the batch size.
+  # circuit runs come from the simulator, no network), each on a fresh
+  # server, with its peak memory and time. Players prove purchases on their
+  # own machines and the keeper proves settlement on a small server, so these
+  # are worth watching. (26-27 Oct 2026: the numbers, a 25-ticket batch and a
+  # 3-game purchase each peak at about 7 GB; a 10-ticket batch at 3.6 GB.)
   prove-probe:
     needs: test
     runs-on: ubuntu-latest
@@ -218,7 +219,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        batch: [25, 10]
+        batch: [25]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:

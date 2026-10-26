@@ -165,6 +165,22 @@ Rows and k mock-compiled; proving keys built by the CI `settlement-keys` job (26
 
 A ticket costs about 14,000 rows of settlement and about 148,000 rows of purchase. The batch size and the games per purchase are fixed at compile time (`npm run gen:batch -w @lunardraw/contract -- <batch> <games>` regenerates `src/batch.compact`). Measured batches: 10 tickets k=18, 25 k=19, 50 k=20, 100 k=21. Purchases: **3 games would be k=19 (446,109 rows)**, 4 games k=20, 8 games k=21. Buyers prove their own purchases (Lace proves on the buyer's machine). **Decided 26 Oct 2026: 3 games per purchase (k=19).** With 4 games (k=20) the first end-to-end run's proof server used 13.8 GB proving one purchase and was killed for running out of memory on CI's 16 GB machine, while the k=19 `computeNumbers` proof peaks under 1 GB. So a purchase is k=19, like `settleBatch` and `computeNumbers`, at the cost of more transactions per package (a Maxi: 17 instead of 13). A 10,000-ticket draw takes 400 batch transactions until recursion is available.
 
+### Proving on Midnight's proof server (CI, 27 Oct 2026)
+
+Each circuit proved once on a fresh proof server 8.1.3 (the `prove-probe` CI job):
+
+| Circuit | Time | Peak memory |
+|---|---|---|
+| `buyTickets`, 3 games | 115 s | 7.6 GB |
+| `settleBatch`, 25 tickets | 104 s | 6.9 GB |
+| `settleBatch`, 10 tickets | 54 s | 3.6 GB |
+| `computeNumbers` | 102 s | 7.0 GB |
+| `requestDraw` | 16 s | 1.0 GB |
+| `finaliseDraw`, `fulfilDraw` | 2 s | 0.1 GB |
+| `payEntitlement`, `voidDraw`, `acceptOracleKey` | < 1 s | ~0 |
+
+The proof server keeps much of a proof's memory afterwards: on CI two purchases and the numbers left it big enough that the next settlement batch took it to 14 GB and it was killed. So the keeper proves one big proof at a time with a 30-second pause after each, and `./lunardraw proof-server` restarts the server whenever it has been idle for 10 seconds above its limit. **A machine that proves needs about 8 GB of memory free.** A player buying 3 games at a time needs the same on their own machine; one game per purchase (k=18) would need about half, at the cost of one transaction per game.
+
 ## Other limits
 
 - **One line per ticket, four per transaction.** A package is several transactions. System and PowerHit-style entries (the spec's later stage) are many lines sharing numbers: they'd be bought as their underlying games, so a System 9 is 36 tickets and 9 transactions, with the commitment unchanged.

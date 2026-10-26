@@ -423,6 +423,9 @@ export type StarfallKeeperOptions = EngineTiming & {
   onView?: (view: StarfallView, nowSecs: number) => void;
   /** Step kinds to run in the background (see the v0 keeper). */
   background?: StarfallStep['kind'][];
+  /** At most this many background proofs at once, and the gap between them (see the engine). */
+  backgroundLimit?: number;
+  backgroundGapMs?: number;
 };
 
 const silent = { info() {}, warn() {}, error() {} };

@@ -11,7 +11,12 @@
  *
  * On the first Preprod soak a long-running proof server grew slower every
  * hour and then failed proofs with 500s; restarting it between proofs keeps
- * every proof starting from a clean slate.
+ * every proof starting from a clean slate. Starfall's big proofs (the numbers,
+ * a settlement batch, a purchase) each peak at about 7 GB on a fresh server,
+ * and it keeps much of that afterwards: on CI, two purchases and the numbers
+ * left it big enough that the first settlement batch took it to 14 GB and it
+ * was killed. So it's checked every 10 seconds and restarted as soon as it
+ * has been idle for 10 seconds above the limit.
  */
 import { type ChildProcess, execFile, spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
@@ -74,6 +79,10 @@ export type ProofServerOptions = {
   log: (msg: string) => void;
   /** Print the proof server's own log lines. */
   echo?: boolean;
+  /** How often to check its memory (ms). Default 10 s. */
+  checkEveryMs?: number;
+  /** How long it must have been idle before a restart (ms). Default 10 s. */
+  quietMs?: number;
 };
 
 /** Run and supervise the proof server until `stop()`. */
@@ -92,7 +101,7 @@ export class ProofServer {
   /** Resolves when stopped. */
   async run(): Promise<void> {
     await run('docker', ['rm', '-f', this.name]).catch(() => undefined);
-    this.timer = setInterval(() => void this.check(), 60_000);
+    this.timer = setInterval(() => void this.check(), this.opts.checkEveryMs ?? 10_000);
     while (!this.stopping) {
       await this.once();
       if (!this.stopping) {
@@ -131,18 +140,47 @@ export class ProofServer {
     return new Promise((res) => child.on('exit', () => res()));
   }
 
-  /** Every minute: restart if idle and too big. */
-  private async check(): Promise<void> {
-    if (this.stopping || this.restarting) return;
-    const mem = await run('docker', ['stats', '--no-stream', '--format', '{{.MemUsage}}', this.name]).then(
+  /** Memory in use now (MiB), if it's running. */
+  async memoryMiB(): Promise<number | undefined> {
+    return run('docker', ['stats', '--no-stream', '--format', '{{.MemUsage}}', this.name]).then(
       (r) => parseMemMiB(r.stdout),
       () => undefined,
     );
-    if (mem === undefined || mem <= this.opts.memoryLimitMiB || !this.tracker.idle(30_000)) return;
+  }
+
+  /** Answers HTTP (after a start or restart). */
+  async ready(timeoutMs = 60_000): Promise<boolean> {
+    const until = Date.now() + timeoutMs;
+    while (Date.now() < until) {
+      const up = await fetch(`http://127.0.0.1:${this.opts.port}/`).then(
+        () => true,
+        () => false,
+      );
+      if (up) return true;
+      await new Promise((res) => setTimeout(res, 500));
+    }
+    return false;
+  }
+
+  /**
+   * Restart now if idle and above the limit, and wait until it answers
+   * again. For tests that send proofs back to back.
+   */
+  async freshen(): Promise<void> {
+    await this.check(0);
+    await this.ready();
+  }
+
+  /** Restart if idle and too big. */
+  private async check(quietMs = this.opts.quietMs ?? 10_000): Promise<void> {
+    if (this.stopping || this.restarting) return;
+    const mem = await this.memoryMiB();
+    if (mem === undefined || mem <= this.opts.memoryLimitMiB || !this.tracker.idle(quietMs)) return;
     this.restarting = true;
     this.opts.log(`Proof server idle at ${Math.round(mem)} MiB (limit ${this.opts.memoryLimitMiB}); restarting it to free memory.`);
-    // Stopping it ends `once`, and `run` starts a fresh one.
+    // Stopping it ends `once`, and `run` starts a fresh one (5 s later).
     await run('docker', ['stop', this.name]).catch(() => undefined);
+    await new Promise((res) => setTimeout(res, 6_000));
     this.restarting = false;
   }
 }

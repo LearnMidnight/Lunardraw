@@ -17,6 +17,7 @@ import { commitmentOf, DerivedSeeds, DrawOracle, type Schedule, StarfallKeeper, 
 import { generateOperatorSecret, generateOracleSecretKey, oraclePublicKey, pureCircuits as nightcast } from '@nightcast/contract';
 import { combineDrawSeed, drawStarfall } from '@nightcast/sdk';
 import { connect, localFingerprints, openWallet, type Session } from '@nightcast/deploy';
+import { ProofServer } from '../proof-server.js';
 import {
   acceptStarfallOracleKey,
   buyGames,
@@ -54,6 +55,11 @@ const lineHitting = (numbers: number[], moonball: number, match: number): PlainL
 
 describe.runIf(enabled)('Starfall on a local Midnight network', () => {
   let session: Session;
+  // Our own supervised proof server rather than the network's: each big proof
+  // takes about 7 GB and the server keeps much of it, so it's restarted (when
+  // idle above 3 GB) before every step, as the VM's supervisor does.
+  const PROOF_PORT = 6311;
+  const proofServer = new ProofServer({ port: PROOF_PORT, memoryLimitMiB: 3_072, log: (m) => process.stdout.write(`[proof server] ${m}\n`), echo: false });
   let wallet: MidnightWalletProvider;
   let providers: StarfallProviders;
   let address: string;
@@ -93,7 +99,10 @@ describe.runIf(enabled)('Starfall on a local Midnight network', () => {
 
   beforeAll(async () => {
     process.env.LUNARDRAW_DEPLOYMENTS_DIR = mkdtempSync(join(tmpdir(), 'starfall-deployments-'));
-    session = await connect('local');
+    void proofServer.run();
+    if (!(await proofServer.ready(120_000))) throw new Error('the supervised proof server did not start');
+    const network = await connect('local');
+    session = { ...network, config: { ...network.config, proofServer: `http://127.0.0.1:${PROOF_PORT}` } };
     wallet = await openWallet(session);
     providers = starfallProviders(session, wallet);
     mine = Uint8Array.from(Buffer.from(wallet.unshieldedKeystore.getAddress(), 'hex'));
@@ -103,6 +112,7 @@ describe.runIf(enabled)('Starfall on a local Midnight network', () => {
   afterAll(async () => {
     await keeper?.stop().catch(() => undefined);
     await wallet?.stop().catch(() => undefined);
+    proofServer.stop();
     if (failed && process.env.CI) return;
     await session?.shutdown().catch(() => undefined);
   }, 5 * 60_000);
@@ -114,9 +124,13 @@ describe.runIf(enabled)('Starfall on a local Midnight network', () => {
     for (let i = 0; i < (opts.tries ?? 60); i++) {
       const v = await view();
       if (done(v)) return v;
+      await proofServer.freshen();
       const r = await keeper.tick();
       for (const f of r.failed) session.logger.warn(`keeper: ${f.step} failed: ${f.error}`);
-      if (opts.oracle) await oracle.tick();
+      if (opts.oracle) {
+        await proofServer.freshen();
+        await oracle.tick();
+      }
       await sleep(5_000);
     }
     throw new Error(`timed out waiting until ${what}`);
@@ -171,6 +185,7 @@ describe.runIf(enabled)('Starfall on a local Midnight network', () => {
     for (let i = 0; i < 4; i++) games.push(Starfall.makeTicket(1n, quickPick(), mine));
     const buyer = await joinStarfall(buyerProviders, address, {});
     const started = Date.now();
+    await proofServer.freshen();
     const txs = await buyGames(buyer, buyerProviders.privateStateProvider, address, games, mine, (done, of) =>
       session.logger.info(`bought ${done} of ${of} (${Math.round((Date.now() - started) / 1000)} s)`),
     ).catch((err: unknown) => {
@@ -189,6 +204,7 @@ describe.runIf(enabled)('Starfall on a local Midnight network', () => {
     // A game in draw 2, which the oracle will never answer (it isn't ticked again).
     const d2 = (await drawOf(2n))!;
     expect(d2.status).toBe(DrawStatus.open);
+    await proofServer.freshen();
     await buyGames(buyer, buyerProviders.privateStateProvider, address, [Starfall.makeTicket(2n, quickPick(), mine)], mine);
     expect((await drawOf(2n))!.tickets).toBe(1n);
 
