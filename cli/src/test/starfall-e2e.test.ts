@@ -191,7 +191,7 @@ describe.runIf(enabled)('Starfall on a local Midnight network', () => {
     ).catch((err: unknown) => {
       throw new Error(`purchase rejected: ${explain(err)}`);
     });
-    expect(txs).toBe(2); // 3 games, then 2
+    expect(txs).toBe(3); // 2 games, 2, then 1
     expect((await drawOf(1n))!.tickets).toBe(5n);
 
     // Sales close: reveal (and open draw 2), the oracle answers, the numbers come out.

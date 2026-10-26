@@ -173,14 +173,14 @@ describe('sealed tickets', () => {
 });
 
 describe('multi-game purchases', () => {
-  it('buys a QuickPick package three games at a time, each game a ticket of its own', () => {
+  it('buys a QuickPick package two games at a time, each game a ticket of its own', () => {
     const { sim, oracleSecretKey, settlementSecret } = setup();
     const { n } = openWithSeed(sim, oracleSecretKey);
     const me = randomAddress();
     const games = quickPickPackage(n, 'regular', me);
     expect(games.length).toBe(12);
-    expect(Number(pureCircuits.maxGames())).toBe(3);
-    expect(sim.buyPackage(games, me)).toBe(4);
+    expect(Number(pureCircuits.maxGames())).toBe(2);
+    expect(sim.buyPackage(games, me)).toBe(6);
     expect(sim.ticketsSold(n)).toBe(12n);
     const opened = sim.decryptDrawTickets(n, settlementSecret);
     expect(opened.map((t) => hex(sim.commitmentOf(t)))).toEqual(games.map((t) => hex(sim.commitmentOf(t))));
@@ -769,7 +769,7 @@ describe('the operator fee', () => {
     const me = randomAddress();
     sim.buyTicket(makeTicket(n, quickPick(), me), me); // 1 line
     sim.buyPackage(quickPickPackage(n, 'mini', me), me); // 8 lines
-    sim.buyTickets(Array.from({ length: 3 }, () => makeTicket(n, quickPick(), me)), me); // 3 lines
+    sim.buyPackage(Array.from({ length: 3 }, () => makeTicket(n, quickPick(), me)), me); // 3 lines
     drawIt(sim, n, seed);
     sim.payments = sim.payments === undefined ? undefined : [];
     sim.settleAll(n);
