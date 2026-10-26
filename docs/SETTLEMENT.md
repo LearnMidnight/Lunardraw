@@ -171,7 +171,31 @@ A ticket costs about 14,000 rows of settlement and about 148,000 rows of purchas
 - **No subscriptions.** Multi-week entries need per-draw purchases, which an agent can do.
 - **Purchases are sequential.** Each purchase takes the next index, so two purchases in the same block conflict and one must retry. Fine at prototype volume; a Merkle-tree set or per-block batching would lift it.
 - **Settler liveness.** A settler who sees a result it dislikes can stop, and the draw voids and refunds. This is the same class of trust as the oracle's: a committee (stage 2) with t-of-n liveness reduces it.
-- **Untested on a real network.** Block limits on a transaction's ledger operations (25 ticket lookups and up to 25 inserts in a batch, four sealed tickets in a purchase) are only known once it runs on Preprod. Next: the keeper's settler duties, then deploy with a test settlement key and run a 100-ticket draw.
+- **Untested on a real network.** Block limits on a transaction's ledger operations (25 ticket lookups and up to 25 inserts in a batch, four sealed tickets in a purchase) are only known once it runs on Preprod. Next: the Starfall CLI (deploy with a test settlement key, keeper, buy), then a 100-ticket draw on Preprod.
+
+## The keeper
+
+`StarfallKeeper` (`keeper/src/starfall.ts`) runs every step above with nobody at the keyboard. Each pass it reads the contract and sends what's due, most urgent first:
+
+| Draw is | The keeper sends |
+|---|---|
+| open, sales closed | `requestDraw`: reveal the seed and open the next draw |
+| open, past the reveal deadline | `voidDraw` |
+| requested, past the draw deadline | `voidDraw` (the oracle didn't answer) |
+| fulfilled | `computeNumbers` (or `voidDraw` past the deadline) |
+| drawn, tickets left to settle | decrypts the draw's tickets with the settlement secret (checking each against its commitment), then `settleBatch`, one batch of 25 a pass, in order |
+| drawn, every ticket settled | `finaliseDraw`, once the draw before it is settled or void |
+| drawn, past the settlement deadline | `voidDraw` |
+| settled | `payEntitlement` for each unpaid entitlement |
+| void | `refundTicket` for each ticket not refunded yet |
+
+Payments and refunds are sent at most 5 a pass (`paymentsPerPass`), so a void draw with hundreds of tickets never holds up a reveal.
+
+**Seeds** come from the organiser secret: draw *n*'s seed is SHA-256("starfall:seed:v1" ‖ organiser secret ‖ contract address ‖ *n*). There's no seeds file to lose or copy, and the contract never accepts a seed commitment twice, so no seed is revealed for two draws.
+
+**Two keepers.** A *primary* (on the server) sends everything. A *standby* elsewhere, with its own wallet and copies of the organiser and settlement secrets, sends one of the primary's steps only after it has been due for `takeOverAfterSecs` (default 5 minutes) without the primary sending it. "Due" is per step: each settlement batch is a step of its own, so while the primary keeps settling, the standby keeps waiting; if the primary stops halfway, the standby carries on from the next batch. Once it has stepped in, the standby keeps sending the primary's steps (the next batches, the finalise, the payments) until there has been nothing to take over for the take-over time. Payments and refunds are **split**: with `split: { index, of }`, a payment belongs to share (first four bytes of the entitlement id) mod `of`, a refund to (ticket index) mod `of`. Each keeper sends its own share at once and the other's once it's overdue, so both wallets pay fees and either keeper alone still pays everyone. With two keepers: primary `{ index: 0, of: 2 }`, standby `{ index: 1, of: 2 }`. Keep the take-over time under the reveal window, or a standby can't save a reveal.
+
+A keeper without the settlement secret skips settling; one without the organiser secret skips opening and revealing. One given the wrong settlement secret says so and doesn't settle.
 
 ## Files
 
@@ -183,3 +207,6 @@ A ticket costs about 14,000 rows of settlement and about 148,000 rows of purchas
 | `contract/src/settlement-witnesses.ts` | Private state and witnesses: purchases, sealing randomness, settlement batches |
 | `contract/src/settlement-simulator.ts` | In-memory simulator, including the settlement engine loop (`decryptDrawTickets`, `settleAll`), with v0's role helpers (`proposeOrganiser`, `acceptOrganiser`, `recoverOrganiser`, `approveOracleKey`) |
 | `contract/src/test/settlement.test.ts` | Tests |
+| `keeper/src/starfall.ts` | The Starfall keeper: chain view, plan, primary/standby roles and the payment split |
+| `keeper/src/engine.ts` | Sending steps, retries and take-over, shared with v0's keeper |
+| `keeper/src/test/starfall.test.ts` | The keeper's tests, on the simulator |

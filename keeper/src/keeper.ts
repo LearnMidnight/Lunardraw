@@ -17,6 +17,7 @@ import { DrawStatus } from '@lunardraw/contract';
 import type { ChainView, DrawView, LunardrawChain } from './chain.js';
 import type { Schedule } from './schedule.js';
 import type { SeedStore } from './seeds.js';
+import { type EngineTiming, type KeeperStatus, reasonOf, StepEngine, type TickReport } from './engine.js';
 
 export type Step =
   | { kind: 'open' }
@@ -37,25 +38,6 @@ export type PlanOptions = {
 };
 
 const hex = (b: Uint8Array): string => Buffer.from(b).toString('hex');
-
-/**
- * An error's message and its causes, one line, for logs. midnight-js wraps
- * the reason a circuit failed (an assertion, a missing witness) as a cause.
- */
-export const reasonOf = (err: unknown, max = 600): string => {
-  const parts: string[] = [];
-  const seen = new Set<unknown>();
-  let current: unknown = err;
-  while (current !== undefined && current !== null && !seen.has(current) && parts.length < 6) {
-    seen.add(current);
-    const message = current instanceof Error ? current.message : typeof current === 'string' ? current : JSON.stringify(current);
-    const line = String(message).split('\n')[0].trim();
-    if (line && !parts.includes(line)) parts.push(line);
-    current = current instanceof Error ? (current as Error & { cause?: unknown }).cause : undefined;
-  }
-  const text = parts.join(': ') || 'unknown error';
-  return text.length > max ? `${text.slice(0, max)}...` : text;
-};
 
 /**
  * The steps that are due, in the order to send them, for a view of the
@@ -146,27 +128,12 @@ export const describeStep = (s: Step): string => {
   }
 };
 
-export type KeeperLogger = { info(msg: string): void; warn(msg: string): void; error(msg: string): void };
-
-export type KeeperOptions = {
+export type KeeperOptions = EngineTiming & {
   chain: LunardrawChain;
   seeds: SeedStore;
   schedule: Schedule;
   marginSecs?: number;
   openNew?: boolean;
-  /** How often to look, in ms. Default 30 s. */
-  pollMs?: number;
-  /**
-   * After a step succeeds, don't send it again for this long (ms) even if the
-   * indexer still shows it as due: it lags behind the chain. Default 5 minutes.
-   */
-  doneGraceMs?: number;
-  /** First retry delay after a failed step, doubling up to `maxBackoffMs`. */
-  backoffMs?: number;
-  maxBackoffMs?: number;
-  logger?: KeeperLogger;
-  /** Local clock in ms (for grace and backoff). */
-  clock?: () => number;
   /** Called with the contract's state after every pass (used to publish the site feed). */
   onView?: (view: ChainView, nowSecs: number) => void;
   /**
@@ -179,129 +146,44 @@ export type KeeperOptions = {
   background?: Step['kind'][];
 };
 
-export type TickReport = { done: string[]; failed: { step: string; error: string }[]; skipped: { step: string; reason: string }[] };
-
-/**
- * Transactions that keep failing with nothing succeeding in between: when the
- * streak began (local clock, ms) and how long it is. A wallet whose sync has
- * gone stale fails every fee proof (node error 1010 custom 170), so a long
- * streak is the cue to restart and resync.
- */
-export type FailureStreak = { since?: number; failures: number; lastSuccessAt?: number };
-
-export class StreakCounter {
-  private since: number | undefined;
-  private failures = 0;
-  private lastSuccessAt: number | undefined;
-
-  constructor(private readonly clock: () => number) {}
-
-  ok(): void {
-    this.since = undefined;
-    this.failures = 0;
-    this.lastSuccessAt = this.clock();
-  }
-
-  failed(): void {
-    if (this.failures === 0) this.since = this.clock();
-    this.failures += 1;
-  }
-
-  get(): FailureStreak {
-    return { since: this.since, failures: this.failures, lastSuccessAt: this.lastSuccessAt };
-  }
-}
-
-export type KeeperStatus = {
-  /** When the last pass finished (ms), and whether it could read the chain. */
-  lastTickAt?: number;
-  lastTickOk: boolean;
-  /** Transactions failing in a row. */
-  streak: FailureStreak;
-  /** Steps that keep failing, with their failure counts. */
-  failing: { step: string; failures: number; error: string }[];
-};
-
-const silent: KeeperLogger = { info() {}, warn() {}, error() {} };
-
+/** Lunardraw v0's keeper (one keeper per deployment). */
 export class Keeper {
-  private readonly cfg: Required<Omit<KeeperOptions, 'logger' | 'chain' | 'seeds' | 'schedule'>>;
-  private readonly logger: KeeperLogger;
-  private readonly done = new Map<string, number>();
-  private readonly failures = new Map<string, { failures: number; nextTryAt: number; error: string }>();
+  private readonly engine: StepEngine<ChainView, Step>;
   private readonly warned = new Set<string>();
-  private busy: Promise<TickReport> | undefined;
-  private timer: ReturnType<typeof setTimeout> | undefined;
-  private running = false;
-  private lastTickAt: number | undefined;
-  private lastTickOk = false;
-  /** Background steps still running, by step key. */
-  private readonly inFlight = new Map<string, Promise<void>>();
-  private readonly streak: StreakCounter;
-  /** Background steps that finished since the last pass, for its report. */
-  private readonly finished: { key: string; error?: string }[] = [];
 
   constructor(private readonly options: KeeperOptions) {
-    this.cfg = {
-      onView: options.onView ?? (() => {}),
-      background: options.background ?? [],
-      marginSecs: options.marginSecs ?? 30,
-      openNew: options.openNew ?? true,
-      pollMs: options.pollMs ?? 30_000,
-      doneGraceMs: options.doneGraceMs ?? 5 * 60_000,
-      backoffMs: options.backoffMs ?? 10_000,
-      maxBackoffMs: options.maxBackoffMs ?? 5 * 60_000,
-      clock: options.clock ?? Date.now,
-    };
-    this.logger = options.logger ?? silent;
-    this.streak = new StreakCounter(this.cfg.clock);
+    const marginSecs = options.marginSecs ?? 30;
+    const openNew = options.openNew ?? true;
+    this.engine = new StepEngine<ChainView, Step>({
+      ...options,
+      read: () => Promise.all([options.chain.view(), options.chain.now()]),
+      beforePlan: (view) => this.beforePlan(view),
+      plan: (view, now) => dueSteps(view, now, { marginSecs, openNew }),
+      key: (step, view) => stepKey(step, view.lastDraw),
+      describe: describeStep,
+      run: (step, view, now) => this.run(step, view, now),
+    });
+  }
+
+  private get logger() {
+    return this.options.logger ?? { info() {}, warn() {}, error() {} };
   }
 
   /** One pass: read the chain, send every due step. Never runs twice at once. */
   tick(): Promise<TickReport> {
-    if (!this.busy) {
-      this.busy = this.doTick().finally(() => {
-        this.busy = undefined;
-      });
-    }
-    return this.busy;
+    return this.engine.tick();
   }
 
   status(): KeeperStatus {
-    return {
-      lastTickAt: this.lastTickAt,
-      lastTickOk: this.lastTickOk,
-      streak: this.streak.get(),
-      failing: [...this.failures].map(([step, f]) => ({ step, failures: f.failures, error: f.error })),
-    };
+    return this.engine.status();
   }
 
   /** Background steps still running (their step keys). */
   inProgress(): string[] {
-    return [...this.inFlight.keys()];
+    return this.engine.inProgress();
   }
 
-  private async doTick(): Promise<TickReport> {
-    const { chain } = this.options;
-    const report: TickReport = { done: [], failed: [], skipped: [] };
-    for (const f of this.finished.splice(0)) {
-      if (f.error === undefined) report.done.push(f.key);
-      else report.failed.push({ step: f.key, error: f.error });
-    }
-    let view: ChainView;
-    let now: number;
-    try {
-      [view, now] = await Promise.all([chain.view(), chain.now()]);
-    } catch (err) {
-      this.lastTickOk = false;
-      this.lastTickAt = this.cfg.clock();
-      throw err;
-    }
-    try {
-      this.cfg.onView(view, now);
-    } catch (err) {
-      this.logger.error(`publishing the view failed: ${reasonOf(err)}`);
-    }
+  private async beforePlan(view: ChainView): Promise<void> {
     if (view.oracleKeyChange) {
       const c = view.oracleKeyChange;
       const key = `key change ${c.key.x}:${c.key.y}:${c.at}`;
@@ -322,105 +204,6 @@ export class Keeper {
       } catch (err) {
         this.logger.error(`could not tidy the seed store: ${reasonOf(err)}`);
       }
-    }
-    const steps = dueSteps(view, now, { marginSecs: this.cfg.marginSecs, openNew: this.cfg.openNew });
-    const keys = new Set(steps.map((s) => stepKey(s, view.lastDraw)));
-    // Forget steps that are no longer due.
-    for (const k of this.done.keys()) if (!keys.has(k)) this.done.delete(k);
-    for (const k of this.failures.keys()) if (!keys.has(k)) this.failures.delete(k);
-
-    for (const step of steps) {
-      const key = stepKey(step, view.lastDraw);
-      const at = this.cfg.clock();
-      if (this.inFlight.has(key)) {
-        report.skipped.push({ step: key, reason: 'proving in the background' });
-        continue;
-      }
-      const doneAt = this.done.get(key);
-      if (doneAt !== undefined && at - doneAt < this.cfg.doneGraceMs) {
-        report.skipped.push({ step: key, reason: 'sent; waiting for the indexer' });
-        continue;
-      }
-      const failed = this.failures.get(key);
-      if (failed && at < failed.nextTryAt) {
-        report.skipped.push({ step: key, reason: 'backing off' });
-        continue;
-      }
-      if (this.cfg.background.includes(step.kind)) {
-        this.startInBackground(step, key, view, now, failed?.failures ?? 0);
-        report.skipped.push({ step: key, reason: 'started in the background' });
-        continue;
-      }
-      try {
-        const startedAt = Date.now();
-        const sent = await this.run(step, view, now);
-        if (!sent) {
-          report.skipped.push({ step: key, reason: 'cannot be sent' });
-          continue;
-        }
-        this.done.set(key, this.cfg.clock());
-        this.failures.delete(key);
-        this.streak.ok();
-        report.done.push(key);
-        // How long the proof and the transaction took (wall clock), for capacity planning.
-        this.logger.info(`done: ${describeStep(step)} (${Math.round((Date.now() - startedAt) / 1000)} s)`);
-      } catch (err) {
-        const error = reasonOf(err);
-        const n = (failed?.failures ?? 0) + 1;
-        const delay = Math.min(this.cfg.backoffMs * 2 ** (n - 1), this.cfg.maxBackoffMs);
-        this.failures.set(key, { failures: n, nextTryAt: this.cfg.clock() + delay, error });
-        this.streak.failed();
-        report.failed.push({ step: key, error });
-        this.logger.error(`could not ${describeStep(step)} (attempt ${n}, retrying in ${Math.round(delay / 1000)} s): ${error}`);
-      }
-    }
-    this.lastTickOk = true;
-    this.lastTickAt = this.cfg.clock();
-    // Something changed: publish the new state now rather than next pass.
-    if (report.done.length > 0) await this.publish();
-    return report;
-  }
-
-  /** Start a step without waiting for it; its outcome is recorded when it ends. */
-  private startInBackground(step: Step, key: string, view: ChainView, now: number, failuresSoFar: number): void {
-    const startedAt = Date.now();
-    this.logger.info(`started: ${describeStep(step)} (in the background)`);
-    const job = this.run(step, view, now).then(
-      (sent) => {
-        if (!sent) return;
-        this.done.set(key, this.cfg.clock());
-        this.failures.delete(key);
-        this.streak.ok();
-        this.finished.push({ key });
-        this.logger.info(`done: ${describeStep(step)} (${Math.round((Date.now() - startedAt) / 1000)} s)`);
-        void this.publish();
-      },
-      (err: unknown) => {
-        const error = reasonOf(err);
-        const n = failuresSoFar + 1;
-        const delay = Math.min(this.cfg.backoffMs * 2 ** (n - 1), this.cfg.maxBackoffMs);
-        this.failures.set(key, { failures: n, nextTryAt: this.cfg.clock() + delay, error });
-        this.streak.failed();
-        this.finished.push({ key, error });
-        this.logger.error(
-          `could not ${describeStep(step)} after ${Math.round((Date.now() - startedAt) / 1000)} s (attempt ${n}, retrying in ${Math.round(delay / 1000)} s): ${error}`,
-        );
-      },
-    );
-    this.inFlight.set(
-      key,
-      job.finally(() => this.inFlight.delete(key)),
-    );
-  }
-
-  /** Publish the current state through onView (errors logged, never thrown). */
-  private async publish(): Promise<void> {
-    if (!this.options.onView) return;
-    try {
-      const [view, now] = await Promise.all([this.options.chain.view(), this.options.chain.now()]);
-      this.cfg.onView(view, now);
-    } catch (err) {
-      this.logger.error(`publishing the view failed: ${reasonOf(err)}`);
     }
   }
 
@@ -494,35 +277,19 @@ export class Keeper {
 
   /** Keep ticking until {@link stop}. */
   start(): void {
-    if (this.running) return;
-    this.running = true;
-    const loop = async () => {
-      if (!this.running) return;
-      try {
-        await this.tick();
-      } catch (err) {
-        this.logger.error(`could not read the contract: ${reasonOf(err)}`);
-      }
-      if (this.running) this.timer = setTimeout(loop, this.cfg.pollMs);
-    };
-    void loop();
+    this.engine.start();
   }
 
   /**
    * Stop; resolves after any pass in progress finishes. Background proofs are
-   * not waited for (they can take many minutes); stopping the process
-   * abandons them, and the next keeper simply starts them again.
+   * not waited for; the next keeper simply starts them again.
    */
-  async stop(): Promise<void> {
-    this.running = false;
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = undefined;
-    if (this.busy) await this.busy.catch(() => undefined);
-    if (this.inFlight.size > 0) this.logger.info(`leaving ${[...this.inFlight.keys()].join(', ')} unfinished; the next run starts it again`);
+  stop(): Promise<void> {
+    return this.engine.stop();
   }
 
   /** Wait for background steps (for tests). */
-  async settled(): Promise<void> {
-    await Promise.all([...this.inFlight.values()]);
+  settled(): Promise<void> {
+    return this.engine.settled();
   }
 }
