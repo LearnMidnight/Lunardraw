@@ -98,13 +98,13 @@ Once the player wallet has synced and has tNIGHT, buy a package for the draw on 
 | Package | Games | Transactions |
 |---|---|---|
 | single | 1 | 1 |
-| starter | 4 | 1 |
-| mini | 8 | 2 |
-| regular | 12 | 3 |
-| mega | 25 | 7 |
-| maxi | 50 | 13 |
+| starter | 4 | 2 |
+| mini | 8 | 3 |
+| regular | 12 | 4 |
+| mega | 25 | 9 |
+| maxi | 50 | 17 |
 
-Or `--games <n>` for any number. Each transaction is a proof of about 4 games. The numbers are printed when it's done: winnings go to the player wallet by themselves.
+Or `--games <n>` for any number. Each transaction is a proof of up to 3 games. The numbers are printed when it's done: winnings go to the player wallet by themselves.
 
 Start with **starter** to see one purchase work and how long it takes. Then aim for about **100 games in one draw**: four batches of settlement, which is what this test is for. Buy them before the draw's sales close (the keeper log says when).
 

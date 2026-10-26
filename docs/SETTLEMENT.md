@@ -18,7 +18,7 @@ The game is Australian Powerball's, as the Starfall spec asks: 7 numbers from 35
 
    The purchase proof shows that both hold the same valid ticket: 7 increasing numbers in 1–35, a Moonball in 1–20, and shares adding up to 10,000 basis points. The buyer also names a public refund address. Tickets are numbered 0, 1, 2, … within the draw, in purchase order.
 
-   `buyTickets(count, refundTo)` buys 1 to `maxGames()` = 4 games in one transaction, each with its own commitment, ciphertext and index, and returns the first index. A single game is `count = 1`. A QuickPick package (Single 1, Starter 4, Mini 8, Regular 12, Super 18, Mega 25, Jumbo 36, Maxi 50 games; `quickPickPackage` in the SDK) is a run of such purchases: a Maxi is 13 transactions. Choosing your own numbers is the same purchase with a chosen line.
+   `buyTickets(count, refundTo)` buys 1 to `maxGames()` = 3 games in one transaction, each with its own commitment, ciphertext and index, and returns the first index. A single game is `count = 1`. A QuickPick package (Single 1, Starter 4, Mini 8, Regular 12, Super 18, Mega 25, Jumbo 36, Maxi 50 games; `quickPickPackage` in the SDK) is a run of such purchases: a Maxi is 17 transactions. Choosing your own numbers is the same purchase with a chosen line.
 2. **Sales close.** The count is frozen: no ticket can be added or removed.
 3. **Draw.** As v0: the organiser's sealed seed, the oracle's VRF and the site's number rule. Each draw is bound to the active oracle key **when it opens**, so buyers can see which key will answer it. `requestDraw(n, seed, next)` reveals draw `n`'s seed and can open the next draw in the same transaction; `requestDraw(0, …, next)` just opens a draw. `computeNumbers(n, now)` puts the numbers in the ledger; its clock stamp may be up to **30 minutes** from block time, so a slow numbers proof still lands (v0 allows 10; Lunardraw #32).
 4. **Settlement.** The settler decrypts every ticket with the settlement secret and calls `settleBatch` repeatedly. Each call covers the next 25 tickets in index order. For each ticket, the proof shows that the decrypted ticket hashes to the commitment stored at its index, then works out its division against the numbers stored in the ledger. Winning tickets become **entitlements** (division + payees) under the id `SHA-256(domain, C, salt)`. The salt is secret, so nobody can link an entitlement to a purchase.
@@ -71,7 +71,7 @@ A deploy transaction carries every circuit's verifier key and must fit Midnight'
 | `proposeOracleKey` | organiser | propose a new oracle key (waits `oracleKeyDelay`) |
 | `changeOrganiser` | organiser / successor / backup | propose / accept / recover |
 | `requestDraw` | organiser | reveal a seed and open the next draw; `n = 0` only opens |
-| `buyTickets` | anyone | buy 1–4 games (replaces `buyTicket`) |
+| `buyTickets` | anyone | buy 1–3 games (replaces `buyTicket`) |
 | `fulfilDraw` | the draw's oracle | the VRF output |
 | `computeNumbers` | anyone | the numbers |
 | `settleBatch` | settlement key holder | settle the next 25 tickets |
@@ -150,7 +150,7 @@ Rows and k mock-compiled; proving keys built by the CI `settlement-keys` job (26
 
 | Circuit | k | Rows | Proving key |
 |---|---|---|---|
-| `buyTickets`, 4 games | 20 | 594,601 | 322 MiB |
+| `buyTickets`, 3 games | 19 | 446,109 | about 145 MiB (4 games: k=20, 594,601 rows, 322 MiB) |
 | `settleBatch`, 25 tickets | 19 | 353,320 | 145 MiB |
 | `computeNumbers` (same as v0) | 19 | 323,756 | 145 MiB |
 | `requestDraw` (reveal + open) | 16 | 62,325 | 20 MiB |
@@ -163,7 +163,7 @@ Rows and k mock-compiled; proving keys built by the CI `settlement-keys` job (26
 | `refundTicket` | 9 | 271 | < 1 MiB |
 | `voidDraw` | 9 | 252 | < 1 MiB |
 
-A ticket costs about 14,000 rows of settlement and about 148,000 rows of purchase. The batch size and the games per purchase are fixed at compile time (`npm run gen:batch -w @lunardraw/contract -- <batch> <games>` regenerates `src/batch.compact`). Measured batches: 10 tickets k=18, 25 k=19, 50 k=20, 100 k=21. Purchases: **3 games would be k=19 (446,109 rows)**, 4 games k=20, 8 games k=21. Buyers prove their own purchases (Lace proves on the buyer's machine), so the 322 MiB purchase key is the one every buyer's proof server loads; 3 games per transaction would roughly halve it (k=19, like `settleBatch`'s 145 MiB) and the proving time, at the cost of more transactions per package (a Maxi: 17 instead of 13). Decide once the Preprod run measures proving time on an ordinary PC. A 10,000-ticket draw takes 400 batch transactions until recursion is available.
+A ticket costs about 14,000 rows of settlement and about 148,000 rows of purchase. The batch size and the games per purchase are fixed at compile time (`npm run gen:batch -w @lunardraw/contract -- <batch> <games>` regenerates `src/batch.compact`). Measured batches: 10 tickets k=18, 25 k=19, 50 k=20, 100 k=21. Purchases: **3 games would be k=19 (446,109 rows)**, 4 games k=20, 8 games k=21. Buyers prove their own purchases (Lace proves on the buyer's machine). **Decided 26 Oct 2026: 3 games per purchase (k=19).** With 4 games (k=20) the first end-to-end run's proof server used 13.8 GB proving one purchase and was killed for running out of memory on CI's 16 GB machine, while the k=19 `computeNumbers` proof peaks under 1 GB. So a purchase is k=19, like `settleBatch` and `computeNumbers`, at the cost of more transactions per package (a Maxi: 17 instead of 13). A 10,000-ticket draw takes 400 batch transactions until recursion is available.
 
 ## Other limits
 

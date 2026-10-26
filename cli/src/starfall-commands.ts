@@ -75,7 +75,7 @@ record), so its secret can stay offline. --operator is where the 0.2 tNIGHT fee 
 the deploying wallet).
 The keeper works out each draw's seed from the organiser secret, so there is no seeds file.
 buy picks random games (QuickPick) for the draw on sale, paid to --pay-to (default: your wallet),
-with refunds to your wallet if the draw is cancelled; it sends 4 games per transaction.`;
+with refunds to your wallet if the draw is cancelled; it sends up to 3 games per transaction.`;
 
 const SETTLEMENT = 'settlement';
 

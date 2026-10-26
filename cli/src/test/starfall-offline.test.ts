@@ -101,9 +101,9 @@ describe('MidnightStarfallChain', () => {
     expect((await keeper.tick()).done).toEqual(['open after 0']);
     const buyer = webcrypto.getRandomValues(new Uint8Array(32));
     const games = Array.from({ length: 30 }, () => Starfall.makeTicket(1n, quickPick(), buyer));
-    for (let i = 0; i < games.length; i += 4) {
-      await m.store.set(STARFALL_PRIVATE_STATE_ID, { pendingTickets: games.slice(i, i + 4) });
-      await m.calls.callTx.buyTickets(BigInt(games.slice(i, i + 4).length), { bytes: buyer });
+    for (let i = 0; i < games.length; i += 3) {
+      await m.store.set(STARFALL_PRIVATE_STATE_ID, { pendingTickets: games.slice(i, i + 3) });
+      await m.calls.callTx.buyTickets(BigInt(games.slice(i, i + 3).length), { bytes: buyer });
     }
     await m.store.set(STARFALL_PRIVATE_STATE_ID, base);
     sim.advance(Number(sim.getLedger().draws.lookup(1n).salesClose) - sim.now + 31);
