@@ -88,9 +88,9 @@ describe.runIf(enabled)('Starfall on a local Midnight network', () => {
     settleWindow: 3_600n,
   };
   // Draw 1 closes 15 minutes after it opens (time for two purchases); later
-  // draws 30 minutes after, so draw 2 is still selling once draw 1 is drawn.
+  // draws 20 minutes after, so draw 2 is still selling once draw 1 is drawn.
   let opened = 0;
-  const sales: Schedule = (now) => BigInt(Math.floor(now) + (opened++ === 0 ? 900 : 1_800));
+  const sales: Schedule = (now) => BigInt(Math.floor(now) + (opened++ === 0 ? 900 : 1_200));
 
   let failed = false;
   afterEach((ctx) => {
@@ -222,7 +222,9 @@ describe.runIf(enabled)('Starfall on a local Midnight network', () => {
     const d2 = (await drawOf(2n))!;
     // The keeper reveals draw 2; the oracle stays quiet; after the draw window it voids and refunds.
     while (Date.now() / 1000 < Number(d2.salesClose) + 25) await sleep(5_000);
-    await until('draw 2 is void', (v) => v.draws.find((d) => d.id === 2n)!.status === DrawStatus.voided, { tries: 120 });
+    await until('draw 2 is revealed', (v) => v.draws.find((d) => d.id === 2n)!.status === DrawStatus.requested);
+    while (Date.now() / 1000 < Number(d2.drawDeadline) + 25) await sleep(5_000);
+    await until('draw 2 is void', (v) => v.draws.find((d) => d.id === 2n)!.status === DrawStatus.voided);
     await until('draw 2 is refunded', (v) => v.draws.find((d) => d.id === 2n)!.unrefunded.length === 0);
   }, 60 * 60_000);
 });

@@ -339,7 +339,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          ( set +e; while true; do docker stats --no-stream --format '{{.Name}} {{.MemUsage}}' 2>/dev/null | grep '^proof-server' >> ../proof-mem.log; sleep 2; done ) &
+          ( set +e; while true; do docker stats --no-stream --format '{{.Name}} {{.MemUsage}}' 2>/dev/null | grep 'proof-server' >> ../proof-mem.log; sleep 2; done ) &
           sampler=$!
           status=0
           npx vitest run src/test/starfall-e2e.test.ts --reporter=default --reporter=github-actions --reporter=json --outputFile.json=../reports/starfall-e2e.json 2>&1 | tee ../e2e.log || status=$?
