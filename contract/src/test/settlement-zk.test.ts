@@ -5,6 +5,10 @@
  * run found one (a purchase of fewer than maxGames() games read the
  * settlement key inside a branch that wasn't taken, and the prover panicked
  * on the resulting non-point). This covers every branch of every circuit.
+ *
+ * A run the prover can't handle can make the checker hang rather than throw
+ * (the purchase bug did), so each test has a short timeout: passing takes a
+ * few seconds.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -124,7 +128,7 @@ describe('every circuit run passes the zkir check', () => {
       expect(circuits.has(c), c).toBe(true);
     }
     expect(await allPass(runs)).toEqual([]);
-  }, 300_000);
+  }, 60_000);
 
   it('a reveal without a next draw, a second draw finalised after the first, no operator fee', async () => {
     const { sim, runs, open } = setup({ feePerGame: 0n });
@@ -142,7 +146,7 @@ describe('every circuit run passes the zkir check', () => {
     sim.computeNumbers(second.n);
     sim.settleAll(second.n);
     expect(await allPass(runs)).toEqual([]);
-  }, 300_000);
+  }, 60_000);
 
   it('a void draw and its refunds', async () => {
     const { sim, runs, open } = setup();
@@ -154,7 +158,7 @@ describe('every circuit run passes the zkir check', () => {
     sim.refundTicket(n, 0n);
     sim.refundTicket(n, 1n);
     expect(await allPass(runs)).toEqual([]);
-  }, 300_000);
+  }, 60_000);
 
   it('oracle key changes and organiser hand-overs', async () => {
     const { sim, runs, open } = setup();
@@ -169,5 +173,5 @@ describe('every circuit run passes the zkir check', () => {
     sim.recoverOrganiser(pureCircuits.organiserCommitmentOf(generateOperatorSecret()));
     expect(new Set(runs.map((r) => r.circuit))).toEqual(new Set(['acceptOracleKey', 'requestDraw', 'proposeOracleKey', 'changeOrganiser']));
     expect(await allPass(runs)).toEqual([]);
-  }, 300_000);
+  }, 60_000);
 });
