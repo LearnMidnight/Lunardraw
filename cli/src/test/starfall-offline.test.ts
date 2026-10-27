@@ -8,6 +8,8 @@ import { MidnightBech32m, UnshieldedAddress } from '@midnight-ntwrk/wallet-sdk-a
 import { pureCircuits as v0 } from '@lunardraw/contract';
 import { organiserCheck, parseUserAddress, starfallOrganiserCommitment } from '../starfall-commands.js';
 import {
+  buyGames,
+  BuyStopped,
   MidnightStarfallChain,
   STARFALL_PRIVATE_STATE_ID,
   type StarfallCalls,
@@ -206,5 +208,34 @@ describe("Starfall's organiser commitment", () => {
     const other = organiserCheck(sim.getLedger(), generateOperatorSecret());
     expect(other.ok).toBe(false);
     expect(other.detail).toMatch(/the contract's organiser is/);
+  });
+});
+
+describe('buyGames', () => {
+  const store = { setContractAddress() {}, async set() {} };
+  const games = Array.from({ length: 5 }, () => Starfall.makeTicket(1n, quickPick(), OPERATOR));
+  const calls = (buy: () => Promise<unknown>) => ({ callTx: { buyTickets: buy } }) as unknown as StarfallCalls;
+
+  it("stops with what it bought when a purchase hangs, instead of waiting for ever", async () => {
+    let n = 0;
+    const hangs = calls(() => (++n === 2 ? new Promise(() => {}) : Promise.resolve()));
+    const err = await buyGames(hangs, store, 'addr', games, OPERATOR, { timeoutMs: 50 }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(BuyStopped);
+    expect((err as BuyStopped).bought).toBe(2);
+    expect((err as BuyStopped).of).toBe(5);
+    expect((err as BuyStopped).message).toMatch(/didn't land/);
+  });
+
+  it('stops before sales close, and passes a failed purchase on with the count', async () => {
+    const ok = calls(() => Promise.resolve());
+    const late = await buyGames(ok, store, 'addr', games, OPERATOR, { stopAt: Date.now() / 1000 - 1 }).catch((e: unknown) => e);
+    expect((late as BuyStopped).bought).toBe(0);
+    expect((late as BuyStopped).message).toMatch(/sales close/);
+    let n = 0;
+    const fails = calls(() => (++n === 3 ? Promise.reject(new Error('sales have closed')) : Promise.resolve()));
+    const err = await buyGames(fails, store, 'addr', games, OPERATOR).catch((e: unknown) => e);
+    expect((err as BuyStopped).bought).toBe(4);
+    expect((err as BuyStopped).message).toBe('sales have closed');
+    expect(await buyGames(ok, store, 'addr', games, OPERATOR)).toBe(3);
   });
 });

@@ -33,6 +33,7 @@ import { type Check, currentCommit, formatChecks } from './deployment.js';
 import {
   acceptStarfallOracleKey,
   buyGames,
+  BuyStopped,
   deployStarfall,
   joinStarfall,
   MidnightStarfallChain,
@@ -437,14 +438,28 @@ export const starfall = async (argv: string[]): Promise<number> => {
             `Buying ${count} QuickPick game(s) for draw ${selling.id} (sales close ${iso(selling.salesClose)}) for ${tn(cost)}, ` +
               `${Math.ceil(count / Number(Starfall.pureCircuits.maxGames()))} transaction(s), from ${walletAddress(wallet)}...`,
           );
-          await buyGames(joined, providers.privateStateProvider, record.contractAddress, games, mine, (done, of) =>
-            session.logger.info(`bought ${done} of ${of}`),
-          );
+          const listing = (n: number) =>
+            games
+              .slice(0, n)
+              .map((g, i) => `  game ${i + 1}: ${g.line.numbers.join(' ')} + ${g.line.moonball}`)
+              .join('\n');
+          try {
+            await buyGames(joined, providers.privateStateProvider, record.contractAddress, games, mine, {
+              onEach: (done, of) => session.logger.info(`bought ${done} of ${of}`),
+              stopAt: Number(selling.salesClose) - 60,
+            });
+          } catch (err) {
+            if (!(err instanceof BuyStopped)) throw err;
+            process.stdout.write(
+              `Stopped after ${err.bought} of ${err.of} game(s): ${err.message}.\n` +
+                (err.bought > 0 ? `These ${err.bought} are bought for draw ${selling.id} (paid to ${hex(payTo)}):\n${listing(err.bought)}\n` : '') +
+                `Check with \`./lunardraw starfall status --network ${network}\`, then run buy again with --games ${err.of - err.bought} for the rest.\n`,
+            );
+            return 1;
+          }
           process.stdout.write(
             `Bought ${count} game(s) for draw ${selling.id}. Winnings are paid automatically to ${hex(payTo)}; ` +
-              `if the draw is cancelled, refunds go to this wallet.\n` +
-              games.map((g, i) => `  game ${i + 1}: ${g.line.numbers.join(' ')} + ${g.line.moonball}`).join('\n') +
-              '\n',
+              `if the draw is cancelled, refunds go to this wallet.\n${listing(count)}\n`,
           );
           return 0;
         } finally {

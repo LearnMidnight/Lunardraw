@@ -198,9 +198,34 @@ export class MidnightStarfallChain implements StarfallChain, DrawOracleChain {
   }
 }
 
+/** A purchase run that stopped before buying everything: how many games were bought, and why it stopped. */
+export class BuyStopped extends Error {
+  constructor(
+    readonly bought: number,
+    readonly of: number,
+    reason: string,
+  ) {
+    super(reason);
+  }
+}
+
+export type BuyOptions = {
+  /** Called after each transaction with the games bought so far. */
+  onEach?: (done: number, of: number) => void;
+  /**
+   * Give up on a transaction that hasn't landed after this long (ms). A
+   * wallet whose sync has dropped can wait for ever otherwise. Default 5 minutes.
+   */
+  timeoutMs?: number;
+  /** Don't start a transaction after this time (seconds): sales close soon. */
+  stopAt?: number;
+};
+
 /**
  * Buy games for an open draw, `maxGames()` per transaction, refundable to
- * `refundTo`. Returns each transaction's first ticket index.
+ * `refundTo`. Returns the number of transactions. If one fails, times out or
+ * sales are about to close, throws {@link BuyStopped} with the games bought
+ * so far (those stay bought).
  */
 export const buyGames = async (
   contract: StarfallCalls,
@@ -208,17 +233,35 @@ export const buyGames = async (
   contractAddress: string,
   games: readonly TicketPreimage[],
   refundTo: Uint8Array,
-  onEach?: (done: number, of: number) => void,
+  opts: BuyOptions | ((done: number, of: number) => void) = {},
 ): Promise<number> => {
+  const o: BuyOptions = typeof opts === 'function' ? { onEach: opts } : opts;
+  const timeoutMs = o.timeoutMs ?? 5 * 60_000;
   const max = Number(Starfall.pureCircuits.maxGames());
   let txs = 0;
   for (let i = 0; i < games.length; i += max) {
+    if (o.stopAt !== undefined && Date.now() / 1000 >= o.stopAt) {
+      throw new BuyStopped(i, games.length, 'sales close in under a minute, so no more purchases were sent');
+    }
     const part = games.slice(i, i + max);
     privateState.setContractAddress(contractAddress);
     await privateState.set(STARFALL_PRIVATE_STATE_ID, { pendingTickets: part });
-    await contract.callTx.buyTickets(BigInt(part.length), { bytes: refundTo });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`a purchase didn't land within ${Math.round(timeoutMs / 60_000)} minutes (the wallet's connection may have dropped)`)),
+        timeoutMs,
+      );
+    });
+    try {
+      await Promise.race([contract.callTx.buyTickets(BigInt(part.length), { bytes: refundTo }), timedOut]);
+    } catch (err) {
+      throw new BuyStopped(i, games.length, err instanceof Error ? err.message : String(err));
+    } finally {
+      clearTimeout(timer);
+    }
     txs += 1;
-    onEach?.(i + part.length, games.length);
+    o.onEach?.(i + part.length, games.length);
   }
   return txs;
 };
