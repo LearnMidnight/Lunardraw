@@ -1,0 +1,50 @@
+{
+  "contract": "starfall",
+  "network": "preprod",
+  "contractAddress": "46fb810f8c36140f8d0b2119d0b554504310f8002ef5667b278c5fd6789326bf",
+  "deployedAt": "2026-10-27T05:41:10.972Z",
+  "sourceCommit": "65aa543d839e658757cc85df8b3bd90936fa9c68",
+  "compiler": {
+    "compiler": "0.31.1",
+    "language": "0.23.0",
+    "runtime": "0.16.0"
+  },
+  "parameters": {
+    "oraclePublicKey": {
+      "x": "32993920963106060157182722391396204195876652346556573714871675241262963030490",
+      "y": "2970426460907353687275298249844606722016022192568680380589640846132638876538"
+    },
+    "organiserCommitment": "629ca9d6016f57c2eb2613fb4f6b1762156ad6e117afc01a9db346467a53b9e8",
+    "backupCommitment": "0e814784c0492d23aa93aaf7e2dc096f1c05b6b0463cc5eb6bc7966b10a0c02a",
+    "settlementKey": {
+      "x": "19625836673520792295582613931588024206799368001510542437671691992886344459095",
+      "y": "12159625525884870422330032430672005661247751942203589223227079085807267845929"
+    },
+    "operator": "e31cb284d66510192174fd58be09c777f6a76ebc25cefa90e5070e10f1c6f8bf",
+    "feePerGame": "200000",
+    "ticketPrice": "1200000",
+    "minSales": "600",
+    "maxSales": "7200",
+    "revealWindow": "600",
+    "drawWindow": "900",
+    "settleWindow": "3600"
+  },
+  "transactions": {
+    "deploy": "00c8d9b0843be85412032cc89204861ca1143f96a19cfae43eab2b69ff3af56b3a",
+    "acceptOracleKey": "0025d03a4297214e181ea6d7da859706d15afb7a6842e5b7e0a95aa9f45a4dcebc"
+  },
+  "verifierKeys": {
+    "acceptOracleKey": "31c8c2d956ede24f42afa23154506e8222f69c6bda056c790495f955dea94c3d",
+    "buyTickets": "ce0bc84e8b3ae5f810490afab117eaff45b130455737b6c00a574790fa8e11e0",
+    "changeOrganiser": "8e4723b937626e3b5f9a4f3597bbd9c94ec3ba8dbac6c6db88e84dc6af34b1c3",
+    "computeNumbers": "9477f778e0e2fffb6ce18f9c047cbdb2ecdcaef3c3deb3bd0e32e0a773aed445",
+    "finaliseDraw": "cb1205b4b3407facd513d40ea5d211863c86580d4e1908f3530ad96936a4e4f0",
+    "fulfilDraw": "e4e790bd7f09639e668e1a48b33c1b88dd4525d9f45db3b29d35f8caab472bd6",
+    "payEntitlement": "6d3ea1340d4714f215e4a3c0bd99822cf104666d5ef0209eac183c9788a309cd",
+    "proposeOracleKey": "578df2544bcdd128a2651bc750bb1dc5f4309d4c6216c7fef00b54abebb67d2c",
+    "refundTicket": "a729eb11d85a0d3cf11d6ddbf8334dba47072759c1386abef2958154cd2160b7",
+    "requestDraw": "619bdc7f707f062c01cb52fb37237b995e0803cc90c2f916254d7a4511ba7366",
+    "settleBatch": "f4e5c4b0a1ac9260bbc95199f640e767497246e0ab4d51d7a811941b01146e43",
+    "voidDraw": "1a2801d415440c953f2cadcf55b0c380ca0fd5660cb476920d5e4ffdd0436324"
+  }
+}

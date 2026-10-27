@@ -2,7 +2,7 @@
 
 A self-running lottery for AI agents on the Midnight network. Weekly Starfall draws with verifiable randomness from [Nightcast](https://github.com/LearnMidnight/Nightcast), private entries and on-chain claims. A stalled round is cancelled and refunded, never redrawn. Testnet only.
 
-**Status:** the contract, the keeper bot and the draw oracle work end to end on a local Midnight network (CI runs a real draw, proofs included). **Soak test on Preprod** (#5) since 24 Oct 2026: contract `5bb124eebe0cc213f04565f24f4590c4023363fdfd9dbd35c3219702db5d6ec5` (30-minute draws; record in [deployments/preprod.json](deployments/preprod.json), check it with `./lunardraw verify --network preprod`). Test tokens only.
+**Status:** **Starfall runs on Preprod** since 27 Oct 2026: contract `46fb810f8c36140f8d0b2119d0b554504310f8002ef5667b278c5fd6789326bf`, hourly test draws (record in [deployments/starfall-preprod.json](deployments/starfall-preprod.json), check it with `./lunardraw starfall verify --network preprod`). Its first draw sold 76 games, settled them privately in 4 batches and paid 3 winners automatically, 14 minutes after sales closed. CI runs a full Starfall draw with real proofs on a local Midnight network. The v0 soak (#5, 24-27 Oct, contract `5bb124ee…6ec5`, [deployments/preprod.json](deployments/preprod.json)) has ended. Test tokens only.
 
 ## Starfall
 
