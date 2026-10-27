@@ -2,7 +2,7 @@
  * Every circuit run the simulator makes, checked against the circuit's zkir
  * (the check a proof server does before proving). The JS simulator alone
  * can't catch a circuit that only fails in the prover: the first end-to-end
- * run found one (a purchase of fewer than maxGames() games read the
+ * run found one (a purchase of fewer than maxTickets() tickets read the
  * settlement key inside a branch that wasn't taken, and the prover panicked
  * on the resulting non-point). This covers every branch of every circuit.
  *
@@ -159,6 +159,47 @@ describe('every circuit run passes the zkir check', () => {
     sim.voidDraw(n);
     sim.refundTicket(n, 0n);
     sim.refundTicket(n, 1n);
+    expect(await allPass(runs)).toEqual([]);
+  }, 60_000);
+
+  it('System, Pick and Moonball Sweep entries: bought, settled through every Moonball branch, paid and refunded', async () => {
+    const { sim, runs, open } = setup();
+    const { n, seed, draw } = open();
+    const me = randomAddress();
+    const misses = Array.from({ length: 35 }, (_, i) => i + 1).filter((x) => !draw.numbers.includes(x));
+    const other = (draw.moonball % 20) + 1;
+    sim.buyTickets(
+      [
+        // A System 12 holding 5 drawn numbers, Moonball Sweep: winners with and without the Moonball.
+        makeTicket(n, { numbers: [...draw.numbers.slice(0, 5), ...misses.slice(0, 7)], sweep: true }, me),
+        // A Pick 6 holding 6 drawn numbers and the Moonball: a jackpot game among its 29.
+        makeTicket(n, { numbers: draw.numbers.slice(0, 6), moonball: draw.moonball, pick: true }, me),
+      ],
+      me,
+    );
+    sim.buyTickets(
+      [
+        // A System 9 with the wrong Moonball: only Moonball-less divisions.
+        makeTicket(n, { numbers: [...draw.numbers.slice(0, 6), ...misses.slice(0, 3)], moonball: other }, [
+          { address: randomAddress(), share: 6_000 },
+          { address: randomAddress(), share: 4_000 },
+        ]),
+        // A Pick 5 that wins nothing.
+        makeTicket(n, { numbers: misses.slice(0, 5), moonball: other, pick: true }, me),
+      ],
+      me,
+    );
+    sim.advance(3_601);
+    sim.requestAndOpenNext(n, seed, { salesClose: BigInt(sim.now + 3_600), seedCommitment: new Uint8Array(32).fill(98) });
+    sim.fulfilDraw(n);
+    sim.computeNumbers(n);
+    expect(sim.settleAll(n)).toBe(1);
+    expect(sim.entitlementsOf(n).length).toBe(3);
+    // Draw 2: a big entry, voided and refunded.
+    sim.buyTickets([makeTicket(2n, { numbers: misses.slice(0, 10), sweep: true }, me)], me);
+    sim.advance(3_601 + 3_600);
+    sim.voidDraw(2n);
+    sim.refundTicket(2n, 0n);
     expect(await allPass(runs)).toEqual([]);
   }, 60_000);
 

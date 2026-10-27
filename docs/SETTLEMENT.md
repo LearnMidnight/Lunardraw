@@ -1,6 +1,6 @@
 # Starfall: private, automatic settlement
 
-Status: 26 Oct 2026. Contract `contract/src/settlement.compact`, tested in the simulator (`contract/src/test/settlement.test.ts`). Trimmed to **12 circuits** so it can be deployed (see "The circuit budget"), with v0's security-review fixes ported. Not deployed yet. It sits next to the v0 contract (`lunardraw.compact`, [DESIGN.md](DESIGN.md)), which runs the Preprod soak and is unchanged.
+Status: 27 Oct 2026 (entries: PR #41). Contract `contract/src/settlement.compact`, tested in the simulator (`contract/src/test/settlement.test.ts`). Trimmed to **12 circuits** so it can be deployed (see "The circuit budget"), with v0's security-review fixes ported. Not deployed yet. It sits next to the v0 contract (`lunardraw.compact`, [DESIGN.md](DESIGN.md)), which runs the Preprod soak and is unchanged.
 
 The goal is the rule at the centre of Lunardraw:
 
@@ -8,27 +8,53 @@ The goal is the rule at the centre of Lunardraw:
 
 v0 meets the privacy half by having winners **claim**: only a ticket's owner can prove it won. This contract removes the claim. A settler works through every ticket, and the contract checks each step, so nobody has to press a button and no ticket's numbers become public.
 
-The game is Australian Powerball's, as the Starfall spec asks: 7 numbers from 35 plus a Moonball from 20, nine divisions, Powerball's prize-pool allocation and rollover rules, and QuickPick packages. A game costs 1.2 tNIGHT: 1 tNIGHT goes to the prize pool and 0.2 tNIGHT is the operator's fee, per game, so a ticket of several lines pays it once per line (a Mini QuickPick of 8 games costs 9.6 tNIGHT and pays 1.6 in fees). Syndicates are designed and tested but wait for a later contract (see "Syndicates").
+The game is Australian Powerball's, as the Starfall spec asks: 7 numbers from 35 plus a Moonball from 20, nine divisions, Powerball's prize-pool allocation and rollover rules, QuickPick packages, and **System, Pick and Moonball Sweep entries, each one ticket however many games it holds** (see "Entries"). A game costs 1.2 tNIGHT: 1 tNIGHT goes to the prize pool and 0.2 tNIGHT is the operator's fee, per game, so a ticket of several games pays it once per game (a System 9 is 36 games: 43.2 tNIGHT, 7.2 in fees). Syndicates are designed and tested but wait for a later contract (see "Syndicates").
 
 ## What happens to a ticket
 
 1. **Purchase.** The buyer pays the ticket price in tNIGHT and publishes two things:
-   - `C`, a commitment to the ticket (`SHA-256` over the draw, the line, up to three payees with their shares, and a random salt);
+   - `C`, a commitment to the ticket (Poseidon over the draw, the entry, up to three payees with their shares, and a random salt);
    - the same ticket **encrypted to the settlement key**.
 
-   The purchase proof shows that both hold the same valid ticket: 7 increasing numbers in 1–35, a Moonball in 1–20, and shares adding up to 10,000 basis points. The buyer also names a public refund address. Tickets are numbered 0, 1, 2, … within the draw, in purchase order.
+   The purchase proof shows that both hold the same valid ticket (an entry of a type the contract knows, its numbers increasing in 1–35, a Moonball in 1–20 or Moonball Sweep, and shares adding up to 10,000 basis points) and charges the ticket's **games × the game price**. The buyer also names a public refund address. Tickets are numbered 0, 1, 2, … within the draw, in purchase order; each record stores its games, and the draw counts games sold.
 
-   `buyTickets(count, refundTo)` buys 1 to `maxGames()` = 2 games in one transaction, each with its own commitment, ciphertext and index, and returns the first index. A single game is `count = 1`. A QuickPick package (Single 1, Starter 4, Mini 8, Regular 12, Super 18, Mega 25, Jumbo 36, Maxi 50 games; `quickPickPackage` in the SDK) is a run of such purchases: a Maxi is 25 transactions. Choosing your own numbers is the same purchase with a chosen line.
+   `buyTickets(count, refundTo)` buys 1 to `maxTickets()` = 2 tickets in one transaction, each with its own commitment, ciphertext and index, and returns the first index. A QuickPick package (Single 1, Starter 4, Mini 8, Regular 12, Super 18, Mega 25, Jumbo 36, Maxi 50 games; `quickPickPackage` in the SDK) is a run of single-game tickets: a Maxi is 25 transactions. A System, a Pick or a Moonball Sweep is one ticket: a Pick 5 with Moonball Sweep (8,700 games) is one transaction.
 2. **Sales close.** The count is frozen: no ticket can be added or removed.
 3. **Draw.** As v0: the organiser's sealed seed, the oracle's VRF and the site's number rule. Each draw is bound to the active oracle key **when it opens**, so buyers can see which key will answer it. `requestDraw(n, seed, next)` reveals draw `n`'s seed and can open the next draw in the same transaction; `requestDraw(0, …, next)` just opens a draw. `computeNumbers(n, now)` puts the numbers in the ledger; its clock stamp may be up to **30 minutes** from block time, so a slow numbers proof still lands (v0 allows 10; Lunardraw #32).
-4. **Settlement.** The settler decrypts every ticket with the settlement secret and calls `settleBatch` repeatedly. Each call covers the next 25 tickets in index order. For each ticket, the proof shows that the decrypted ticket hashes to the commitment stored at its index, then works out its division against the numbers stored in the ledger. Winning tickets become **entitlements** (division + payees) under the id `SHA-256(domain, C, salt)`. The salt is secret, so nobody can link an entitlement to a purchase.
+4. **Settlement.** The settler decrypts every ticket with the settlement secret and calls `settleBatch` repeatedly. Each call covers the next 22 tickets in index order. For each ticket, the proof shows that the decrypted ticket hashes to the commitment stored at its index, then counts its winning games per division against the numbers stored in the ledger (without listing them: see "Entries"). Winning tickets become **entitlements** (winning games per division + payees) under the id `Poseidon(domain, C, salt)`. The salt is secret, so nobody can link an entitlement to a purchase.
 5. **Finalise.** When the last ticket is settled, anyone calls `finaliseDraw`, which:
-   - takes the operator fee off the sales to make the pool: `feePerGame` STAR for every ticket sold (0.2 tNIGHT of each 1.2 tNIGHT game, leaving 1 tNIGHT per game for prizes; the constructor requires the fee to be below the price), and **pays it to the operator address** in the same transaction;
+   - takes the operator fee off the sales to make the pool: `feePerGame` STAR for every game sold (0.2 tNIGHT of each 1.2 tNIGHT game, leaving 1 tNIGHT per game for prizes; the constructor requires the fee to be below the price), and **pays it to the operator address** in the same transaction;
    - gives each division its share of the pool, by Powerball's allocation (below), and adds the rollover to Division 1;
-   - fixes each division's prize per winning ticket as `floor(division amount / winners)`;
+   - fixes each division's prize per winning game as `floor(division amount / winning games)`;
    - applies Powerball's no-winner rules: an unwon Division 1 rolls over (the jackpot); an unwon Division 2–8 falls into the next lower division that has a winner; an unwon Division 9, all rounding remainders, and what the floored division shares leave of the pool (at most 8 STAR) roll over, so no STAR is ever stranded. Draws finalise in order.
-6. **Payment.** Anyone calls `payEntitlement` for each entitlement (a keeper does it for all of them). Each payee after the first gets `floor(prize × share / 10000)` and the first gets the rest, so the prize is paid to the last STAR.
-7. **Fail-safe.** If settlement isn't finalised by the settlement deadline (`settleWindow` after the numbers), anyone voids the draw and `refundTicket` sends every ticket's price to its refund address. Settling and finalising stop working at exactly the moment voiding becomes possible, so nobody can choose between the two. Entitlements recorded before a void are never paid. A draw is never redrawn.
+6. **Payment.** Anyone calls `payEntitlement` for each entitlement (a keeper does it for all of them). The ticket's prize is its winning games times each division's prize per game. Each payee after the first gets `floor(prize × share / 10000)` and the first gets the rest, so the prize is paid to the last STAR.
+7. **Fail-safe.** If settlement isn't finalised by the settlement deadline (`settleWindow` after the numbers), anyone voids the draw and `refundTicket` sends every ticket's price to its refund address. A ticket's refund is every game in it. Settling and finalising stop working at exactly the moment voiding becomes possible, so nobody can choose between the two. Entitlements recorded before a void are never paid. A draw is never redrawn.
+
+## Entries: System, Pick and Moonball Sweep (27 Oct 2026)
+
+A ticket is one **entry**, `Entry { kind, count, numbers[12], moonball, sweep }`:
+
+| Entry | Numbers | Games | Price at 1.2 tNIGHT |
+|---|---|---|---|
+| Standard | 7 | 1 | 1.2 |
+| System 8 / 9 / 10 / 11 / 12 | 8–12, every 7 of them | 8 / 36 / 120 / 330 / 792 | 9.6 / 43.2 / 144 / 396 / 950.4 |
+| Pick 6 | 6, plus each of the other 29 | 29 | 34.8 |
+| Pick 5 | 5, plus each pair of the other 30 | 435 | 522 |
+| Moonball Sweep (any of the above) | every Moonball | × 20 | × 20 |
+
+A PowerHit-style ticket is a standard game with Moonball Sweep (20 games). The largest entry, a System 12 with Moonball Sweep, is 15,840 games.
+
+**Why one ticket.** When each game was its own ticket, a Pick 5 with Moonball Sweep meant 4,350 purchase transactions (each a proof and a wallet approval) and 348 settlement batches. Now any entry is one purchase slot and one settlement slot, so big entries cost a buyer one transaction and the keeper one batch slot.
+
+**Settling an entry without listing its games.** Real lotteries settle systems the same way: if *h* of an entry's numbers are among the 7 drawn, the number of its games with exactly *m* main numbers right depends only on its type and *h*:
+- System *n* (7 ≤ *n* ≤ 12): C(*h*, *m*) · C(*n* − *h*, 7 − *m*);
+- Pick *f* (*f* = 5, 6): C(7 − *h*, *m* − *h*) · C(28 − *f* + *h*, 7 − *f* − (*m* − *h*)), for *m* ≥ *h*.
+
+`gamesByDivision` counts *h*, looks up the row (type, *h*) in a 64-row table of those counts for *m* = 2..7 (`entries.compact`, generated by `scripts/gen-entries.py`, which checks every row against a brute-force listing of the games before writing it), and splits by Moonball: with one Moonball all of an entry's games match it or none do; with Moonball Sweep one Moonball in 20 matches, so each count goes once to "with Moonball" and 19 times to "without". Then the divisions: 1 = 7 + MB, 2 = 7, 3 = 6 + MB, 4 = 6, 5 = 5 + MB, 6 = 4 + MB, 7 = 5, 8 = 3 + MB, 9 = 2 + MB. The tests compare this with listing every game of every type, for every *h*, Moonball hit or miss, with and without Sweep.
+
+**Prizes are unchanged.** Winner counts, sales and the fee are all in games, so `finaliseDraw`'s Powerball rules don't change: a System ticket with 18 games in Division 5 counts as 18 winners there, exactly as if those games had been bought one by one.
+
+**What it shows.** A ticket record shows how many games it holds (the payment for it is public anyway), and a winning entitlement shows its winning games per division. A pattern such as 2 games in Division 3 and 27 in Division 5 says the ticket was a big entry, but neither shows its numbers.
 
 ## The nine divisions and the prize pool
 
@@ -71,10 +97,10 @@ A deploy transaction carries every circuit's verifier key and must fit Midnight'
 | `proposeOracleKey` | organiser | propose a new oracle key (waits `oracleKeyDelay`) |
 | `changeOrganiser` | organiser / successor / backup | propose / accept / recover |
 | `requestDraw` | organiser | reveal a seed and open the next draw; `n = 0` only opens |
-| `buyTickets` | anyone | buy 1–2 games (replaces `buyTicket`) |
+| `buyTickets` | anyone | buy 1–2 tickets: games, Systems, Picks, Sweeps (replaces `buyTicket`) |
 | `fulfilDraw` | the draw's oracle | the VRF output |
 | `computeNumbers` | anyone | the numbers |
-| `settleBatch` | settlement key holder | settle the next 25 tickets |
+| `settleBatch` | settlement key holder | settle the next 22 tickets |
 | `finaliseDraw` | anyone | prizes and rollover, and pay the operator fee (replaces `withdrawFees`) |
 | `payEntitlement` | anyone | pay a winning ticket's payees |
 | `voidDraw` | anyone | void a draw past its deadline |
@@ -121,13 +147,14 @@ The tests check each of these:
 
 **Public:**
 - each purchase's buyer address (tNIGHT is unshielded on Preprod), refund address, commitment and ciphertext;
-- each draw's numbers, ticket count and winner counts per division;
-- each winning entitlement's division and payee addresses, at settlement;
+- each draw's numbers, ticket and game counts, and winning games per division;
+- each ticket's number of games (so its entry's size; the payment shows it too);
+- each winning entitlement's winning games per division and payee addresses, at settlement;
 - every payment.
 
 **Known leaks:**
 - **The settler sees every ticket.** This is stage 1: one key holder decrypts. That key is the only change needed for later stages. Stage 1b holds it inside an attested TEE (the MPS-0004 model). Stage 2 makes it a threshold key held by an MPC committee, which then also produces the batch proofs jointly. The ElGamal-style encryption already suits a threshold key. The contract doesn't change.
-- **Batch-level linkage.** Winner counts per batch are public, so a winner is known to be one of the 25 tickets in that batch. Once Midnight supports proof recursion (roadmap Q4 2026, MPS-0014), folding the batches into one proof per draw removes this.
+- **Batch-level linkage.** Winner counts per batch are public, so a winner is known to be one of the 22 tickets in that batch. Once Midnight supports proof recursion (roadmap Q4 2026, MPS-0014), folding the batches into one proof per draw removes this.
 - **Payees are public at settlement**, and payments are visible: with unshielded tNIGHT a payout shows who received it. Shielded payouts (shielded contract tokens are on the Q4 2026 roadmap) fix this. One option then is to pay every ticket, losers getting zero.
 
 ## Encryption
@@ -151,8 +178,8 @@ Mock-compiled with the zkir tool (27 Oct 2026, after the changes below; this too
 | Circuit | k | Rows |
 |---|---|---|
 | `computeNumbers` (same as v0) | 19 | 291,706 |
-| `buyTickets`, 2 games | 17 | 107,142 |
-| `settleBatch`, 25 tickets | 17 | 70,381 |
+| `buyTickets`, 2 tickets (entries) | 17 | 107,142 |
+| `settleBatch`, 25 tickets (before entries) | 17 | 70,381 |
 | `requestDraw` (reveal + open) | 17 | 69,803 |
 | `fulfilDraw` | 14 | 11,610 |
 | `changeOrganiser` | 14 | 10,202 |
@@ -170,7 +197,18 @@ Mock-compiled with the zkir tool (27 Oct 2026, after the changes below; this too
 
 With both, a purchase is **2 games** (k=17, about 1 GB to prove: an ordinary laptop can), at the cost of more transactions per package (a Starter is 2, a Maxi 25). For comparison, the same purchase had been 3 games at k=19 (418,932 rows, 7.6 GB) and 4 games at k=20 (13.8 GB, killed on CI). One game would be k=16, three k=18. `computeNumbers` stays at k=19: it applies the published number rule, SHA-256 of the seed and the VRF output, which the site and anyone else can check with ordinary tools; it runs once per draw, on the keeper's server.
 
-The batch size and the games per purchase are fixed at compile time (`npm run gen:batch -w @lunardraw/contract -- <batch> <games>` regenerates `src/batch.compact`). A 10,000-ticket draw takes 400 batch transactions until recursion is available.
+**With entries (27 Oct 2026),** measured with the workspace's zkir tool, which counts more rows than the one above, so compare like with like:
+
+| Circuit | Before entries | With entries |
+|---|---|---|
+| `buyTickets`, 2 tickets | k=17, 108,203 | k=17, 101,340 (the 22-byte head is folded by hand) |
+| `settleBatch`, 25 tickets | k=17, 87,245 | k=18, 139,985 |
+| `settleBatch`, **22 tickets (chosen)** | | **k=17, 123,287** |
+| `payEntitlement` | k=11, 1,818 | k=12, 2,937 |
+
+An entry adds about 2,100 rows per settled ticket (counting hits, the table row, the Moonball split), so 25 tickets crossed into k=18, which would double each batch's proving time for 3 more tickets. 22 keeps settlement at k=17. Buyers' purchases are unaffected.
+
+The batch size and the tickets per purchase are fixed at compile time (`npm run gen:batch -w @lunardraw/contract -- <batch> <tickets>` regenerates `src/batch.compact`). A draw of 10,000 tickets takes 455 batch transactions until recursion is available, but a ticket can now hold up to 15,840 games.
 
 ### Proving on Midnight's proof server (CI, 27 Oct 2026)
 
@@ -190,11 +228,11 @@ The proof server keeps much of a proof's memory afterwards: on CI two purchases 
 
 ## Other limits
 
-- **One line per ticket, four per transaction.** A package is several transactions. System and PowerHit-style entries (the spec's later stage) are many lines sharing numbers: they'd be bought as their underlying games, so a System 9 is 36 tickets and 9 transactions, with the commitment unchanged.
+- **Two tickets per transaction.** A QuickPick package is several transactions (a Maxi is 25). A System, Pick or Moonball Sweep entry is one ticket.
 - **No subscriptions.** Multi-week entries need per-draw purchases, which an agent can do.
 - **Purchases are sequential.** Each purchase takes the next index, so two purchases in the same block conflict and one must retry. Fine at prototype volume; a Merkle-tree set or per-block batching would lift it.
 - **Settler liveness.** A settler who sees a result it dislikes can stop, and the draw voids and refunds. This is the same class of trust as the oracle's: a committee (stage 2) with t-of-n liveness reduces it.
-- **Untested on a real network.** Block limits on a transaction's ledger operations (25 ticket lookups and up to 25 inserts in a batch, four sealed tickets in a purchase) are only known once it runs on Preprod. Next: the Starfall CLI (deploy with a test settlement key, keeper, buy), then a 100-ticket draw on Preprod.
+- **Untested on a real network.** Block limits on a transaction's ledger operations (22 ticket lookups and up to 22 inserts in a batch, two sealed tickets in a purchase) are only known once it runs on Preprod. Next: the Starfall CLI (deploy with a test settlement key, keeper, buy), then a 100-ticket draw on Preprod.
 
 ## The keeper
 
@@ -206,7 +244,7 @@ The proof server keeps much of a proof's memory afterwards: on CI two purchases 
 | open, past the reveal deadline | `voidDraw` |
 | requested, past the draw deadline | `voidDraw` (the oracle didn't answer) |
 | fulfilled | `computeNumbers` (or `voidDraw` past the deadline) |
-| drawn, tickets left to settle | decrypts the draw's tickets with the settlement secret (checking each against its commitment), then `settleBatch`, one batch of 25 a pass, in order |
+| drawn, tickets left to settle | decrypts the draw's tickets with the settlement secret (checking each against its commitment), then `settleBatch`, one batch of 22 a pass, in order |
 | drawn, every ticket settled | `finaliseDraw`, once the draw before it is settled or void |
 | drawn, past the settlement deadline | `voidDraw` |
 | settled | `payEntitlement` for each unpaid entitlement |
@@ -226,7 +264,8 @@ A keeper without the settlement secret skips settling; one without the organiser
 |---|---|
 | `contract/src/settlement.compact` | The contract |
 | `contract/src/batch.compact` | Generated batch-size declarations (`scripts/gen-batch.py`) |
-| `contract/src/settlement-tickets.ts` | Building tickets (`makeTicket` with payees), QuickPick packages, Powerball's prize rules (`prizesByPowerballRules`), the reference settlement (`expectedSettlement`), payee split |
+| `contract/src/entries.compact` | Generated table of each entry type's games by matches (`scripts/gen-entries.py`, every row checked by enumeration) |
+| `contract/src/settlement-tickets.ts` | Building tickets (`makeTicket` with an entry and payees; `PlainEntry`, `ENTRY_TYPES`, `gamesOf`, `checkEntry`, `entryName`), listing an entry's games (`gamesIn`, `gamesByDivisionFor`), QuickPick packages, Powerball's prize rules (`prizesByPowerballRules`), the reference settlement (`expectedSettlement`, by listing every game), payee split |
 | `contract/src/settlement-witnesses.ts` | Private state and witnesses: purchases, sealing randomness, settlement batches |
 | `contract/src/settlement-simulator.ts` | In-memory simulator, including the settlement engine loop (`decryptDrawTickets`, `settleAll`), with v0's role helpers (`proposeOrganiser`, `acceptOrganiser`, `recoverOrganiser`, `approveOracleKey`) |
 | `contract/src/test/settlement.test.ts` | Tests |

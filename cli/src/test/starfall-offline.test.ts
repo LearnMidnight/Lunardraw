@@ -6,7 +6,7 @@ import { generateOperatorSecret, generateOracleSecretKey, oraclePublicKey } from
 import { onChainFingerprints } from '@nightcast/deploy';
 import { MidnightBech32m, UnshieldedAddress } from '@midnight-ntwrk/wallet-sdk-address-format';
 import { pureCircuits as v0 } from '@lunardraw/contract';
-import { organiserCheck, parseUserAddress, starfallOrganiserCommitment } from '../starfall-commands.js';
+import { buyEntries, describeEntry, organiserCheck, parseUserAddress, starfallOrganiserCommitment } from '../starfall-commands.js';
 import {
   buyGames,
   BuyStopped,
@@ -114,7 +114,7 @@ describe('MidnightStarfallChain', () => {
     sim.fulfilDraw(1n);
     expect((await keeper.tick()).done).toEqual(['compute 1']);
     expect((await keeper.tick()).done).toEqual(['settle 1 from 0']);
-    expect((await keeper.tick()).done).toEqual(['settle 1 from 25']);
+    expect((await keeper.tick()).done).toEqual([`settle 1 from ${Starfall.pureCircuits.batchSize()}`]);
     expect((await keeper.tick()).done).toEqual(['finalise 1']);
     expect(sim.getLedger().draws.lookup(1n).status).toBe(Starfall.DrawStatus.settled);
     // Each batch saw every ticket of the draw, beside the organiser secret ...
@@ -308,5 +308,42 @@ describe('buyGames', () => {
     const on = (g: (typeof bought)[number]) => sim.getLedger().ticketCommitments.member(Starfall.pureCircuits.ticketCommitment(deployment, g));
     expect(bought.map(on)).toEqual([true, true]);
     expect(on(notBought)).toBe(false);
+  });
+});
+
+describe('buy: what to buy', () => {
+  it('QuickPick games and packages, optionally PowerHit-style', () => {
+    expect(buyEntries({})).toHaveLength(1);
+    expect(buyEntries({ package: 'mini' })).toHaveLength(8);
+    const hits = buyEntries({ games: '3', sweep: true });
+    expect(hits.map((e) => Starfall.gamesOf(e))).toEqual([20, 20, 20]);
+    expect(() => buyEntries({ package: 'huge' })).toThrow(/--package must be one of/);
+    expect(() => buyEntries({ games: '0' })).toThrow(/1 to 1000/);
+  });
+
+  it('one chosen or random System or Pick, with or without Moonball Sweep', () => {
+    const [system] = buyEntries({ system: '9' });
+    expect(system.numbers).toHaveLength(9);
+    expect(Starfall.gamesOf(system)).toBe(36);
+    const [pick] = buyEntries({ pick: '5', sweep: true });
+    expect(Starfall.gamesOf(pick)).toBe(8_700);
+    expect(describeEntry(pick)).toMatch(/^Pick 5 \+ Moonball Sweep: .* \+ every Moonball \(8700 games\)$/);
+    const [chosen] = buyEntries({ numbers: '35 3 9 14 21 27 33', moonball: '7' });
+    expect(describeEntry(chosen)).toBe('standard: 3 9 14 21 27 33 35 + 7 (1 game)');
+    const [system8] = buyEntries({ numbers: '1,2,3,4,5,6,7,8', moonball: '2' });
+    expect(Starfall.entryName(system8)).toBe('System 8');
+    const [pick6] = buyEntries({ pick: '6', numbers: '4 8 15 16 23 34', moonball: '1' });
+    expect(Starfall.gamesOf(pick6)).toBe(29);
+  });
+
+  it('refuses what the contract would', () => {
+    expect(() => buyEntries({ system: '13' })).toThrow(/--system takes 8 to 12/);
+    expect(() => buyEntries({ pick: '4' })).toThrow(/--pick takes 5 or 6/);
+    expect(() => buyEntries({ system: '9', numbers: '1 2 3 4 5 6 7 8' })).toThrow(/needs 9 numbers/);
+    expect(() => buyEntries({ system: '8', pick: '6' })).toThrow(/not both/);
+    expect(() => buyEntries({ games: '2', system: '8' })).toThrow(/not both/);
+    expect(() => buyEntries({ sweep: true, moonball: '3' })).toThrow(/leave out --moonball/);
+    expect(() => buyEntries({ numbers: '1 2 3 4 5 6 36', moonball: '1' })).toThrow(/1\.\.35/);
+    expect(() => buyEntries({ numbers: '1 2 3 4 5 6', moonball: '1' })).toThrow(/7 numbers/);
   });
 });

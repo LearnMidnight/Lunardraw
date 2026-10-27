@@ -3,18 +3,22 @@
 // Same game and draw as Lunardraw v0 (7 from 35 + a Moonball from 20, a sealed
 // organiser seed and Nightcast's VRF embedded), but nobody claims a prize:
 //
-//   1. A ticket is one line. Its buyer publishes a commitment to it and the
-//      same ticket encrypted to the settlement key, and proves in the purchase
-//      that both hold the same valid ticket. The ticket also fixes who gets
-//      its prize: up to three addresses with shares.
+//   1. A ticket is one entry: a standard game, a System (8 to 12 numbers,
+//      every 7 of them) or a Pick (5 or 6 numbers, completed every way), with
+//      one Moonball or all 20 (Moonball Sweep). Its buyer pays for every game
+//      in it, publishes a commitment to it and the same ticket encrypted to
+//      the settlement key, and proves in the purchase that both hold the same
+//      valid ticket. The ticket also fixes who gets its prize: up to three
+//      addresses with shares.
 //   2. Tickets are numbered 0, 1, 2, ... per draw as they're bought; the count
 //      is frozen when sales close.
 //   3. After the numbers are drawn, whoever holds the settlement key decrypts
 //      the tickets and settles them in order, a batch at a time. Each batch
 //      proof shows every ticket in it matches the commitment stored at its
-//      index, and counts the winners per division. Only the totals and each
-//      winning ticket's division and payees become public, under an id that
-//      can't be linked to the ticket. No numbers are ever disclosed.
+//      index, and counts its winning games per division without listing them
+//      (entries.compact). Only the totals and each winning ticket's games per
+//      division and payees become public, under an id that can't be linked to
+//      the ticket. No numbers are ever disclosed.
 //   4. When the last ticket is settled, anyone finalises the draw: the prize
 //      per division follows from the counts by Powerball's rules, the operator
 //      fee is paid, and an unwon jackpot rolls over. Then anyone pays each
@@ -51,11 +55,17 @@ export { Numbers };
 
 export enum DrawStatus { open, requested, fulfilled, drawn, settled, voided }
 
-// One Starfall line: 7 numbers from 1..35 in increasing order, and a
-// Moonball from 1..20.
-export struct Line {
-  numbers: Vector<7, Uint<8>>;
+// One entry. kind 0: a standard game (count 7) or a System (count 8..12):
+// every 7 of its numbers. kind 1: a Pick (count 5 or 6): its numbers with
+// every choice of the remaining 7 - count from the other numbers. The first
+// `count` numbers are in 1..35 in increasing order, the rest 0. The Moonball
+// is 1..20, or 0 with `sweep`, which plays every Moonball (20 times the games).
+export struct Entry {
+  kind: Uint<8>;
+  count: Uint<8>;
+  numbers: Vector<12, Uint<8>>;
   moonball: Uint<8>;
+  sweep: Boolean;
 }
 
 // A share of a ticket's prize, in basis points (10000 = all of it).
@@ -69,7 +79,7 @@ export struct Payee {
 // to the settlement key holder once decrypted.
 export struct TicketPreimage {
   drawId: Uint<32>;
-  line: Line;
+  entry: Entry;
   payees: Vector<3, Payee>;
   salt: Bytes<32>;
 }
@@ -83,6 +93,8 @@ export struct SealedTicket {
 
 export struct TicketRecord {
   commitment: Bytes<32>;
+  // Games in the ticket, which its buyer paid for (public: so is the payment).
+  games: Uint<32>;
   // Where a refund goes if the draw is void (public, chosen by the buyer).
   refundTo: UserAddress;
   cipher: SealedTicket;
@@ -133,7 +145,7 @@ export struct Draw {
   // is finalised.
   carried: Uint<128>;
   fee: Uint<128>;
-  // Each division's prize per winning ticket, once finalised.
+  // Each division's prize per winning game, once finalised.
   prizes: Vector<9, Uint<128>>;
 }
 
@@ -142,17 +154,17 @@ export struct Progress {
   // Index of the next ticket to settle; settlement is complete when this
   // reaches the draw's ticket count.
   next: Uint<64>;
-  // Winning tickets per division so far (division 1 first).
+  // Winning games per division so far (division 1 first).
   winners: Vector<9, Uint<64>>;
 }
 
-// A winning ticket's prize: its division and the payees it named. Keyed by
-// an id derived from the ticket's commitment and secret salt, so it can't be
-// linked to the purchase.
+// A winning ticket's prize: its winning games per division and the payees it
+// named. Keyed by an id derived from the ticket's commitment and secret salt,
+// so it can't be linked to the purchase.
 export struct Entitlement {
   drawId: Uint<32>;
-  // 1 (7 + Moonball) to 9 (2 + Moonball).
-  division: Uint<8>;
+  // Winning games per division: division 1 (7 + Moonball) first, 9 (2 + Moonball) last.
+  games: Vector<9, Uint<32>>;
   payees: Vector<3, Payee>;
   paid: Boolean;
 }
@@ -169,15 +181,17 @@ struct Slot {
   offset: Uint<64>;
 }
 
-// A settled slot: its division (0 for no prize or an empty slot), and for a
-// winner the entitlement id and payees to record.
+// A settled slot: its winning games per division (none for an empty slot),
+// and for a winner the entitlement id and payees to record.
 struct Settled {
-  division: Uint<8>;
+  games: Vector<9, Uint<32>>;
+  won: Boolean;
   id: Bytes<32>;
   payees: Vector<3, Payee>;
 }
 
 include "batch";
+include "entries";
 
 // --------------------------------------------------------------- ledger
 
@@ -186,6 +200,8 @@ export ledger draws: Map<Uint<32>, Draw>;
 export ledger lastDraw: Uint<32>;
 // Tickets sold per draw; also the index the next ticket gets.
 export ledger ticketCount: Map<Uint<32>, Uint<64>>;
+// Games sold per draw (a System 12 ticket is 792): what sales and the fee are counted in.
+export ledger gamesSold: Map<Uint<32>, Uint<64>>;
 // Every ticket, keyed by ticketKey(draw, index).
 export ledger tickets: Map<Uint<64>, TicketRecord>;
 // Commitments already bought, so no ticket is sold (or settled) twice.
@@ -218,14 +234,14 @@ export sealed ledger backupOrganiser: Bytes<32>;
 // Public key the tickets are encrypted to: the settler's (stage 1), a TEE's
 // or an MPC committee's joint key later.
 export sealed ledger settlementKey: JubjubPoint;
-// Where the operator fee goes, and the fee per game (one line), in STAR: a
-// flat amount out of each game's price, so a ticket of several lines pays it
-// several times. The rest of the price is the prize pool's. Starfall's
+// Where the operator fee goes, and the fee per game, in STAR: a flat amount
+// out of each game's price, so a ticket of several games pays it once per game. The rest of the price is the prize pool's. Starfall's
 // numbers: a game costs 1.2 tNIGHT, 1 tNIGHT to the pool and 0.2 to the
 // operator.
 export sealed ledger operator: UserAddress;
 export sealed ledger feePerGame: Uint<128>;
-// Price of one ticket (one line), in STAR (1 tNIGHT = 1,000,000 STAR).
+// Price of one game, in STAR (1 tNIGHT = 1,000,000 STAR). A ticket costs its
+// games times this.
 export sealed ledger ticketPrice: Uint<128>;
 // Shortest and longest time a draw may sell tickets for, from when it opens.
 export sealed ledger minSales: Uint<64>;
@@ -323,10 +339,32 @@ export pure circuit ticketKey(drawId: Uint<32>, index: Uint<64>): Uint<64> {
   return ((drawId as Uint<64>) * 4294967296 + index) as Uint<64>;
 }
 
-pure circuit validLine(l: Line): Boolean {
-  const n = l.numbers;
-  return n[0] >= 1 && n[0] < n[1] && n[1] < n[2] && n[2] < n[3] && n[3] < n[4] && n[4] < n[5] && n[5] < n[6]
-    && n[6] <= 35 && l.moonball >= 1 && l.moonball <= 20;
+// Which row of the entries table an entry is (0..7), or 8 for no valid type.
+pure circuit entryType(e: Entry): Uint<8> {
+  return e.kind == 0 && e.count >= 7 && e.count <= 12 ? (e.count - 7) as Uint<8>
+       : e.kind == 1 && e.count == 6 ? 6
+       : e.kind == 1 && e.count == 5 ? 7
+       : 8;
+}
+
+pure circuit validEntry(e: Entry): Boolean {
+  const n = e.numbers;
+  // Each used number is above the one before it (so they're in increasing
+  // order, distinct and at least 1) and at most 35; each unused one is 0.
+  const before: Vector<12, Uint<8>> = [0, n[0], n[1], n[2], n[3], n[4], n[5], n[6], n[7], n[8], n[9], n[10]];
+  const shaped = fold((acc: Boolean, x: Uint<8>, p: Uint<8>, i: Uint<8>): Boolean =>
+                        acc && (i < e.count ? x > p && x <= 35 : x == 0),
+                      true, n, before, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+  const mb = e.sweep ? e.moonball == 0 : e.moonball >= 1 && e.moonball <= 20;
+  return entryType(e) < 8 && shaped && mb;
+}
+
+// Games in an entry: its type's games, times 20 with Moonball Sweep. 0 for an invalid entry.
+export pure circuit gamesIn(e: Entry): Uint<32> {
+  const t = entryType(e);
+  const base = fold((acc: Uint<16>, g: Uint<16>, k: Uint<8>): Uint<16> => k == t ? g : acc, 0, gamesPerType(),
+                    [0, 1, 2, 3, 4, 5, 6, 7]);
+  return e.sweep ? (base * 20) as Uint<32> : base as Uint<32>;
 }
 
 // Each payee is an address with a share, or empty (share 0, zero address).
@@ -338,31 +376,40 @@ pure circuit validPayees(p: Vector<3, Payee>): Boolean {
 }
 
 export pure circuit validTicket(t: TicketPreimage): Boolean {
-  return validLine(t.line) && validPayees(t.payees);
+  return validEntry(t.entry) && validPayees(t.payees);
 }
 
 pure circuit has(v: Vector<7, Uint<8>>, n: Uint<8>): Boolean {
   return fold((acc: Boolean, x: Uint<8>): Boolean => acc || x == n, false, v);
 }
 
-// Division for a line against a draw's numbers, or 0 for no prize. Lines have
-// distinct numbers (validLine), so no number is counted twice.
-export pure circuit divisionOf(l: Line, numbers: Vector<7, Uint<8>>, moonball: Uint<8>): Uint<8> {
-  const m = fold((acc: Uint<8>, x: Uint<8>): Uint<8> => has(numbers, x) ? (acc + 1) as Uint<8> : acc, 0, l.numbers);
-  const mb = l.moonball == moonball;
-  return m == 7 ? (mb ? 1 : 2)
-       : m == 6 ? (mb ? 3 : 4)
-       : m == 5 ? (mb ? 5 : 7)
-       : m == 4 ? (mb ? 6 : 0)
-       : m == 3 ? (mb ? 8 : 0)
-       : m == 2 ? (mb ? 9 : 0)
-       : 0;
+// An entry's winning games per division (division 1 first) against a draw's
+// numbers, without listing its games. h = how many of its numbers were drawn
+// (its numbers are distinct, and unused ones are 0, which is never drawn);
+// the entries table gives how many of its games then have each number of
+// main numbers right. With Moonball Sweep one Moonball in 20 matches, so each
+// of those counts once with the Moonball and 19 times without; otherwise all
+// of them are with or all without. Divisions: 1 = 7 + MB, 2 = 7, 3 = 6 + MB,
+// 4 = 6, 5 = 5 + MB, 6 = 4 + MB, 7 = 5, 8 = 3 + MB, 9 = 2 + MB.
+export pure circuit gamesByDivision(e: Entry, numbers: Vector<7, Uint<8>>, moonball: Uint<8>): Vector<9, Uint<32>> {
+  const h = fold((acc: Uint<8>, x: Uint<8>): Uint<8> => has(numbers, x) ? (acc + 1) as Uint<8> : acc, 0, e.numbers);
+  const row = (entryType(e) * 8 + (h > 7 ? 7 : h)) as Uint<8>;
+  // Games with exactly 2, 3, 4, 5, 6, 7 main numbers right.
+  const g = fold((acc: Vector<6, Uint<16>>, r: Vector<6, Uint<16>>, k: Uint<8>): Vector<6, Uint<16>> => k == row ? r : acc,
+                 [0, 0, 0, 0, 0, 0], matchTable(),
+                 [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+                  32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63]);
+  const hit = e.moonball == moonball;
+  const w = map((x: Uint<16>): Uint<32> => e.sweep || hit ? x as Uint<32> : 0, g);
+  const wo = map((x: Uint<16>): Uint<32> => e.sweep ? (x * 19) as Uint<32> : (hit ? 0 : x as Uint<32>), g);
+  return [w[5], wo[5], w[4], wo[4], w[3], w[2], wo[3], w[1], w[0]];
 }
 
 // --------------------------------------------------- ticket encryption
 //
-// A ticket packs into 9 field elements: the line and the three 2-byte shares
-// (14 bytes), each payee address as two 16-byte halves, and the salt as two.
+// A ticket packs into 9 field elements: the entry (kind, count, 12 numbers,
+// Moonball, sweep) and the three 2-byte shares (22 bytes), each payee address
+// as two 16-byte halves, and the salt as two.
 // Encryption is ElGamal-style key agreement on Jubjub (the curve Nightcast's
 // VRF uses) with a Poseidon keystream: ephemeral R = r*G, shared S = r*K, and
 // body[i] = packed[i] + Poseidon(S.x, S.y, i). The settlement key holder
@@ -393,6 +440,12 @@ pure circuit hi16(b: Bytes<32>): Field {
               weights16());
 }
 
+// 256^0 .. 256^21: the 22-byte head as a Field, least significant byte first
+// (the same as `Bytes<22> as Field`, folded by hand like lo16).
+pure circuit weights22(): Vector<22, Field> {
+  return [1, 256, 65536, 16777216, 4294967296, 1099511627776, 281474976710656, 72057594037927936, 18446744073709551616, 4722366482869645213696, 1208925819614629174706176, 309485009821345068724781056, 79228162514264337593543950336, 20282409603651670423947251286016, 5192296858534827628530496329220096, 1329227995784915872903807060280344576, 340282366920938463463374607431768211456, 87112285931760246646623899502532662132736, 22300745198530623141535718272648361505980416, 5708990770823839524233143877797980545530986496, 1461501637330902918203684832716283019655932542976, 374144419156711147060143317175368453031918731001856];
+}
+
 pure circuit join16(lo: Field, hi: Field): Bytes<32> {
   const v: Vector<32, Uint<8>> = [...((lo as Bytes<16>) as Vector<16, Uint<8>>), ...((hi as Bytes<16>) as Vector<16, Uint<8>>)];
   return v as Bytes<32>;
@@ -403,10 +456,11 @@ pure circuit shareBytes(p: Payee): Vector<2, Uint<8>> {
 }
 
 pure circuit packTicket(t: TicketPreimage): Vector<9, Field> {
-  const head: Vector<14, Uint<8>> = [...t.line.numbers, t.line.moonball,
+  const e = t.entry;
+  const head: Vector<22, Uint<8>> = [e.kind, e.count, ...e.numbers, e.moonball, e.sweep ? 1 : 0,
                                      ...shareBytes(t.payees[0]), ...shareBytes(t.payees[1]), ...shareBytes(t.payees[2])];
   return [
-    (head as Bytes<14>) as Field,
+    fold((acc: Field, x: Uint<8>, w: Field): Field => acc + (x as Field) * w, 0, head, weights22()),
     lo16(t.payees[0].address.bytes), hi16(t.payees[0].address.bytes),
     lo16(t.payees[1].address.bytes), hi16(t.payees[1].address.bytes),
     lo16(t.payees[2].address.bytes), hi16(t.payees[2].address.bytes),
@@ -422,11 +476,17 @@ pure circuit unpackPayee(b0: Uint<8>, b1: Uint<8>, lo: Field, hi: Field): Payee 
 }
 
 pure circuit unpackTicket(drawId: Uint<32>, f: Vector<9, Field>): TicketPreimage {
-  const h = (f[0] as Bytes<14>) as Vector<14, Uint<8>>;
+  const h = (f[0] as Bytes<22>) as Vector<22, Uint<8>>;
   return TicketPreimage {
     drawId: drawId,
-    line: Line { numbers: [h[0], h[1], h[2], h[3], h[4], h[5], h[6]], moonball: h[7] },
-    payees: [unpackPayee(h[8], h[9], f[1], f[2]), unpackPayee(h[10], h[11], f[3], f[4]), unpackPayee(h[12], h[13], f[5], f[6])],
+    entry: Entry {
+      kind: h[0],
+      count: h[1],
+      numbers: [h[2], h[3], h[4], h[5], h[6], h[7], h[8], h[9], h[10], h[11], h[12], h[13]],
+      moonball: h[14],
+      sweep: h[15] != 0
+    },
+    payees: [unpackPayee(h[16], h[17], f[1], f[2]), unpackPayee(h[18], h[19], f[3], f[4]), unpackPayee(h[20], h[21], f[5], f[6])],
     salt: join16(f[7], f[8])
   };
 }
@@ -493,7 +553,7 @@ pure circuit shares(): Vector<9, Uint<16>> {
 
 // Running state while prizes are worked out division by division.
 struct PrizeCalc {
-  // Prize per winning ticket so far (division 1 first).
+  // Prize per winning game so far (division 1 first).
   prizes: Vector<9, Uint<128>>;
   // Money from unwon divisions 2..8 falling to the next lower division with a winner.
   cascade: Uint<128>;
@@ -618,22 +678,23 @@ circuit openNext(close: Uint<64>, commitment: Bytes<32>): Uint<32> {
     prizes: [0, 0, 0, 0, 0, 0, 0, 0, 0]
   });
   ticketCount.insert(id, 0);
+  gamesSold.insert(id, 0);
   progress.insert(id, Progress { next: 0, winners: noWinners() });
   usedCommitments.insert(commitment);
   lastDraw = id;
   return id;
 }
 
-// Buy 1 to maxGames() tickets (one line each) for an open draw in one
-// transaction, paying the ticket price for each: a single game, a QuickPick
-// package a few games at a time, or several chosen lines. Each game is a
-// ticket of its own, with its own index, and settles like any other. For each
-// one, publishes the commitment and the ticket encrypted to the settlement
-// key; the proof shows both hold the same valid ticket. Refunds of a void draw
-// go to `refundTo`. Returns the index of the first ticket bought.
+// Buy 1 to maxTickets() tickets for an open draw in one transaction, paying
+// the price of every game in them: standard games, Systems, Picks, with or
+// without Moonball Sweep. Each ticket has its own index and settles as one
+// entry however many games it holds. For each one, publishes the commitment
+// and the ticket encrypted to the settlement key; the proof shows both hold
+// the same valid ticket. Refunds of a void draw go to `refundTo`. Returns the
+// index of the first ticket bought.
 export circuit buyTickets(count: Uint<8>, refundTo: UserAddress): Uint<64> {
   const n = disclose(count);
-  assert(n >= 1 && n <= maxGames(), "1 to maxGames() games per purchase");
+  assert(n >= 1 && n <= maxTickets(), "1 to maxTickets() tickets per purchase");
   const ts = newTickets();
   const rs = sealingRandomnessFor();
   const id = disclose(ts[0].drawId);
@@ -642,15 +703,19 @@ export circuit buyTickets(count: Uint<8>, refundTo: UserAddress): Uint<64> {
   assert(blockTimeLt(d.salesClose), "sales have closed");
   const first = ticketCount.lookup(id);
   assert(first + (n as Uint<64>) <= 4294967295, "draw is full");
-  receiveUnshielded(nativeToken(), (ticketPrice * n) as Uint<128>);
+  // Games per ticket (0 for an unused slot), and so the price of the purchase.
+  const games = map((t: TicketPreimage, j: Uint<8>): Uint<32> => j < n ? gamesIn(t.entry) : 0, ts, ticketSlots());
+  const bought = disclose(fold((acc: Uint<64>, g: Uint<32>): Uint<64> => (acc + g) as Uint<64>, 0, games));
+  receiveUnshielded(nativeToken(), (ticketPrice * bought) as Uint<128>);
   const to = disclose(refundTo);
   // Read the settlement key before the loop, not inside `if (j < n)`. A ledger
   // read inside a branch that isn't taken has no value in the transcript, so
   // the circuit sees (0, 0), which isn't a curve point, and sealing an unused
-  // slot with it makes the prover fail (any purchase of fewer than maxGames()
-  // games). Found by the first end-to-end run; the zk check test covers it.
+  // slot with it makes the prover fail (any purchase of fewer than
+  // maxTickets() tickets). Found by the first end-to-end run; the zk check
+  // test covers it.
   const key = settlementKey;
-  for (const j of gameSlots()) {
+  for (const j of ticketSlots()) {
     if (j < n) {
       const t = ts[j];
       assert(disclose(validTicket(t) && t.drawId == id), "invalid ticket");
@@ -659,6 +724,7 @@ export circuit buyTickets(count: Uint<8>, refundTo: UserAddress): Uint<64> {
       ticketCommitments.insert(c);
       tickets.insert(ticketKey(id, (first + (j as Uint<64>)) as Uint<64>), TicketRecord {
         commitment: c,
+        games: disclose(games[j]),
         refundTo: to,
         cipher: disclose(sealTicket(key, rs[j], t)),
         refunded: false
@@ -666,6 +732,7 @@ export circuit buyTickets(count: Uint<8>, refundTo: UserAddress): Uint<64> {
     }
   }
   ticketCount.insert(id, (first + (n as Uint<64>)) as Uint<64>);
+  gamesSold.insert(id, (gamesSold.lookup(id) + bought) as Uint<64>);
   return first;
 }
 
@@ -741,8 +808,8 @@ export circuit computeNumbers(n: Uint<32>, now: Uint<64>): Numbers {
 
 // Settle the draw's next batch of tickets, in index order. The settler
 // supplies the decrypted tickets (witness); each must match the commitment
-// stored at its index. Counts the winners per division and records each
-// winning ticket's entitlement. Discloses no ticket's numbers. Anyone holding
+// stored at its index. Counts each ticket's winning games per division and
+// records each winning ticket's entitlement. Discloses no ticket's numbers. Anyone holding
 // the decrypted tickets may call this; a wrong ticket only makes the proof
 // fail. Returns the index of the next ticket to settle.
 export circuit settleBatch(n: Uint<32>): Uint<64> {
@@ -756,8 +823,8 @@ export circuit settleBatch(n: Uint<32>): Uint<64> {
   const slots = map((t: TicketPreimage, o: Uint<64>): Slot => Slot { ticket: t, offset: o },
                     settlementBatch(id, p.next), batchSlots());
 
-  // Check every ticket against the commitment stored at its index and work
-  // out its division. Every slot reads the ledger the same way whether or not
+  // Check every ticket against the commitment stored at its index and count
+  // its winning games. Every slot reads the ledger the same way whether or not
   // its ticket won, so the public transcript doesn't show which one did.
   const settled = map((s: Slot): Settled => {
     const index = (p.next + s.offset) as Uint<64>;
@@ -765,32 +832,33 @@ export circuit settleBatch(n: Uint<32>): Uint<64> {
       const rec = tickets.lookup(ticketKey(id, index));
       assert(disclose(ticketCommitment(kernel.self(), s.ticket) == rec.commitment),
              "ticket does not match its commitment");
+      const g = gamesByDivision(s.ticket.entry, d.numbers, d.moonball);
       return Settled {
-        division: divisionOf(s.ticket.line, d.numbers, d.moonball),
+        games: g,
+        won: fold((acc: Boolean, x: Uint<32>): Boolean => acc || x != 0, false, g),
         id: entitlementId(rec.commitment, s.ticket.salt),
         payees: s.ticket.payees
       };
     }
-    return Settled { division: 0, id: default<Bytes<32>>, payees: default<Vector<3, Payee>> };
+    return Settled { games: [0, 0, 0, 0, 0, 0, 0, 0, 0], won: false, id: default<Bytes<32>>, payees: default<Vector<3, Payee>> };
   }, slots);
 
   // Record the winners, after all the reads. An entitlement's id needs the
   // ticket's secret salt, so it can't be linked to the purchase.
   for (const w of settled) {
-    if (disclose(w.division) != 0) {
+    if (disclose(w.won)) {
       entitlements.insert(disclose(w.id), Entitlement {
         drawId: id,
-        division: disclose(w.division),
+        games: disclose(w.games),
         payees: disclose(w.payees),
         paid: false
       });
     }
   }
 
-  const added = map((div: Uint<8>): Uint<64> =>
-                      fold((acc: Uint<64>, w: Settled): Uint<64> => disclose(w.division) == div ? (acc + 1) as Uint<64> : acc,
-                           0, settled),
-                    [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  const added = fold((acc: Vector<9, Uint<64>>, w: Settled): Vector<9, Uint<64>> =>
+                       map((a: Uint<64>, x: Uint<32>): Uint<64> => (a + x) as Uint<64>, acc, disclose(w.games)),
+                     noWinners(), settled);
   const after = (p.next + batchSize()) as Uint<64>;
   const next = after < total ? after : total;
   progress.insert(id, Progress {
@@ -801,7 +869,7 @@ export circuit settleBatch(n: Uint<32>): Uint<64> {
 }
 
 // Once every ticket is settled, anyone fixes each division's prize per
-// winning ticket and pays the draw's operator fee (feePerGame per ticket sold,
+// winning game and pays the draw's operator fee (feePerGame per game sold,
 // off sales first). Draws are finalised in order: the previous draw must be
 // settled or void, and then all the rollover so far joins this draw's jackpot.
 export circuit finaliseDraw(n: Uint<32>): [] {
@@ -817,8 +885,9 @@ export circuit finaliseDraw(n: Uint<32>): [] {
     assert(prev == DrawStatus.settled || prev == DrawStatus.voided, "the previous draw isn't finalised yet");
   }
   const carried = carry;
-  const sales = (ticketPrice * total) as Uint<128>;
-  const fee = (feePerGame * total) as Uint<128>;
+  const sold = gamesSold.lookup(id);
+  const sales = (ticketPrice * sold) as Uint<128>;
+  const fee = (feePerGame * sold) as Uint<128>;
   const pool = (sales - fee) as Uint<128>;
   // Powerball's rules: each division gets its share of the pool; the rollover
   // (jackpot) joins division 1 only; an unwon division 2..8 falls to the next
@@ -848,10 +917,11 @@ export circuit finaliseDraw(n: Uint<32>): [] {
   }
 }
 
-// Pay a winning ticket's prize to its payees. Anyone may call this (a keeper
-// does, for every entitlement); each entitlement is paid once. Each payee
-// after the first gets floor(prize * share / 10000) and the first gets the
-// rest, so the prize is paid exactly.
+// Pay a winning ticket's prize (its winning games times each division's prize
+// per game) to its payees. Anyone may call this (a keeper does, for every
+// entitlement); each entitlement is paid once. Each payee after the first gets
+// floor(prize * share / 10000) and the first gets the rest, so the prize is
+// paid exactly.
 export circuit payEntitlement(id: Bytes<32>): [] {
   const eid = disclose(id);
   assert(entitlements.member(eid), "unknown entitlement");
@@ -859,8 +929,8 @@ export circuit payEntitlement(id: Bytes<32>): [] {
   assert(!e.paid, "already paid");
   const d = drawFor(e.drawId);
   assert(d.status == DrawStatus.settled, "draw is not finalised");
-  const prize = fold((acc: Uint<128>, x: Uint<128>, j: Uint<8>): Uint<128> => j == e.division - 1 ? x : acc,
-                     0, d.prizes, [0, 1, 2, 3, 4, 5, 6, 7, 8]);
+  const prize = fold((acc: Uint<128>, x: Uint<128>, g: Uint<32>): Uint<128> => (acc + x * g) as Uint<128>,
+                     0, d.prizes, e.games);
   const a1 = quotient((prize as Field) * (e.payees[1].share as Field), 10000);
   const a2 = quotient((prize as Field) * (e.payees[2].share as Field), 10000);
   const a0 = (prize - a1 - a2) as Uint<128>;
@@ -893,8 +963,8 @@ export circuit voidDraw(n: Uint<32>): [] {
   draws.insert(id, Draw { ...d, status: DrawStatus.voided });
 }
 
-// Refund ticket `index` of a void draw to the address given when it was
-// bought. Anyone may call this (a keeper does, for every ticket).
+// Refund ticket `index` of a void draw (every game in it) to the address given
+// when it was bought. Anyone may call this (a keeper does, for every ticket).
 export circuit refundTicket(n: Uint<32>, index: Uint<64>): [] {
   const id = disclose(n);
   const i = disclose(index);
@@ -905,5 +975,5 @@ export circuit refundTicket(n: Uint<32>, index: Uint<64>): [] {
   const rec = tickets.lookup(key);
   assert(!rec.refunded, "already refunded");
   tickets.insert(key, TicketRecord { ...rec, refunded: true });
-  sendUnshielded(nativeToken(), ticketPrice, right<ContractAddress, UserAddress>(rec.refundTo));
+  sendUnshielded(nativeToken(), (ticketPrice * rec.games) as Uint<128>, right<ContractAddress, UserAddress>(rec.refundTo));
 }
