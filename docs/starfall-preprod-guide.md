@@ -4,7 +4,7 @@ This replaces the v0 soak with **Starfall**, the real game (docs/SETTLEMENT.md):
 
 It assumes the setup from [preview-guide.md](preview-guide.md) and [deploy/systemd/README.md](../deploy/systemd/README.md): the repo in `/root/Lunardraw`, secrets in `/root/lunardraw-secrets` and `/root/nightcast-secrets`, the three v0 services running.
 
-**Memory:** Starfall's big proofs (the numbers, each settlement batch, each purchase) need about 7 GB each on the proof server, one at a time. The server needs about 8 GB free; check with `free -h` (the `available` column). The keeper proves one at a time and the proof server restarts itself between them to free memory.
+**Memory:** the numbers proof needs about 7 GB on the proof server; everything else (settlement batches, purchases) about 1 GB. The server needs about 8 GB free; check with `free -h` (the `available` column). The keeper proves one at a time and the proof server restarts itself between them to free memory.
 
 **Run every command in `~/Lunardraw` unless it says otherwise.**
 
@@ -101,12 +101,12 @@ Once the player wallet has synced and has tNIGHT, buy a package for the draw on 
 |---|---|---|
 | single | 1 | 1 |
 | starter | 4 | 2 |
-| mini | 8 | 3 |
-| regular | 12 | 4 |
-| mega | 25 | 9 |
-| maxi | 50 | 17 |
+| mini | 8 | 4 |
+| regular | 12 | 6 |
+| mega | 25 | 13 |
+| maxi | 50 | 25 |
 
-Or `--games <n>` for any number. Each transaction is a proof of up to 3 games. The numbers are printed when it's done: winnings go to the player wallet by themselves.
+Or `--games <n>` for any number. Each transaction is a proof of up to 2 games (about a minute and 1 GB of memory). The numbers are printed when it's done: winnings go to the player wallet by themselves.
 
 Start with **starter** to see one purchase work and how long it takes. Then aim for about **100 games in one draw**: four batches of settlement, which is what this test is for. Buy them before the draw's sales close (the keeper log says when).
 

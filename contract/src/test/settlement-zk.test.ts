@@ -100,28 +100,30 @@ const allPass = async (runs: Run[]) => {
 };
 
 describe('every circuit run passes the zkir check', () => {
-  it('purchases of 1, 2 and 3 games, a settled draw with winners, payments to 1 and 3 payees', async () => {
+  it('purchases of 1 and 2 games, a settled draw with winners, payments to 1 and 3 payees', async () => {
     const { sim, runs, open } = setup();
     const { n, seed, draw } = open();
     const me = randomAddress();
     sim.buyTickets([makeTicket(n, quickPick(), me)], me);
     sim.buyTickets([makeTicket(n, quickPick(), me), makeTicket(n, quickPick(), me)], me);
-    const three = [
-      makeTicket(n, lineHitting(draw.numbers, draw.moonball, 3), randomAddress()),
-      makeTicket(n, lineHitting(draw.numbers, draw.moonball, 4), [
-        { address: randomAddress(), share: 5_000 },
-        { address: randomAddress(), share: 3_000 },
-        { address: randomAddress(), share: 2_000 },
-      ]),
-      makeTicket(n, quickPick(), me),
-    ];
-    sim.buyTickets(three, me);
+    // A sure winner paid to one address, and one split between three payees.
+    sim.buyTickets(
+      [
+        makeTicket(n, lineHitting(draw.numbers, draw.moonball, 3), randomAddress()),
+        makeTicket(n, lineHitting(draw.numbers, draw.moonball, 4), [
+          { address: randomAddress(), share: 5_000 },
+          { address: randomAddress(), share: 3_000 },
+          { address: randomAddress(), share: 2_000 },
+        ]),
+      ],
+      me,
+    );
     sim.advance(3_601);
     // Reveal and open the next draw in one go.
     sim.requestAndOpenNext(n, seed, { salesClose: BigInt(sim.now + 3_600), seedCommitment: new Uint8Array(32).fill(99) });
     sim.fulfilDraw(n);
     sim.computeNumbers(n);
-    expect(sim.settleAll(n)).toBe(1); // 6 games: one partial batch
+    expect(sim.settleAll(n)).toBe(1); // 5 games: one partial batch
     expect(sim.entitlementsOf(n).length).toBeGreaterThanOrEqual(2);
     const circuits = new Set(runs.map((r) => r.circuit));
     for (const c of ['buyTickets', 'requestDraw', 'fulfilDraw', 'computeNumbers', 'settleBatch', 'finaliseDraw', 'payEntitlement']) {

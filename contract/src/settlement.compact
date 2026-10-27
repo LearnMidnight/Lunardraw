@@ -283,22 +283,29 @@ export pure circuit organiserCommitmentOf(secret: Bytes<32>): Bytes<32> {
   return persistentHash<[Bytes<32>, Bytes<32>]>([pad(32, "starfall:organiser:v1"), secret]);
 }
 
+// Ticket commitments and entitlement ids use Poseidon (transientHash), not
+// SHA-256 (persistentHash): settling checks 25 commitments and works out up to
+// 25 ids per batch, and SHA-256 made that batch about ten times bigger
+// (k=20 instead of k=17). Compact may change transientHash between compiler
+// versions, but this contract is deployed locked, so its circuits, and so its
+// hash, never change; tickets are bought and settled with its own compiled
+// circuits.
 export pure circuit ticketCommitment(deployment: ContractAddress, t: TicketPreimage): Bytes<32> {
-  return persistentHash<TicketHashInput>(TicketHashInput {
-    domain: pad(32, "starfall:ticket:v1"),
+  return upgradeFromTransient(transientHash<TicketHashInput>(TicketHashInput {
+    domain: pad(32, "starfall:ticket:v2"),
     deployment: deployment,
     ticket: t
-  });
+  }));
 }
 
 // The id a winning ticket's entitlement is stored under. Needs the ticket's
 // secret salt, so nobody else can tell which purchase it came from.
 export pure circuit entitlementId(commitment: Bytes<32>, salt: Bytes<32>): Bytes<32> {
-  return persistentHash<EntitlementPreimage>(EntitlementPreimage {
-    domain: pad(32, "starfall:entitlement:v1"),
+  return upgradeFromTransient(transientHash<EntitlementPreimage>(EntitlementPreimage {
+    domain: pad(32, "starfall:entitlement:v2"),
     commitment: commitment,
     salt: salt
-  });
+  }));
 }
 
 // The draw's VRF input.
@@ -362,12 +369,28 @@ export pure circuit divisionOf(l: Line, numbers: Vector<7, Uint<8>>, moonball: U
 // recovers S = k*R. Keeping this in circuits means off-chain code never
 // reimplements it.
 
+// 256^0 .. 256^15: a 16-byte value as a Field, least significant byte first.
+pure circuit weights16(): Vector<16, Field> {
+  return [1, 256, 65536, 16777216, 4294967296, 1099511627776, 281474976710656, 72057594037927936, 18446744073709551616, 4722366482869645213696, 1208925819614629174706176, 309485009821345068724781056, 79228162514264337593543950336, 20282409603651670423947251286016, 5192296858534827628530496329220096, 1329227995784915872903807060280344576];
+}
+
+// Bytes 0-15 and 16-31 of a 32-byte value as Fields (little-endian, as a
+// Bytes<16> converts). Folded by hand from the value's bytes: the same result
+// as `slice<16>(b, 0) as Field`, at a fraction of the circuit size (slicing
+// and converting cost about 25,000 rows per 32-byte value; a purchase seals
+// three addresses and a salt per game).
 pure circuit lo16(b: Bytes<32>): Field {
-  return slice<16>(b, 0) as Field;
+  const v = b as Vector<32, Uint<8>>;
+  return fold((acc: Field, x: Uint<8>, w: Field): Field => acc + (x as Field) * w, 0,
+              [v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11], v[12], v[13], v[14], v[15]],
+              weights16());
 }
 
 pure circuit hi16(b: Bytes<32>): Field {
-  return slice<16>(b, 16) as Field;
+  const v = b as Vector<32, Uint<8>>;
+  return fold((acc: Field, x: Uint<8>, w: Field): Field => acc + (x as Field) * w, 0,
+              [v[16], v[17], v[18], v[19], v[20], v[21], v[22], v[23], v[24], v[25], v[26], v[27], v[28], v[29], v[30], v[31]],
+              weights16());
 }
 
 pure circuit join16(lo: Field, hi: Field): Bytes<32> {
