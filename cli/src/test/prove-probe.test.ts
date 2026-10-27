@@ -54,11 +54,16 @@ const circuitRuns = (): Run[] => {
     moonball: number;
   };
   const me = webcrypto.getRandomValues(new Uint8Array(32));
-  const max = Number(Starfall.pureCircuits.maxGames());
+  const max = Number(Starfall.pureCircuits.maxTickets());
   const batch = Number(Starfall.pureCircuits.batchSize());
-  const games = [Starfall.makeTicket(n, lineHitting(draw.numbers, draw.moonball, 3), me)];
+  // The biggest entries ride along: a proof costs the same whatever a ticket holds.
+  const games = [
+    Starfall.makeTicket(n, lineHitting(draw.numbers, draw.moonball, 3), me),
+    Starfall.makeTicket(n, { numbers: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], sweep: true }, me),
+    Starfall.makeTicket(n, { numbers: draw.numbers.slice(0, 5), pick: true, sweep: true }, me),
+  ];
   while (games.length < batch + 1) games.push(Starfall.makeTicket(n, quickPick(), me));
-  note = `${max} games`;
+  note = `${max} tickets`;
   sim.buyPackage(games, me);
   sim.advance(3_601);
   note = 'with next draw';

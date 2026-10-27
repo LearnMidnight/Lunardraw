@@ -373,11 +373,13 @@ describe('the Starfall plan', () => {
       moonball: 0,
       tickets: 0n,
       settled: 0n,
+      games: 0n,
       winners: [],
       carried: 0n,
       fee: 0n,
       prizes: [],
       unrefunded: [],
+      refundedGames: 0n,
       ...d,
     })),
   });
@@ -451,16 +453,20 @@ describe('the Starfall site feed', () => {
     expect(d1.winners![7]).toBeGreaterThanOrEqual(1); // the sure 3 + Moonball
   }, 60_000);
 
-  it('counts refunds of a void draw', async () => {
+  it('counts games (not tickets) sold and refunded: a System 8 is one ticket of 8 games', async () => {
     const ctx = setup();
     const { sim, chain } = ctx;
     const keeper = ctx.keeper({ openNew: false, paymentsPerPass: 1 });
     openFirst(ctx);
-    sim.buyTickets([makeTicket(1n, quickPick(), BUYER), makeTicket(1n, quickPick(), BUYER)], BUYER);
+    const system8 = makeTicket(1n, { numbers: [1, 2, 3, 4, 5, 6, 7, 8], moonball: 9 }, BUYER);
+    sim.buyTickets([system8, makeTicket(1n, quickPick(), BUYER)], BUYER);
+    expect(buildStarfallFeed(await chain.view(), { network: 'local', contract: sim.address, nowSecs: sim.now }).games.starfall.open).toMatchObject(
+      { num: 1, games_sold: 9, tickets: 2 },
+    );
     passing(sim, draw(sim, 1n).revealDeadline);
     await keeper.tick(); // void
-    await keeper.tick(); // one refund
+    await keeper.tick(); // one refund: ticket 0, the System 8
     const f = buildStarfallFeed(await chain.view(), { network: 'local', contract: sim.address, nowSecs: sim.now });
-    expect(f.games.starfall.draws[0]).toMatchObject({ num: 1, status: 'void', games_sold: 2, refunded: 1 });
+    expect(f.games.starfall.draws[0]).toMatchObject({ num: 1, status: 'void', games_sold: 9, tickets: 2, refunded: 8 });
   }, 60_000);
 });

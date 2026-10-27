@@ -4,6 +4,7 @@
  * (organiser, oracle, wallet), plus a settlement key that tickets are
  * encrypted to.
  */
+import { webcrypto } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { encodeContractAddress } from '@midnight-ntwrk/compact-runtime';
@@ -59,8 +60,9 @@ export const STARFALL_USAGE = `usage: ./lunardraw starfall <command>
   keeper       --network <network> --organiser <file> --settlement <file> --wallet <file> [--every <seconds>] [--feed <file>]
                [--proof-server-port <port>] [--prove-lead <secs>] [--restart-after <min>] [--stall-after <min>]
   oracle       --network <network> --oracle <file> --wallet <file> [--proof-server-port <port>] [--restart-after <min>] [--stall-after <min>]
-  buy          --network <network> --wallet <file> [--games <n> | --package <${Object.keys(Starfall.QUICK_PICK_PACKAGES).join('|')}>] [--pay-to <address>]
-               [--proof-server-port <port>]
+  buy          --network <network> --wallet <file> [--pay-to <address>] [--proof-server-port <port>]
+               [--games <n> | --package <${Object.keys(Starfall.QUICK_PICK_PACKAGES).join('|')}>] [--sweep]
+               | [--system <8-12> | --pick <5|6>] [--numbers "<n n n ...>"] [--moonball <1-20> | --sweep]
   status       --network <network>
   verify       --network <network>
   fingerprints
@@ -77,8 +79,16 @@ keep its file private, like the organiser's. Its public half goes into the contr
 stay offline. Starfall's commitments differ from v0's: a v0 deployment record's backupCommitment won't do. --operator is where the 0.2 tNIGHT fee per game goes (default:
 the deploying wallet).
 The keeper works out each draw's seed from the organiser secret, so there is no seeds file.
-buy picks random games (QuickPick) for the draw on sale, paid to --pay-to (default: your wallet),
-with refunds to your wallet if the draw is cancelled; it sends up to 2 games per transaction.`;
+buy buys tickets for the draw on sale, paid to --pay-to (default: your wallet), with refunds to your
+wallet if the draw is cancelled; it sends up to 2 tickets per transaction. A ticket is one entry:
+  --games <n> / --package <name>   that many random standard games (QuickPick), one ticket each;
+  --numbers "3 9 14 21 27 33 35"   your own standard game (7 numbers), or a System with 8 to 12;
+  --system <8-12>                  a System: every 7 of your numbers (random unless --numbers);
+  --pick <5|6>                     a Pick: your 5 or 6 numbers completed every way (random unless --numbers);
+  --sweep                          Moonball Sweep: every Moonball, 20 times the games (with --games or
+                                   --package, each game becomes PowerHit-style).
+The Moonball is random unless --moonball. A ticket costs its games x the game price, and settles as
+one entry however many games it holds (a Pick 5 with Moonball Sweep is 8,700 games in one ticket).`;
 
 const SETTLEMENT = 'settlement';
 
@@ -170,13 +180,76 @@ const describeView = (view: StarfallView, nowSecs: number): string => {
       const won = d.winners.reduce((a, b) => a + b, 0n);
       extra = `  ${won} winning game(s)${unpaid > 0 ? `, ${unpaid} not paid yet` : ''}; fee ${tn(d.fee)}`;
     } else if (d.status === Starfall.DrawStatus.voided) {
-      extra = d.unrefunded.length > 0 ? `  ${d.unrefunded.length} game(s) still to refund` : '  refunded';
+      extra = d.unrefunded.length > 0 ? `  ${d.unrefunded.length} ticket(s) still to refund` : '  refunded';
     }
     const numbers = d.status === Starfall.DrawStatus.drawn || d.status === Starfall.DrawStatus.settled ? `  ${d.numbers.join(' ')} + ${d.moonball}` : '';
-    lines.push(`draw ${d.id}  ${stage}  sales close ${iso(d.salesClose)}  ${d.tickets} game(s)${numbers}${extra}`);
+    lines.push(`draw ${d.id}  ${stage}  sales close ${iso(d.salesClose)}  ${d.games} game(s) in ${d.tickets} ticket(s)${numbers}${extra}`);
   }
   lines.push(`Rollover into the next draw: ${tn(view.carry)}`);
   return lines.join('\n');
+};
+
+/** `count` distinct random numbers from 1..35, in increasing order. */
+const randomNumbers = (count: number): number[] => {
+  const out = new Set<number>();
+  const r = new Uint32Array(1);
+  while (out.size < count) {
+    webcrypto.getRandomValues(r);
+    out.add((r[0] % 35) + 1);
+  }
+  return [...out].sort((a, b) => a - b);
+};
+
+const randomMoonball = (): number => {
+  const r = new Uint32Array(1);
+  webcrypto.getRandomValues(r);
+  return (r[0] % 20) + 1;
+};
+
+/** A ticket's entry for the buy listing: "System 9: 3 5 9 ... + 7 (36 games)". */
+export const describeEntry = (e: Starfall.PlainEntry): string =>
+  `${Starfall.entryName(e)}: ${[...e.numbers].sort((a, b) => a - b).join(' ')}` +
+  `${e.sweep ? ' + every Moonball' : ` + ${e.moonball}`} (${Starfall.gamesOf(e)} game${Starfall.gamesOf(e) === 1 ? '' : 's'})`;
+
+/** The entries `buy` was asked for: QuickPick games (--games/--package), or one chosen entry. */
+export const buyEntries = (v: {
+  games?: string;
+  package?: string;
+  system?: string;
+  pick?: string;
+  numbers?: string;
+  moonball?: string;
+  sweep?: boolean;
+}): Starfall.PlainEntry[] => {
+  const quick = v.games !== undefined || v.package !== undefined;
+  const single = v.system !== undefined || v.pick !== undefined || v.numbers !== undefined || v.moonball !== undefined;
+  if (quick && single) throw new Error('give --games or --package (QuickPick), or one entry (--numbers, --system, --pick, --moonball), not both');
+  if (v.system !== undefined && v.pick !== undefined) throw new Error('give --system or --pick, not both');
+  if (v.sweep && v.moonball !== undefined) throw new Error('--sweep plays every Moonball: leave out --moonball');
+  if (!single) {
+    const packages = Starfall.QUICK_PICK_PACKAGES as Record<string, number>;
+    if (v.package !== undefined && v.games !== undefined) throw new Error('give --games or --package, not both');
+    const count = v.package !== undefined ? packages[v.package] : Number(v.games ?? '1');
+    if (count === undefined) throw new Error(`--package must be one of ${Object.keys(packages).join(', ')}`);
+    if (!Number.isInteger(count) || count < 1 || count > 1000) throw new Error('--games must be 1 to 1000');
+    return Array.from({ length: count }, () => ({ ...quickPick(), sweep: v.sweep }));
+  }
+  const pick = v.pick !== undefined;
+  const size = v.system !== undefined ? Number(v.system) : pick ? Number(v.pick) : undefined;
+  if (v.system !== undefined && !(Number.isInteger(size) && size! >= 8 && size! <= 12)) throw new Error('--system takes 8 to 12');
+  if (pick && !(size === 5 || size === 6)) throw new Error('--pick takes 5 or 6');
+  const numbers = v.numbers !== undefined ? v.numbers.split(/[\s,]+/).filter((x) => x !== '').map(Number) : randomNumbers(size ?? 7);
+  if (size !== undefined && numbers.length !== size) {
+    throw new Error(`${pick ? `--pick ${size}` : `--system ${size}`} needs ${size} numbers; --numbers has ${numbers.length}`);
+  }
+  const entry: Starfall.PlainEntry = {
+    numbers,
+    moonball: v.sweep ? undefined : v.moonball !== undefined ? Number(v.moonball) : randomMoonball(),
+    pick,
+    sweep: v.sweep,
+  };
+  Starfall.checkEntry(entry);
+  return [entry];
 };
 
 export const starfall = async (argv: string[]): Promise<number> => {
@@ -210,6 +283,11 @@ export const starfall = async (argv: string[]): Promise<number> => {
       settle: { type: 'string' },
       games: { type: 'string' },
       package: { type: 'string' },
+      system: { type: 'string' },
+      pick: { type: 'string' },
+      numbers: { type: 'string' },
+      moonball: { type: 'string' },
+      sweep: { type: 'boolean', default: false },
       'pay-to': { type: 'string' },
     },
   });
@@ -414,11 +492,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
     case 'buy': {
       const network = networkArg(values.network);
       const record = readStarfallRecord(network);
-      const packages = Starfall.QUICK_PICK_PACKAGES as Record<string, number>;
-      if (values.package !== undefined && values.games !== undefined) throw new Error('give --games or --package, not both');
-      const count = values.package !== undefined ? packages[values.package] : Number(values.games ?? '1');
-      if (count === undefined) throw new Error(`--package must be one of ${Object.keys(packages).join(', ')}`);
-      if (!Number.isInteger(count) || count < 1 || count > 1000) throw new Error('--games must be 1 to 1000');
+      const entries = buyEntries(values);
       return withSession(network, async (session) => {
         const wallet = await openWallet(session, { seed: walletSeed(values.wallet) });
         try {
@@ -427,39 +501,37 @@ export const starfall = async (argv: string[]): Promise<number> => {
           const now = BigInt(Math.floor(Date.now() / 1000));
           const selling = view.draws.find((d) => d.status === Starfall.DrawStatus.open && d.salesClose > now + 120n);
           if (!selling) throw new Error('no draw is on sale right now (or sales close in under 2 minutes): try again when the next one opens');
-          const cost = view.ticketPrice * BigInt(count);
+          const games = entries.reduce((a, e) => a + Starfall.gamesOf(e), 0);
+          const cost = view.ticketPrice * BigInt(games);
           const { night } = await walletBalances(wallet);
-          if (night < cost) throw new Error(`${count} game(s) cost ${tn(cost)} but the wallet holds ${tn(night)}`);
+          if (night < cost) throw new Error(`${games} game(s) cost ${tn(cost)} but the wallet holds ${tn(night)}`);
           const mine = walletBytes(wallet);
           const payTo = values['pay-to'] ? parseUserAddress(values['pay-to']) : mine;
-          const games = Array.from({ length: count }, () => Starfall.makeTicket(selling.id, quickPick(), payTo));
+          const tickets = entries.map((e) => Starfall.makeTicket(selling.id, e, payTo));
           const joined = await joinStarfall(providers, record.contractAddress, {});
           session.logger.info(
-            `Buying ${count} QuickPick game(s) for draw ${selling.id} (sales close ${iso(selling.salesClose)}) for ${tn(cost)}, ` +
-              `${Math.ceil(count / Number(Starfall.pureCircuits.maxGames()))} transaction(s), from ${walletAddress(wallet)}...`,
+            `Buying ${tickets.length} ticket(s), ${games} game(s), for draw ${selling.id} (sales close ${iso(selling.salesClose)}) for ${tn(cost)}, ` +
+              `${Math.ceil(tickets.length / Number(Starfall.pureCircuits.maxTickets()))} transaction(s), from ${walletAddress(wallet)}...`,
           );
-          const listing = (n: number) =>
-            games
-              .slice(0, n)
-              .map((g, i) => `  game ${i + 1}: ${g.line.numbers.join(' ')} + ${g.line.moonball}`)
-              .join('\n');
+          const listing = (n: number) => entries.slice(0, n).map((e, i) => `  ticket ${i + 1}: ${describeEntry(e)}`).join('\n');
           try {
-            await buyGames(joined, providers.privateStateProvider, record.contractAddress, games, mine, {
-              onEach: (done, of) => session.logger.info(`bought ${done} of ${of}`),
+            await buyGames(joined, providers.privateStateProvider, record.contractAddress, tickets, mine, {
+              onEach: (done, of) => session.logger.info(`bought ${done} of ${of} ticket(s)`),
               stopAt: Number(selling.salesClose) - 60,
             });
           } catch (err) {
             if (!(err instanceof BuyStopped)) throw err;
             process.stdout.write(
-              `Stopped after ${err.bought} of ${err.of} game(s): ${err.message}.\n` +
+              `Stopped after ${err.bought} of ${err.of} ticket(s): ${err.message}.\n` +
                 (err.bought > 0 ? `These ${err.bought} are bought for draw ${selling.id} (paid to ${hex(payTo)}):\n${listing(err.bought)}\n` : '') +
-                `Check with \`./lunardraw starfall status --network ${network}\`, then run buy again with --games ${err.of - err.bought} for the rest.\n`,
+                `Check with \`./lunardraw starfall status --network ${network}\`, then run buy again for the rest` +
+                (values.games !== undefined || values.package !== undefined ? ` (--games ${err.of - err.bought}).\n` : '.\n'),
             );
             return 1;
           }
           process.stdout.write(
-            `Bought ${count} game(s) for draw ${selling.id}. Winnings are paid automatically to ${hex(payTo)}; ` +
-              `if the draw is cancelled, refunds go to this wallet.\n${listing(count)}\n`,
+            `Bought ${tickets.length} ticket(s), ${games} game(s), for draw ${selling.id}. Winnings are paid automatically to ${hex(payTo)}; ` +
+              `if the draw is cancelled, refunds go to this wallet.\n${listing(tickets.length)}\n`,
           );
           return 0;
         } finally {
