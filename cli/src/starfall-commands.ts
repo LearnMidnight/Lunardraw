@@ -17,7 +17,6 @@ import {
   iso,
   networkArg,
   oracleKeyFrom,
-  organiserCommitmentFrom,
   organiserSecretFrom,
   proofServerPort,
   publicDataFor,
@@ -30,13 +29,14 @@ import {
   walletSeed,
   withSession,
 } from './common.js';
-import { currentCommit, formatChecks, organiserCommitmentOf } from './deployment.js';
+import { type Check, currentCommit, formatChecks } from './deployment.js';
 import {
   acceptStarfallOracleKey,
   buyGames,
   deployStarfall,
   joinStarfall,
   MidnightStarfallChain,
+  readStarfallLedger,
   readStarfallRecord,
   readStarfallView,
   STARFALL_WEEKLY_DEFAULTS,
@@ -51,6 +51,7 @@ import { watchSync } from './sync-watch.js';
 
 export const STARFALL_USAGE = `usage: ./lunardraw starfall <command>
   keygen settlement --out <file>
+  commitment   --organiser <file>      (an organiser's Starfall commitment: public; for --backup)
   deploy       --network <${NETWORKS.join('|')}> --organiser <file> --backup <file> --oracle <file> --settlement <file> --wallet <file> [--accept]
                [--operator <address>] [--price <STAR>] [--fee <STAR>] [--min-sales <s>] [--max-sales <s>] [--reveal <s>] [--draw <s>] [--settle <s>]
   accept-key   --network <network> --oracle <file> --wallet <file>
@@ -70,14 +71,41 @@ instead (for test networks).
 
 The settlement key (keygen settlement) decrypts every ticket so the keeper can settle the draw:
 keep its file private, like the organiser's. Its public half goes into the contract at deploy.
---backup takes the backup organiser's file or just its commitment (64 hex characters, as in a deployment
-record), so its secret can stay offline. --operator is where the 0.2 tNIGHT fee per game goes (default:
+--backup takes the backup organiser's secret file, or its Starfall commitment (64 hex characters, from
+\`./lunardraw starfall commitment --organiser <file>\` run where the backup's secret is), so its secret can
+stay offline. Starfall's commitments differ from v0's: a v0 deployment record's backupCommitment won't do. --operator is where the 0.2 tNIGHT fee per game goes (default:
 the deploying wallet).
 The keeper works out each draw's seed from the organiser secret, so there is no seeds file.
 buy picks random games (QuickPick) for the draw on sale, paid to --pay-to (default: your wallet),
 with refunds to your wallet if the draw is cancelled; it sends up to 2 games per transaction.`;
 
 const SETTLEMENT = 'settlement';
+
+/**
+ * Starfall's organiser commitment for a secret. Not v0's: the two contracts
+ * hash the secret with different domain tags ("starfall:organiser:v1" vs
+ * v0's), so the same secret gives different commitments. (The first Starfall
+ * deploy on Preprod used v0's by mistake, and its organiser couldn't open a
+ * draw.)
+ */
+export const starfallOrganiserCommitment = (secret: Uint8Array): Uint8Array => Starfall.pureCircuits.organiserCommitmentOf(secret);
+
+/**
+ * The backup organiser's Starfall commitment: from its file (which must hold
+ * the secret: a public commitment in an organiser file is v0's), or given as
+ * 64 hex characters as printed by `./lunardraw starfall commitment`.
+ */
+const backupCommitmentFrom = (value: string): Uint8Array => {
+  if (/^[0-9a-fA-F]{64}$/.test(value)) return fromHex(value);
+  const f = readKeyFile(value, 'organiser');
+  if (!f.secret) {
+    throw new Error(
+      `${value} holds only a public commitment, which is v0's. On the machine with the backup's secret file, run ` +
+        '`./lunardraw starfall commitment --organiser <backup file>` and give the 64 characters it prints as --backup.',
+    );
+  }
+  return starfallOrganiserCommitment(fromHex(f.secret));
+};
 
 /** The settlement key file: the secret scalar (decimal) and its public point. */
 const settlementFrom = (path: string, needSecret: boolean): { pk: { x: bigint; y: bigint }; sk?: bigint } => {
@@ -89,6 +117,17 @@ const settlementFrom = (path: string, needSecret: boolean): { pk: { x: bigint; y
   if (needSecret) throw new Error(`${path} has no secret`);
   const pub = f.public as { x: string; y: string };
   return { pk: { x: BigInt(pub.x), y: BigInt(pub.y) } };
+};
+
+/** Whether this organiser secret is the one the contract accepts (what `requestDraw` checks). */
+export const organiserCheck = (l: Starfall.Ledger, secret: Uint8Array): Check => {
+  const mine = hex(starfallOrganiserCommitment(secret));
+  const ok = hex(l.organiser) === mine;
+  return {
+    name: 'the organiser secret can open draws',
+    ok,
+    detail: ok ? 'its Starfall commitment is the contract\'s organiser' : `the contract's organiser is ${hex(l.organiser)}, this secret's Starfall commitment is ${mine}`,
+  };
 };
 
 /** A 32-byte unshielded address from `mn_addr...` or 64 hex characters. */
@@ -185,6 +224,13 @@ export const starfall = async (argv: string[]): Promise<number> => {
       return 0;
     }
 
+    case 'commitment': {
+      if (!values.organiser) throw new Error('usage: ./lunardraw starfall commitment --organiser <file>');
+      const c = hex(starfallOrganiserCommitment(organiserSecretFrom(values.organiser)));
+      process.stdout.write(`Starfall organiser commitment (public): ${c}\n`);
+      return 0;
+    }
+
     case 'fingerprints': {
       const dir = starfallZkConfigPath();
       process.stdout.write(JSON.stringify({ compiler: compilerInfo(dir), verifierKeys: localFingerprints(dir) }, null, 2) + '\n');
@@ -196,9 +242,9 @@ export const starfall = async (argv: string[]): Promise<number> => {
       if (!values.organiser || !values.backup || !values.oracle || !values.settlement) throw new Error(STARFALL_USAGE);
       const oracle = oracleKeyFrom(values.oracle, values.accept);
       const num = (v: string | undefined, d: bigint) => (v === undefined ? d : BigInt(v));
-      const organiserCommitment = organiserCommitmentOf(organiserSecretFrom(values.organiser));
-      // The backup's file (secret or public commitment only), or its commitment itself (64 hex characters).
-      const backupCommitment = /^[0-9a-fA-F]{64}$/.test(values.backup) ? fromHex(values.backup) : organiserCommitmentFrom(values.backup);
+      const organiserSecret = organiserSecretFrom(values.organiser);
+      const organiserCommitment = starfallOrganiserCommitment(organiserSecret);
+      const backupCommitment = backupCommitmentFrom(values.backup);
       if (hex(organiserCommitment) === hex(backupCommitment)) throw new Error('--backup must be a different organiser from --organiser');
       const settlement = settlementFrom(values.settlement, false);
       const dir = starfallZkConfigPath();
@@ -242,7 +288,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
           });
           process.stdout.write(`\nDeployment record written to ${path}\n`);
           const state = await providers.publicDataProvider.queryContractState(deployed.contractAddress);
-          const checks = verifyStarfall(readStarfallRecord(network), state, fingerprints);
+          const checks = [...verifyStarfall(readStarfallRecord(network), state, fingerprints), organiserCheck(Starfall.ledger(state!.data), organiserSecret)];
           process.stdout.write(`${formatChecks(checks)}\n`);
           if (!acceptTx) process.stdout.write(`\nNext, the oracle activates its key: ./lunardraw starfall accept-key --network ${network} --oracle <file> --wallet <file>\n`);
           return checks.every((c) => c.ok || c.name === 'oracle key accepted') ? 0 : 1;
@@ -276,7 +322,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
       const organiserSecret = organiserSecretFrom(values.organiser);
       const settlement = settlementFrom(values.settlement, true);
       const record = readStarfallRecord(network);
-      if (hex(organiserCommitmentOf(organiserSecret)) !== record.parameters.organiserCommitment) {
+      if (hex(starfallOrganiserCommitment(organiserSecret)) !== record.parameters.organiserCommitment) {
         throw new Error(`${values.organiser} is not this deployment's organiser`);
       }
       if (settlement.pk.x.toString() !== record.parameters.settlementKey.x || settlement.pk.y.toString() !== record.parameters.settlementKey.y) {
@@ -288,6 +334,9 @@ export const starfall = async (argv: string[]): Promise<number> => {
         const wallet = await openWallet(session, { seed: walletSeed(values.wallet) });
         try {
           const providers = starfallProviders(session, wallet);
+          // The contract is the judge: its stored organiser must be this secret's Starfall commitment.
+          const opens = organiserCheck(await readStarfallLedger(providers.publicDataProvider, record.contractAddress), organiserSecret);
+          if (!opens.ok) throw new Error(`${values.organiser} can't run this deployment: ${opens.detail}`);
           const base = { organiserSecret };
           const joined = await joinStarfall(providers, record.contractAddress, base);
           const lead = values['prove-lead'] === undefined ? undefined : Number(values['prove-lead']);

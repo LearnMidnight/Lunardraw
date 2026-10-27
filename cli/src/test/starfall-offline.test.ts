@@ -5,7 +5,8 @@ import { DerivedSeeds, every, StarfallKeeper } from '@lunardraw/keeper';
 import { generateOperatorSecret, generateOracleSecretKey, oraclePublicKey } from '@nightcast/contract';
 import { onChainFingerprints } from '@nightcast/deploy';
 import { MidnightBech32m, UnshieldedAddress } from '@midnight-ntwrk/wallet-sdk-address-format';
-import { parseUserAddress } from '../starfall-commands.js';
+import { pureCircuits as v0 } from '@lunardraw/contract';
+import { organiserCheck, parseUserAddress, starfallOrganiserCommitment } from '../starfall-commands.js';
 import {
   MidnightStarfallChain,
   STARFALL_PRIVATE_STATE_ID,
@@ -193,5 +194,17 @@ describe('parseUserAddress', () => {
     expect(hex(parseUserAddress(bech))).toBe(hex(bytes));
     expect(hex(parseUserAddress(hex(bytes)))).toBe(hex(bytes));
     expect(() => parseUserAddress('nonsense')).toThrow(/not an address/);
+  });
+});
+
+describe("Starfall's organiser commitment", () => {
+  it("is Starfall's, not v0's, and the contract accepts it", () => {
+    const { sim, organiserSecret } = setup();
+    // The same secret gives different commitments in the two contracts (different domain tags).
+    expect(hex(starfallOrganiserCommitment(organiserSecret))).not.toBe(hex(v0.organiserCommitmentOf(organiserSecret)));
+    expect(organiserCheck(sim.getLedger(), organiserSecret).ok).toBe(true);
+    const other = organiserCheck(sim.getLedger(), generateOperatorSecret());
+    expect(other.ok).toBe(false);
+    expect(other.detail).toMatch(/the contract's organiser is/);
   });
 });

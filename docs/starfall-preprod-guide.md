@@ -54,12 +54,24 @@ It prints an address starting `mn_addr_preprod1...`. Paste it into the Preprod f
 
 ## Part 5: Deploy
 
-The backup organiser is the same one as v0's. Its secret stays on your USB stick; the deploy only needs its public commitment, which is in the v0 record (`deployments/preprod.json`, `backupCommitment`):
+The backup organiser is the same one as v0's. Its secret stays on your PC and USB stick; the deploy only needs its **Starfall** commitment, a public code worked out from the secret. (Starfall's codes differ from v0's on purpose, so the `backupCommitment` in v0's record won't do.) On the PC, in Ubuntu:
+
+```bash
+cd ~/Lunardraw
+git pull
+git submodule update --init
+npm install
+npm run compact
+npm run build
+./lunardraw starfall commitment --organiser ~/lunardraw-secrets/backup.secret
+```
+
+It prints `Starfall organiser commitment (public): ...` and 64 characters. Copy them (they're public) and use them as `--backup` below, on the server:
 
 ```bash
 ./lunardraw starfall deploy --network preprod \
   --organiser ~/lunardraw-secrets/organiser.secret \
-  --backup 0f029a783b81e36fe5c1a31611a77b9f4a1243d7cdbc51fabd54f1f54c59ad06 \
+  --backup <the 64 characters from the PC> \
   --oracle ~/lunardraw-secrets/oracle.secret \
   --settlement ~/lunardraw-secrets/settlement.secret \
   --wallet ~/nightcast-secrets/requester-wallet.secret \
@@ -75,7 +87,7 @@ The test timings, in seconds:
 
 The price (1.2 tNIGHT) and fee (0.2 tNIGHT) are the defaults. The fee goes to the deploying wallet unless you add `--operator <address>`.
 
-It ends with a checklist that should be all **PASS**, and writes `deployments/starfall-preprod.json`. Send me the output (it's all public).
+It ends with a checklist that should be all **PASS**, including `the organiser secret can open draws`, and writes `deployments/starfall-preprod.json`. Send me the output (it's all public).
 
 ## Part 6: Run it
 
