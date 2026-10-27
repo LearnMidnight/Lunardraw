@@ -121,7 +121,7 @@ describe('the Starfall keeper', () => {
     expect(draw(sim, 1n).status).toBe(DrawStatus.drawn);
     // One batch a pass, in order, until every ticket is settled.
     expect((await keeper.tick()).done).toEqual(['settle 1 from 0']);
-    expect((await keeper.tick()).done).toEqual(['settle 1 from 25']);
+    expect((await keeper.tick()).done).toEqual([`settle 1 from ${Starfall.pureCircuits.batchSize()}`]);
     expect(sim.getLedger().progress.lookup(1n).next).toBe(30n);
     expect((await keeper.tick()).done).toEqual(['finalise 1']);
     const settled = draw(sim, 1n);
@@ -283,7 +283,7 @@ describe('the standby keeper', () => {
     // The primary stops here.
     expect((await standby.tick()).done).toEqual([]);
     sim.advance(301);
-    expect((await standby.tick()).done).toEqual(['settle 1 from 25']);
+    expect((await standby.tick()).done).toEqual([`settle 1 from ${Starfall.pureCircuits.batchSize()}`]);
     // Having stepped in, it keeps going without waiting again.
     expect((await standby.tick()).done).toEqual(['finalise 1']);
     expect(draw(sim, 1n).status).toBe(DrawStatus.settled);

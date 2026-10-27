@@ -114,7 +114,7 @@ describe('MidnightStarfallChain', () => {
     sim.fulfilDraw(1n);
     expect((await keeper.tick()).done).toEqual(['compute 1']);
     expect((await keeper.tick()).done).toEqual(['settle 1 from 0']);
-    expect((await keeper.tick()).done).toEqual(['settle 1 from 25']);
+    expect((await keeper.tick()).done).toEqual([`settle 1 from ${Starfall.pureCircuits.batchSize()}`]);
     expect((await keeper.tick()).done).toEqual(['finalise 1']);
     expect(sim.getLedger().draws.lookup(1n).status).toBe(Starfall.DrawStatus.settled);
     // Each batch saw every ticket of the draw, beside the organiser secret ...
