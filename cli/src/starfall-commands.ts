@@ -11,7 +11,8 @@ import { encodeContractAddress } from '@midnight-ntwrk/compact-runtime';
 import { MidnightBech32m } from '@midnight-ntwrk/wallet-sdk-address-format';
 import { quickPick, Starfall } from '@lunardraw/contract';
 import { buildStarfallFeed, DerivedSeeds, DrawOracle, every, STARFALL_WEEKLY, StarfallKeeper, type StarfallView, writeFeed } from '@lunardraw/keeper';
-import { compilerInfo, localFingerprints, NETWORKS, openWallet, walletAddress, walletBalances } from '@nightcast/deploy';
+import { compilerInfo, localFingerprints, NETWORKS, walletAddress, walletBalances } from '@nightcast/deploy';
+import { openWallet } from './wallet-lock.js';
 import {
   fromHex,
   hex,
@@ -49,7 +50,7 @@ import {
   verifyStarfall,
   writeStarfallRecord,
 } from './starfall.js';
-import { watchSync } from './sync-watch.js';
+import { caughtUp, watchSync } from './sync-watch.js';
 
 export const STARFALL_USAGE = `usage: ./lunardraw starfall <command>
   keygen settlement --out <file>
@@ -518,6 +519,17 @@ export const starfall = async (argv: string[]): Promise<number> => {
             await buyGames(joined, providers.privateStateProvider, record.contractAddress, tickets, mine, {
               onEach: (done, of) => session.logger.info(`bought ${done} of ${of} ticket(s)`),
               stopAt: Number(selling.salesClose) - 60,
+              catchUp: () => caughtUp(wallet.wallet.state()),
+              onRetry: (done, of) =>
+                session.logger.warn(
+                  `The node refused purchase ${done / Number(Starfall.pureCircuits.maxTickets()) + 1} (Custom error 170: the wallet's coins were out of date). ` +
+                    `Waiting for the wallet to catch up, then trying it once more (${done} of ${of} bought so far)...`,
+                ),
+              onChain: async (part) => {
+                const ledger = await readStarfallLedger(providers.publicDataProvider, record.contractAddress);
+                const deployment = { bytes: encodeContractAddress(record.contractAddress) };
+                return part.map((g) => ledger.ticketCommitments.member(Starfall.pureCircuits.ticketCommitment(deployment, g)));
+              },
             });
           } catch (err) {
             if (!(err instanceof BuyStopped)) throw err;

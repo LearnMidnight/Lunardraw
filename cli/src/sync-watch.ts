@@ -95,3 +95,31 @@ export const watchSync = (
     },
   };
 };
+
+/**
+ * Resolves once the wallet has applied new chain events and says it's synced:
+ * after a refusal for stale coins (Custom error 170), proof that it's
+ * following the chain again. Rejects if that doesn't happen within `ms` (the
+ * subscription has probably died; a restart fixes it).
+ */
+export const caughtUp = (states: Subscribable, ms = 180_000): Promise<void> =>
+  new Promise((resolve, reject) => {
+    let first: string | undefined;
+    let sub: { unsubscribe(): void } | undefined;
+    let done = false;
+    const finish = (err?: Error) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      // subscribe() may call back before it returns.
+      queueMicrotask(() => sub?.unsubscribe());
+      if (err) reject(err);
+      else resolve();
+    };
+    const timer = setTimeout(() => finish(new Error(`the wallet didn't catch up with the chain within ${Math.round(ms / 60_000)} minutes`)), ms);
+    sub = states.subscribe((state) => {
+      const p = positionsOf(state);
+      if (first === undefined) first = p;
+      else if (p !== first && (state as StateLike).isSynced) finish();
+    });
+  });
