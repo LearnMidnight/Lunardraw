@@ -226,6 +226,14 @@ export type BuyOptions = {
    * chain's, not the wallet's.
    */
   onChain?: (games: readonly TicketPreimage[]) => Promise<boolean[]>;
+  /**
+   * Wait for the wallet to catch up with the chain. With this (and onChain),
+   * a purchase the node refuses as stale (Custom error 170) and the chain
+   * confirms didn't go in is tried once more.
+   */
+  catchUp?: () => Promise<void>;
+  /** Called before that second try, with the games bought so far. */
+  onRetry?: (done: number, of: number) => void;
 };
 
 /**
@@ -245,45 +253,89 @@ export const buyGames = async (
   const o: BuyOptions = typeof opts === 'function' ? { onEach: opts } : opts;
   const timeoutMs = o.timeoutMs ?? 5 * 60_000;
   const max = Number(Starfall.pureCircuits.maxGames());
-  let txs = 0;
-  for (let i = 0; i < games.length; i += max) {
+  const closing = (i: number) => {
     if (o.stopAt !== undefined && Date.now() / 1000 >= o.stopAt) {
       throw new BuyStopped(i, games.length, 'sales close in under a minute, so no more purchases were sent');
     }
+  };
+  let txs = 0;
+  for (let i = 0; i < games.length; i += max) {
     const part = games.slice(i, i + max);
-    privateState.setContractAddress(contractAddress);
-    await privateState.set(STARFALL_PRIVATE_STATE_ID, { pendingTickets: part });
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timedOut = new Promise<never>((_, reject) => {
-      timer = setTimeout(
-        () => reject(new Error(`a purchase didn't land within ${Math.round(timeoutMs / 60_000)} minutes (the wallet's connection may have dropped)`)),
-        timeoutMs,
-      );
-    });
-    try {
-      await Promise.race([contract.callTx.buyTickets(BigInt(part.length), { bytes: refundTo }), timedOut]);
-    } catch (err) {
-      clearTimeout(timer);
-      const reason = err instanceof Error ? err.message : String(err);
-      if (!o.onChain) throw new BuyStopped(i, games.length, reason);
-      let landed: boolean[];
+    for (let attempt = 1; ; attempt++) {
+      closing(i);
+      privateState.setContractAddress(contractAddress);
+      await privateState.set(STARFALL_PRIVATE_STATE_ID, { pendingTickets: part });
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timedOut = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`a purchase didn't land within ${Math.round(timeoutMs / 60_000)} minutes (the wallet's connection may have dropped)`)),
+          timeoutMs,
+        );
+      });
       try {
-        landed = await o.onChain(part);
-      } catch {
-        throw new BuyStopped(i, games.length, `${reason} (and the chain couldn't be checked, so look with status)`);
+        await Promise.race([contract.callTx.buyTickets(BigInt(part.length), { bytes: refundTo }), timedOut]);
+        break;
+      } catch (err) {
+        clearTimeout(timer);
+        const reason = err instanceof Error ? err.message : String(err);
+        if (!o.onChain) throw new BuyStopped(i, games.length, reason);
+        let landed: boolean[];
+        try {
+          landed = await o.onChain(part);
+        } catch {
+          throw new BuyStopped(i, games.length, `${reason} (and the chain couldn't be checked, so look with status)`);
+        }
+        if (landed.every(Boolean)) {
+          // It went in; the wallet just lost track. Carrying on with a wallet
+          // in that state risks more of the same, so stop here.
+          throw new BuyStopped(i + part.length, games.length, `${reason}, but the chain shows that purchase did go in (the wallet lost track of it)`);
+        }
+        // Refused because the wallet's view of its coins was behind the
+        // chain: let it catch up, then try the same games once more.
+        if (attempt === 1 && o.catchUp && isStaleWallet(err)) {
+          o.onRetry?.(i, games.length);
+          try {
+            await o.catchUp();
+          } catch (e) {
+            throw new BuyStopped(
+              i,
+              games.length,
+              `the node refused a purchase (Custom error 170: the wallet's coins were out of date) and ${e instanceof Error ? e.message : String(e)}; ` +
+                'a fresh start resyncs it',
+            );
+          }
+          continue;
+        }
+        throw new BuyStopped(i, games.length, `${shortReason(err, reason)}; the chain confirms that purchase didn't go in`);
+      } finally {
+        clearTimeout(timer);
       }
-      if (landed.every(Boolean)) {
-        throw new BuyStopped(i + part.length, games.length, `${reason}, but the chain shows that purchase did go in (the wallet lost track of it)`);
-      }
-      throw new BuyStopped(i, games.length, `${reason}; the chain confirms that purchase didn't go in`);
-    } finally {
-      clearTimeout(timer);
     }
     txs += 1;
     o.onEach?.(i + part.length, games.length);
   }
   return txs;
 };
+
+/** Every message in an error and its causes. */
+const messagesOf = (err: unknown): string[] => {
+  const out: string[] = [];
+  for (let e = err, depth = 0; e !== undefined && e !== null && depth < 8; depth++) {
+    out.push(e instanceof Error ? e.message : String(e));
+    e = (e as { cause?: unknown }).cause;
+  }
+  return out;
+};
+
+/**
+ * Node error 1010 custom 170: the transaction spends a coin the chain says
+ * is already spent, which means the wallet's view of its coins was behind
+ * (the keeper and oracle restart on it; a purchase retries once).
+ */
+export const isStaleWallet = (err: unknown): boolean => messagesOf(err).some((m) => /Custom error: 170\b/.test(m));
+
+const shortReason = (err: unknown, reason: string): string =>
+  isStaleWallet(err) ? "the node refused the purchase twice (Custom error 170: the wallet's coins were out of date)" : reason;
 
 // ------------------------------------------------------------------ deploy
 

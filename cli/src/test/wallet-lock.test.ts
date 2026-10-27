@@ -46,3 +46,23 @@ describe('one program per wallet', () => {
     lockWallet('preprod', SEED)();
   });
 });
+
+describe('caughtUp', () => {
+  it('waits for new events and a synced wallet, and gives up after a while', async () => {
+    const { Subject } = await import('rxjs');
+    const { caughtUp } = await import('../sync-watch.js');
+    const states = new Subject<unknown>();
+    const at = (dust: number, isSynced = true) => ({ isSynced, dust: { state: { progress: { appliedIndex: BigInt(dust) } } } });
+    let resolved = false;
+    const p = caughtUp(states, 1_000).then(() => (resolved = true));
+    states.next(at(5));
+    states.next(at(5));
+    states.next(at(6, false));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(resolved).toBe(false);
+    states.next(at(7));
+    await p;
+    expect(resolved).toBe(true);
+    await expect(caughtUp(new Subject<unknown>(), 20)).rejects.toThrow(/didn't catch up/);
+  });
+});

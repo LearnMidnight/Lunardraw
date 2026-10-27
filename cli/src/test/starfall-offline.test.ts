@@ -260,6 +260,43 @@ describe('buyGames', () => {
     expect((unknown as BuyStopped).message).toMatch(/couldn't be checked/);
   });
 
+  it('tries a purchase refused for stale coins once more after the wallet catches up', async () => {
+    const stale = () => Object.assign(new Error('Transaction submission error'), { cause: new Error('1010: Invalid Transaction: Custom error: 170') });
+    const notOnChain = async (p: readonly unknown[]) => p.map(() => false);
+    // Refused once, then fine: all bought, with one catch-up.
+    let n = 0;
+    let caught = 0;
+    const once = calls(() => (++n === 2 ? Promise.reject(stale()) : Promise.resolve()));
+    const retries: number[] = [];
+    expect(
+      await buyGames(once, store, 'addr', games, OPERATOR, { onChain: notOnChain, catchUp: async () => void caught++, onRetry: (d) => retries.push(d) }),
+    ).toBe(3);
+    expect(caught).toBe(1);
+    expect(retries).toEqual([2]);
+    // Refused twice: stops, saying so.
+    n = 0;
+    const twice = calls(() => (++n >= 2 ? Promise.reject(stale()) : Promise.resolve()));
+    const err = await buyGames(twice, store, 'addr', games, OPERATOR, { onChain: notOnChain, catchUp: async () => {} }).catch((e: unknown) => e);
+    expect((err as BuyStopped).bought).toBe(2);
+    expect((err as BuyStopped).message).toMatch(/refused the purchase twice .*didn't go in/);
+    // The wallet doesn't catch up: stops.
+    n = 0;
+    const stuck = await buyGames(once, store, 'addr', games, OPERATOR, {
+      onChain: notOnChain,
+      catchUp: async () => {
+        throw new Error("the wallet didn't catch up with the chain within 3 minutes");
+      },
+    }).catch((e: unknown) => e);
+    expect((stuck as BuyStopped).bought).toBe(2);
+    expect((stuck as BuyStopped).message).toMatch(/didn't catch up.*fresh start/);
+    // Other errors aren't retried.
+    n = 0;
+    const other = calls(() => (++n === 2 ? Promise.reject(new Error('sales have closed')) : Promise.resolve()));
+    const no = await buyGames(other, store, 'addr', games, OPERATOR, { onChain: notOnChain, catchUp: async () => void caught++ }).catch((e: unknown) => e);
+    expect((no as BuyStopped).message).toMatch(/^sales have closed/);
+    expect(caught).toBe(1);
+  });
+
   it("finds bought games on the chain by their ticket commitments", () => {
     const { sim } = setup();
     sim.openDraw(BigInt(sim.now + 3_600), new Uint8Array(32).fill(1));
