@@ -246,7 +246,7 @@ describe('System, Pick and Moonball Sweep entries', () => {
   // "Timeout calling onTaskUpdate" even though every test passes.
   it.each(ENTRY_TYPES.map((t) => [t.name, t] as const))(
     "%s: the contract's table agrees with listing every game, for every hit count and Moonball",
-    async (_name, t) => {
+    async (_name: string, t: (typeof ENTRY_TYPES)[number]) => {
       const draw = { numbers: [3, 8, 12, 19, 24, 30, 35], moonball: 11 };
       for (let h = 0; h <= Math.min(t.count, 7); h++) {
         for (const sweep of [false, true]) {
