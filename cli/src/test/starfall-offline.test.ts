@@ -238,4 +238,38 @@ describe('buyGames', () => {
     expect((err as BuyStopped).message).toBe('sales have closed');
     expect(await buyGames(ok, store, 'addr', games, OPERATOR)).toBe(3);
   });
+
+  it("counts a purchase the wallet lost track of if the chain has it, and not if it doesn't", async () => {
+    let n = 0;
+    const hangs = calls(() => (++n === 2 ? new Promise(() => {}) : Promise.resolve()));
+    const went = await buyGames(hangs, store, 'addr', games, OPERATOR, { timeoutMs: 50, onChain: async (p) => p.map(() => true) }).catch((e: unknown) => e);
+    expect((went as BuyStopped).bought).toBe(4);
+    expect((went as BuyStopped).message).toMatch(/did go in/);
+    n = 0;
+    const lost = await buyGames(hangs, store, 'addr', games, OPERATOR, { timeoutMs: 50, onChain: async (p) => p.map(() => false) }).catch((e: unknown) => e);
+    expect((lost as BuyStopped).bought).toBe(2);
+    expect((lost as BuyStopped).message).toMatch(/didn't go in/);
+    n = 0;
+    const unknown = await buyGames(hangs, store, 'addr', games, OPERATOR, {
+      timeoutMs: 50,
+      onChain: async () => {
+        throw new Error('indexer down');
+      },
+    }).catch((e: unknown) => e);
+    expect((unknown as BuyStopped).bought).toBe(2);
+    expect((unknown as BuyStopped).message).toMatch(/couldn't be checked/);
+  });
+
+  it("finds bought games on the chain by their ticket commitments", () => {
+    const { sim } = setup();
+    sim.openDraw(BigInt(sim.now + 3_600), new Uint8Array(32).fill(1));
+    const me = webcrypto.getRandomValues(new Uint8Array(32));
+    const bought = [Starfall.makeTicket(1n, quickPick(), me), Starfall.makeTicket(1n, quickPick(), me)];
+    const notBought = Starfall.makeTicket(1n, quickPick(), me);
+    sim.buyTickets(bought, me);
+    const deployment = { bytes: sim.addressBytes };
+    const on = (g: (typeof bought)[number]) => sim.getLedger().ticketCommitments.member(Starfall.pureCircuits.ticketCommitment(deployment, g));
+    expect(bought.map(on)).toEqual([true, true]);
+    expect(on(notBought)).toBe(false);
+  });
 });

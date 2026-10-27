@@ -219,6 +219,13 @@ export type BuyOptions = {
   timeoutMs?: number;
   /** Don't start a transaction after this time (seconds): sales close soon. */
   stopAt?: number;
+  /**
+   * Which of these games are on the chain (by their ticket commitments). When
+   * a transaction fails or times out, the wallet may just have lost track of
+   * it: this says whether it really went in, so the count reported is the
+   * chain's, not the wallet's.
+   */
+  onChain?: (games: readonly TicketPreimage[]) => Promise<boolean[]>;
 };
 
 /**
@@ -256,7 +263,19 @@ export const buyGames = async (
     try {
       await Promise.race([contract.callTx.buyTickets(BigInt(part.length), { bytes: refundTo }), timedOut]);
     } catch (err) {
-      throw new BuyStopped(i, games.length, err instanceof Error ? err.message : String(err));
+      clearTimeout(timer);
+      const reason = err instanceof Error ? err.message : String(err);
+      if (!o.onChain) throw new BuyStopped(i, games.length, reason);
+      let landed: boolean[];
+      try {
+        landed = await o.onChain(part);
+      } catch {
+        throw new BuyStopped(i, games.length, `${reason} (and the chain couldn't be checked, so look with status)`);
+      }
+      if (landed.every(Boolean)) {
+        throw new BuyStopped(i + part.length, games.length, `${reason}, but the chain shows that purchase did go in (the wallet lost track of it)`);
+      }
+      throw new BuyStopped(i, games.length, `${reason}; the chain confirms that purchase didn't go in`);
     } finally {
       clearTimeout(timer);
     }

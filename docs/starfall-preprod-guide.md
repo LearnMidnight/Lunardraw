@@ -153,4 +153,6 @@ A draw that misses a deadline is voided, then `refund ticket i of void draw N` f
 | `... is not this deployment's settlement key` | The keeper was given a different settlement file from the deploy's. |
 | `no draw is on sale right now` (buy) | Sales close on the hour; wait for the next draw to open. |
 | `N game(s) cost ... but the wallet holds ...` | Faucet more tNIGHT, or buy fewer. |
+| `this wallet is already open in another program` | Another `buy` (or keeper) is using that wallet: two at once fight over the same coins and one gets stuck. Let the other finish, or stop it. Buy from one window at a time. |
+| `Stopped after N of M game(s)` | `buy` checks the chain before saying this, so N is what really went in. Run buy again with `--games` for the rest. |
 | Anything with `Custom error: 170` | Stale wallet sync: the watchdog restarts the service after 3 minutes. |
