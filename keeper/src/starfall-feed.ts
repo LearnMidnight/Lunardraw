@@ -13,13 +13,15 @@ const { DrawStatus } = Starfall;
 
 export type StarfallFeedDraw = Omit<FeedDraw, 'status' | 'claim_deadline'> & {
   status: FeedDraw['status'] | 'settling';
-  /** Settlement batches in all (ceil(games / 25)) and proven so far. */
+  /** Settlement batches in all (ceil(tickets / batch size, 22)) and proven so far. */
   batches?: number;
   batches_done?: number;
   /** After this the draw voids and refunds (numbers, then settlement). */
   settle_deadline?: string;
   /** Void draws: games refunded so far. */
   refunded?: number;
+  /** Tickets sold: entries, each a standard game, a System or a Pick (games_sold counts their games). */
+  tickets?: number;
 };
 
 export type StarfallFeed = {
@@ -34,7 +36,7 @@ export type StarfallFeed = {
       fee_star: number;
       allocation_bp: number[];
       carry_star: number;
-      open?: { num: number; sales_close: string; seed_commitment: string; games_sold: number };
+      open?: { num: number; sales_close: string; seed_commitment: string; games_sold: number; tickets: number };
       draws: StarfallFeedDraw[];
     };
   };
@@ -82,7 +84,8 @@ export const buildStarfallFeed = (
       status: starfallFeedStatus(d, opts.nowSecs),
       sales_close: iso(d.salesClose),
       seed_commitment: hex(d.seedCommitment),
-      games_sold: Number(d.tickets),
+      games_sold: Number(d.games),
+      tickets: Number(d.tickets),
       reveal_deadline: iso(d.revealDeadline),
       draw_deadline: iso(d.drawDeadline),
     };
@@ -103,7 +106,7 @@ export const buildStarfallFeed = (
       out.prizes_star = d.prizes.map(star);
       out.carry_out_star = star(carryOut.get(d.id) ?? 0n);
     }
-    if (d.status === DrawStatus.voided) out.refunded = Number(d.tickets) - d.unrefunded.length;
+    if (d.status === DrawStatus.voided) out.refunded = Number(d.refundedGames);
     return out;
   };
 
@@ -123,7 +126,13 @@ export const buildStarfallFeed = (
         allocation_bp: [...Starfall.POWERBALL_SHARES_BP],
         carry_star: star(view.carry),
         open: selling
-          ? { num: Number(selling.id), sales_close: iso(selling.salesClose), seed_commitment: hex(selling.seedCommitment), games_sold: Number(selling.tickets) }
+          ? {
+              num: Number(selling.id),
+              sales_close: iso(selling.salesClose),
+              seed_commitment: hex(selling.seedCommitment),
+              games_sold: Number(selling.games),
+              tickets: Number(selling.tickets),
+            }
           : undefined,
         draws: draws.filter((d) => d !== selling).map(toFeed),
       },

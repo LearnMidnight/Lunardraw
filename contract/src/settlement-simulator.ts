@@ -281,14 +281,14 @@ export class SettlementSimulator {
     return this.getLedger().lastDraw;
   }
 
-  /** Buy one game, with refunds going to `refundTo`; returns its commitment. */
+  /** Buy one ticket (one entry), with refunds going to `refundTo`; returns its commitment. */
   buyTicket(t: TicketPreimage, refundTo: Uint8Array): Uint8Array {
     this.buyTickets([t], refundTo);
     return this.commitmentOf(t);
   }
 
   /**
-   * Buy 1 to `maxGames()` games in one transaction, refundable to
+   * Buy 1 to `maxTickets()` tickets in one transaction, refundable to
    * `refundTo`; returns the index of the first. `buyPackage` handles bigger
    * packages.
    */
@@ -298,9 +298,9 @@ export class SettlementSimulator {
     );
   }
 
-  /** Buy any number of games, `maxGames()` per transaction; returns the number of transactions. */
+  /** Buy any number of tickets, `maxTickets()` per transaction; returns the number of transactions. */
   buyPackage(ts: readonly TicketPreimage[], refundTo: Uint8Array): number {
-    const max = Number(pureCircuits.maxGames());
+    const max = Number(pureCircuits.maxTickets());
     let txs = 0;
     for (let i = 0; i < ts.length; i += max) {
       this.buyTickets(ts.slice(i, i + max), refundTo);

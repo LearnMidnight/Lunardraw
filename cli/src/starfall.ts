@@ -198,7 +198,7 @@ export class MidnightStarfallChain implements StarfallChain, DrawOracleChain {
   }
 }
 
-/** A purchase run that stopped before buying everything: how many games were bought, and why it stopped. */
+/** A purchase run that stopped before buying everything: how many tickets were bought, and why it stopped. */
 export class BuyStopped extends Error {
   constructor(
     readonly bought: number,
@@ -210,7 +210,7 @@ export class BuyStopped extends Error {
 }
 
 export type BuyOptions = {
-  /** Called after each transaction with the games bought so far. */
+  /** Called after each transaction with the tickets bought so far. */
   onEach?: (done: number, of: number) => void;
   /**
    * Give up on a transaction that hasn't landed after this long (ms). A
@@ -222,10 +222,12 @@ export type BuyOptions = {
 };
 
 /**
- * Buy games for an open draw, `maxGames()` per transaction, refundable to
- * `refundTo`. Returns the number of transactions. If one fails, times out or
- * sales are about to close, throws {@link BuyStopped} with the games bought
- * so far (those stay bought).
+ * Buy tickets for an open draw, `maxTickets()` per transaction, refundable to
+ * `refundTo`. A ticket is one entry: a standard game, a System or a Pick, with
+ * or without Moonball Sweep; each transaction pays for every game in it.
+ * Returns the number of transactions. If one fails, times out or sales are
+ * about to close, throws {@link BuyStopped} with the tickets bought so far
+ * (those stay bought).
  */
 export const buyGames = async (
   contract: StarfallCalls,
@@ -237,7 +239,7 @@ export const buyGames = async (
 ): Promise<number> => {
   const o: BuyOptions = typeof opts === 'function' ? { onEach: opts } : opts;
   const timeoutMs = o.timeoutMs ?? 5 * 60_000;
-  const max = Number(Starfall.pureCircuits.maxGames());
+  const max = Number(Starfall.pureCircuits.maxTickets());
   let txs = 0;
   for (let i = 0; i < games.length; i += max) {
     if (o.stopAt !== undefined && Date.now() / 1000 >= o.stopAt) {

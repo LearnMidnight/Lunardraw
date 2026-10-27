@@ -4,7 +4,7 @@
  *
  *   open draw ──▶ sales close ──▶ reveal its seed and open the next draw
  *   fulfilled ──▶ compute the numbers
- *   drawn     ──▶ decrypt the tickets, settle them 25 at a time, in order
+ *   drawn     ──▶ decrypt the tickets, settle them a batch (22) at a time, in order
  *             ──▶ finalise (prizes fixed, operator fee paid; draws in order)
  *   settled   ──▶ pay every winning ticket's entitlement
  *   a deadline missed ──▶ void the draw, then refund every ticket
@@ -50,20 +50,27 @@ export type StarfallDrawView = {
   output: Uint8Array;
   numbers: number[];
   moonball: number;
-  /** Tickets (games) sold, and how many are settled so far. */
+  /**
+   * Tickets sold, and how many are settled so far. A ticket is one entry: a
+   * standard game, a System or a Pick, settled as one, however many games.
+   */
   tickets: bigint;
   settled: bigint;
-  /** Winning tickets per division so far (division 1 first). */
+  /** Games sold (what sales, the fee and the prizes are counted in). */
+  games: bigint;
+  /** Winning games per division so far (division 1 first). */
   winners: bigint[];
-  /** Fixed when the draw is finalised: rollover added to the jackpot, the operator fee, each division's prize per ticket. */
+  /** Fixed when the draw is finalised: rollover added to the jackpot, the operator fee, each division's prize per game. */
   carried: bigint;
   fee: bigint;
   prizes: bigint[];
-  /** For a void draw: the indexes of tickets not refunded yet. */
+  /** For a void draw: the indexes of tickets not refunded yet, and the games refunded so far. */
   unrefunded: bigint[];
+  refundedGames: bigint;
 };
 
-export type EntitlementView = { id: Uint8Array; drawId: bigint; division: number; paid: boolean };
+/** A winning ticket's prize: its winning games per division (division 1 first). */
+export type EntitlementView = { id: Uint8Array; drawId: bigint; games: bigint[]; paid: boolean };
 
 export type StarfallView = {
   lastDraw: bigint;
@@ -107,10 +114,14 @@ export const starfallViewOf = (l: Starfall.Ledger): StarfallView => ({
     const tickets = l.ticketCount.member(id) ? l.ticketCount.lookup(id) : 0n;
     const p = l.progress.member(id) ? l.progress.lookup(id) : undefined;
     const unrefunded: bigint[] = [];
+    let refundedGames = 0n;
     if (d.status === DrawStatus.voided) {
       for (let i = 0n; i < tickets; i++) {
         const key = ticketKeyOf(id, i);
-        if (l.tickets.member(key) && !l.tickets.lookup(key).refunded) unrefunded.push(i);
+        if (!l.tickets.member(key)) continue;
+        const rec = l.tickets.lookup(key);
+        if (rec.refunded) refundedGames += rec.games;
+        else unrefunded.push(i);
       }
     }
     return {
@@ -128,14 +139,16 @@ export const starfallViewOf = (l: Starfall.Ledger): StarfallView => ({
       moonball: Number(d.moonball),
       tickets,
       settled: p?.next ?? 0n,
+      games: l.gamesSold.member(id) ? l.gamesSold.lookup(id) : 0n,
       winners: p ? [...p.winners] : Array.from({ length: 9 }, () => 0n),
       carried: d.carried,
       fee: d.fee,
       prizes: [...d.prizes],
       unrefunded,
+      refundedGames,
     };
   }).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)),
-  entitlements: Array.from(l.entitlements, ([id, e]) => ({ id, drawId: e.drawId, division: Number(e.division), paid: e.paid })),
+  entitlements: Array.from(l.entitlements, ([id, e]) => ({ id, drawId: e.drawId, games: [...e.games], paid: e.paid })),
 });
 
 /** A ticket as stored: its commitment and its encryption to the settlement key. */

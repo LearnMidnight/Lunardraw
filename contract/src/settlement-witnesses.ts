@@ -10,8 +10,9 @@ import { emptyTicket, randomScalar } from './settlement-tickets.js';
  * - The organiser sets `organiserSecret` (for `requestDraw`, `proposeOracleKey`
  *   and `changeOrganiser`); so do a proposed successor and the backup
  *   organiser, with their own secrets, for `changeOrganiser`.
- * - A player buying sets `pendingTickets` (1 to `maxGames()` games in one
- *   transaction); fresh sealing randomness is drawn for each.
+ * - A player buying sets `pendingTickets` (1 to `maxTickets()` tickets in one
+ *   transaction; each a standard game, a System or a Pick); fresh sealing
+ *   randomness is drawn for each.
  * - The settler sets `settling`: a draw's tickets, decrypted from the chain
  *   with the settlement secret, in index order (see `decryptDrawTickets`).
  * - Anyone else (finalising, paying, voiding, refunding) needs nothing.
@@ -42,15 +43,15 @@ export const settlementWitnesses = {
   newTickets({ privateState }: Ctx): [SettlementPrivateState, TicketPreimage[]] {
     const ts = privateState.pendingTickets;
     if (ts === undefined || ts.length === 0) throw new Error('Starfall: no tickets to buy in private state');
-    const max = Number(pureCircuits.maxGames());
-    if (ts.length > max) throw new Error(`Starfall: at most ${max} games per purchase`);
+    const max = Number(pureCircuits.maxTickets());
+    if (ts.length > max) throw new Error(`Starfall: at most ${max} tickets per purchase`);
     const out = [...ts];
     while (out.length < max) out.push(emptyTicket(ts[0].drawId));
     return [privateState, out];
   },
 
   sealingRandomnessFor({ privateState }: Ctx): [SettlementPrivateState, bigint[]] {
-    return [privateState, Array.from({ length: Number(pureCircuits.maxGames()) }, () => randomScalar())];
+    return [privateState, Array.from({ length: Number(pureCircuits.maxTickets()) }, () => randomScalar())];
   },
 
   settlementBatch({ privateState }: Ctx, drawId: bigint, first: bigint): [SettlementPrivateState, TicketPreimage[]] {
