@@ -118,7 +118,19 @@ Once the player wallet has synced and has tNIGHT, buy a package for the draw on 
 | mega | 25 | 13 |
 | maxi | 50 | 25 |
 
-Or `--games <n>` for any number. Each transaction is a proof of up to 2 games (about a minute and 1 GB of memory). The numbers are printed when it's done: winnings go to the player wallet by themselves.
+Or `--games <n>` for any number. Each transaction is a proof of up to 2 tickets (about a minute and 1 GB of memory). The numbers are printed when it's done: winnings go to the player wallet by themselves.
+
+System, Pick and Moonball Sweep entries are **one ticket each**, however many games they hold (a contract with entries, PR #41 and later):
+
+```bash
+# A System 9 (36 games, 43.2 tNIGHT), random numbers, or your own with --numbers "3 9 14 21 27 33 35 2 18"
+./lunardraw starfall buy --network preprod --wallet ~/lunardraw-secrets/player-wallet.secret --system 9 --proof-server-port 6300
+# A Pick 6 with your numbers (29 games), and with every Moonball (580 games, 696 tNIGHT)
+./lunardraw starfall buy ... --pick 6 --numbers "4 8 15 16 23 34" --moonball 7
+./lunardraw starfall buy ... --pick 6 --numbers "4 8 15 16 23 34" --sweep
+# Four PowerHit-style QuickPicks (20 games each)
+./lunardraw starfall buy ... --games 4 --sweep
+```
 
 Start with **starter** to see one purchase work and how long it takes. Then aim for about **100 games in one draw**: four batches of settlement, which is what this test is for. Buy them before the draw's sales close (the keeper log says when).
 
