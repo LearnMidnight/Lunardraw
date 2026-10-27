@@ -56,7 +56,30 @@ jobs:
 
       - name: Test the Lunardraw contract
         working-directory: contract
-        run: npx vitest run --reporter=default --reporter=github-actions --reporter=json --outputFile.json=../reports/contract.json
+        shell: bash
+        run: |
+          set -o pipefail
+          npx vitest run --reporter=default --reporter=github-actions --reporter=json --outputFile.json=../reports/contract.json 2>&1 | tee ../contract.log
+
+      # vitest can fail a run whose tests all pass (an error outside any test,
+      # a test file that didn't load); the log says which, so show it here.
+      - name: Contract test errors
+        if: failure()
+        shell: bash
+        run: |
+          [ -f contract.log ] || exit 0
+          sed 's/\x1b\[[0-9;]*m//g' contract.log | grep -v '^\s*$' | grep -iE -A6 'unhandled|error|fail|⎯|panic|abort|killed|heap|signal' | head -80 > contract-errors.txt || true
+          node -e '
+            const r = require(process.argv[1]);
+            console.log(`::notice title=contract suites::${r.numFailedTestSuites} failed suites, success=${r.success}`);
+            for (const t of r.testResults) if (t.status !== "passed") console.log(`::error title=suite ${t.name.split("/").pop()}::${(t.message || t.status).slice(0, 900).replace(/\n/g, "%0A")}`);
+          ' "$PWD/reports/contract.json" || true
+          n=0
+          while [ $n -lt 5 ]; do
+            chunk=$(sed -n "$((n*16+1)),$((n*16+16))p" contract-errors.txt | sed 's/%/%25/g' | awk 'BEGIN{ORS="%0A"} {print substr($0,1,300)}')
+            [ -n "$chunk" ] && echo "::error title=contract output $n::$chunk"
+            n=$((n+1))
+          done
 
       - name: Test the keeper
         if: ${{ !cancelled() }}
