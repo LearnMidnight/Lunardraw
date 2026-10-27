@@ -261,7 +261,7 @@ describe('System, Pick and Moonball Sweep entries', () => {
           }
         }
       }
-      expect(gamesOf({ numbers: draw.numbers.slice(0, t.count), moonball: 1, pick: t.pick })).toBe(t.games);
+      expect(gamesOf(entryHitting(draw, { count: t.count, h: 0, pick: t.pick }))).toBe(t.games);
     },
   );
 
