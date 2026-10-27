@@ -240,10 +240,14 @@ describe('System, Pick and Moonball Sweep entries', () => {
   };
   const totalOf = (v: bigint[]) => v.reduce((a, b) => a + b, 0n);
 
-  it("the contract's table agrees with listing every game, for every type, hit count and Moonball", () => {
-    const draw = { numbers: [3, 8, 12, 19, 24, 30, 35], moonball: 11 };
-    let checked = 0;
-    for (const t of ENTRY_TYPES) {
+  // One test per entry type, yielding between cases: listing every game of a
+  // System 12 or a Pick 5 with Moonball Sweep for every hit count is a lot of
+  // work, and a worker busy for too long without a break makes vitest report
+  // "Timeout calling onTaskUpdate" even though every test passes.
+  it.each(ENTRY_TYPES.map((t) => [t.name, t] as const))(
+    "%s: the contract's table agrees with listing every game, for every hit count and Moonball",
+    async (_name, t) => {
+      const draw = { numbers: [3, 8, 12, 19, 24, 30, 35], moonball: 11 };
       for (let h = 0; h <= Math.min(t.count, 7); h++) {
         for (const sweep of [false, true]) {
           for (const moonballHit of [true, false]) {
@@ -253,13 +257,25 @@ describe('System, Pick and Moonball Sweep entries', () => {
             expect(got, `${entryName(e)}, ${h} drawn, Moonball ${moonballHit ? 'hit' : 'missed'}`).toEqual(want);
             expect(Number(pureCircuits.gamesIn(toEntry(e)))).toBe(gamesOf(e));
             if (h === 0) expect(listGames(e).length).toBe(gamesOf(e));
-            checked++;
+            await new Promise((resolve) => setImmediate(resolve));
           }
         }
       }
-    }
-    expect(checked).toBeGreaterThan(200);
-    expect(ENTRY_TYPES.map((t) => t.games)).toEqual([1, 8, 36, 120, 330, 792, 29, 435]);
+      expect(gamesOf({ numbers: draw.numbers.slice(0, t.count), moonball: 1, pick: t.pick })).toBe(t.games);
+    },
+  );
+
+  it('has the entry types the spec asks for', () => {
+    expect(ENTRY_TYPES.map((t) => [t.name, t.games])).toEqual([
+      ['standard', 1],
+      ['System 8', 8],
+      ['System 9', 36],
+      ['System 10', 120],
+      ['System 11', 330],
+      ['System 12', 792],
+      ['Pick 6', 29],
+      ['Pick 5', 435],
+    ]);
   });
 
   it('buys a System 12, a Pick 5 with Moonball Sweep and a PowerHit-style entry as one ticket each', () => {
