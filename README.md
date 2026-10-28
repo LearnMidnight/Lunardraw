@@ -30,6 +30,8 @@ Where Starfall is heading: no claim button, and no ticket's numbers ever made pu
 
 It has 12 circuits, the most that fit in a deploy transaction, and v0's oracle-key and organiser fixes. It's tested in the simulator with 100 private tickets and every failure case; not deployed yet. Syndicates are designed and tested on branch `starfall-syndicates` and wait for a later contract. Design, guarantees and the privacy that remains: [docs/SETTLEMENT.md](docs/SETTLEMENT.md).
 
+Where the remaining trust goes after that: a network of bonded operators (stake pool operators) holding threshold keys and rewarded from the fee, no second blockchain needed. [docs/OPERATOR-NETWORK.md](docs/OPERATOR-NETWORK.md).
+
 ## Repository
 
 | Path | What it is |
@@ -39,6 +41,7 @@ It has 12 circuits, the most that fit in a deploy transaction, and v0's oracle-k
 | `cli/` | `./lunardraw`: deploy the contract locked, activate the oracle key, run the keeper and the draw oracle, check a deployment. Its end-to-end test runs a real draw on a local Midnight network |
 | `docs/DESIGN.md` | Design: draw life cycle, number rule, prize divisions, privacy, remaining trust |
 | `docs/preview-guide.md` | Running it on Preview with 30-minute draws, step by step |
+| `docs/OPERATOR-NETWORK.md` | Stage 3 design note: bonded operators (SPOs) with threshold keys replacing the single keeper and oracle |
 | `contract/src/settlement.compact` | Starfall with private, automatic settlement, no claims ([docs/SETTLEMENT.md](docs/SETTLEMENT.md)) |
 | `nightcast/` | [Nightcast](https://github.com/LearnMidnight/Nightcast) as a git submodule, pinned to a tested commit: its contract and SDK are used for keys and test vectors |
 
