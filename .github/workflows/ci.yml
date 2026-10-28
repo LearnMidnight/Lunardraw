@@ -61,6 +61,20 @@ jobs:
           set -o pipefail
           npx vitest run --reporter=default --reporter=github-actions --reporter=json --outputFile.json=../reports/contract.json 2>&1 | tee ../contract.log
 
+      # The slowest tests: a long synchronous test makes vitest fail the run with
+      # "Timeout calling onTaskUpdate" even though every test passes.
+      - name: Contract test timings
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          [ -f reports/contract.json ] || exit 0
+          node -e '
+            const r = require(process.argv[1]);
+            const all = r.testResults.flatMap((f) => f.assertionResults.map((a) => ({ file: f.name.split("/").pop(), name: a.fullName, ms: a.duration || 0 })));
+            all.sort((a, b) => b.ms - a.ms);
+            console.log(`::notice title=slowest contract tests::${all.slice(0, 8).map((t) => `${(t.ms / 1000).toFixed(1)} s ${t.file}: ${t.name}`).join(" | ")}`);
+          ' "$PWD/reports/contract.json" || true
+
       # vitest can fail a run whose tests all pass (an error outside any test,
       # a test file that didn't load); the log says which, so show it here.
       - name: Contract test errors
