@@ -18,7 +18,7 @@ The game is Australian Powerball's, as the Starfall spec asks: 7 numbers from 35
 
    The purchase proof shows that both hold the same valid ticket (an entry of a type the contract knows, its numbers increasing in 1–35, a Moonball in 1–20 or Moonball Sweep, and shares adding up to 10,000 basis points) and charges the ticket's **games × the game price**. The buyer also names a public refund address. Tickets are numbered 0, 1, 2, … within the draw, in purchase order; each record stores its games, and the draw counts games sold.
 
-   `buyTickets(count, refundTo)` buys 1 to `maxTickets()` = 2 tickets in one transaction, each with its own commitment, ciphertext and index, and returns the first index. A QuickPick package (Single 1, Starter 4, Mini 8, Regular 12, Super 18, Mega 25, Jumbo 36, Maxi 50 games; `quickPickPackage` in the SDK) is a run of single-game tickets: a Maxi is 25 transactions. A System, a Pick or a Moonball Sweep is one ticket: a Pick 5 with Moonball Sweep (8,700 games) is one transaction.
+   `buyTickets(count, refundTo)` buys 1 to `maxTickets()` = 18 tickets in one transaction, each with its own commitment, ciphertext and index, and returns the first index. A QuickPick package (Single 1, Starter 4, Mini 8, Regular 12, Super 18, Mega 25, Jumbo 36, Maxi 50 games; `quickPickPackage` in the SDK) is a run of single-game tickets: up to a Super is one transaction, a Mega or Jumbo two, a Maxi three. A System, a Pick or a Moonball Sweep is one ticket: a Pick 5 with Moonball Sweep (8,700 games) is one transaction.
 2. **Sales close.** The count is frozen: no ticket can be added or removed.
 3. **Draw.** As v0: the organiser's sealed seed, the oracle's VRF and the site's number rule. Each draw is bound to the active oracle key **when it opens**, so buyers can see which key will answer it. `requestDraw(n, seed, next)` reveals draw `n`'s seed and can open the next draw in the same transaction; `requestDraw(0, …, next)` just opens a draw. `computeNumbers(n, now)` puts the numbers in the ledger; its clock stamp may be up to **30 minutes** from block time, so a slow numbers proof still lands (v0 allows 10; Lunardraw #32).
 4. **Settlement.** The settler decrypts every ticket with the settlement secret and calls `settleBatch` repeatedly. Each call covers the next 22 tickets in index order. For each ticket, the proof shows that the decrypted ticket hashes to the commitment stored at its index, then counts its winning games per division against the numbers stored in the ledger (without listing them: see "Entries"). Winning tickets become **entitlements** (winning games per division + payees) under the id `Poseidon(domain, C, salt)`. The salt is secret, so nobody can link an entitlement to a purchase.
@@ -97,7 +97,7 @@ A deploy transaction carries every circuit's verifier key and must fit Midnight'
 | `proposeOracleKey` | organiser | propose a new oracle key (waits `oracleKeyDelay`) |
 | `changeOrganiser` | organiser / successor / backup | propose / accept / recover |
 | `requestDraw` | organiser | reveal a seed and open the next draw; `n = 0` only opens |
-| `buyTickets` | anyone | buy 1–2 tickets: games, Systems, Picks, Sweeps (replaces `buyTicket`) |
+| `buyTickets` | anyone | buy 1–18 tickets: games, Systems, Picks, Sweeps (replaces `buyTicket`) |
 | `fulfilDraw` | the draw's oracle | the VRF output |
 | `computeNumbers` | anyone | the numbers |
 | `settleBatch` | settlement key holder | settle the next 22 tickets |
@@ -161,8 +161,9 @@ The tests check each of these:
 
 The ticket is packed into 9 field elements:
 - the 7 numbers, the Moonball and the three 2-byte shares (14 bytes, one element);
-- each payee address in two 16-byte halves (six elements);
-- the salt in two halves (two elements).
+- each payee address in two 16-byte halves (six elements), which the ticket carries as two `Uint<128>`s;
+- the salt, a random field element (one element);
+- one zero element.
 
 Encryption works like this:
 - The buyer picks a random `r`.
@@ -208,6 +209,16 @@ With both, a purchase is **2 games** (k=17, about 1 GB to prove: an ordinary lap
 
 An entry adds about 2,100 rows per settled ticket (counting hits, the table row, the Moonball split), so 25 tickets crossed into k=18, which would double each batch's proving time for 3 more tickets. 22 keeps settlement at k=17. Buyers' purchases are unaffected.
 
+**Lighter tickets (28 Oct 2026).** Buying a QuickPick package took many transactions (a Maxi was 25), and wallets struggle to land that many in a row. Measuring `buyTickets` showed each ticket cost about 50,000 rows, and about 45,000 of those were still the byte folding of item 1 above: three payee addresses and the salt, each 32 bytes, turned into field elements. A ticket now carries each payee address as two `Uint<128>` halves and its salt as a `Field`, so packing it for encryption costs nothing, and only `payEntitlement` joins the halves back into an address to pay it. A ticket is now about 6,500 rows:
+
+| Circuit | Before | Lighter tickets |
+|---|---|---|
+| `buyTickets` | 2 tickets, k=17, 101,340 | **18 tickets, k=17, 117,628** |
+| `settleBatch`, 22 tickets | k=17, 123,287 | k=17, 117,787 |
+| `payEntitlement` | k=12, 2,937 | k=16, 65,379 (joining three addresses; well under 1 GB) |
+
+For comparison, 2 lighter tickets are k=14 (13,702), 10 are k=16 and 20 are k=17 with too little headroom (130,619), so 18 is the most that keeps a purchase at k=17 (about 1.3 GB to prove, the same as before). The address halves and the salt are part of the commitment, so this needs a new deployment.
+
 The batch size and the tickets per purchase are fixed at compile time (`npm run gen:batch -w @lunardraw/contract -- <batch> <tickets>` regenerates `src/batch.compact`). A draw of 10,000 tickets takes 455 batch transactions until recursion is available, but a ticket can now hold up to 15,840 games.
 
 ### Proving on Midnight's proof server (CI, 27 Oct 2026)
@@ -228,11 +239,11 @@ The proof server keeps much of a proof's memory afterwards: on CI two purchases 
 
 ## Other limits
 
-- **Two tickets per transaction.** A QuickPick package is several transactions (a Maxi is 25). A System, Pick or Moonball Sweep entry is one ticket.
+- **18 tickets per transaction.** A QuickPick package up to a Super is one transaction, a Mega or Jumbo two, a Maxi three. A System, Pick or Moonball Sweep entry is one ticket.
 - **No subscriptions.** Multi-week entries need per-draw purchases, which an agent can do.
 - **Purchases are sequential.** Each purchase takes the next index, so two purchases in the same block conflict and one must retry. Fine at prototype volume; a Merkle-tree set or per-block batching would lift it.
 - **Settler liveness.** A settler who sees a result it dislikes can stop, and the draw voids and refunds. This is the same class of trust as the oracle's: a committee (stage 2) with t-of-n liveness reduces it.
-- **Untested on a real network.** Block limits on a transaction's ledger operations (22 ticket lookups and up to 22 inserts in a batch, two sealed tickets in a purchase) are only known once it runs on Preprod. Next: the Starfall CLI (deploy with a test settlement key, keeper, buy), then a 100-ticket draw on Preprod.
+- **Untested on a real network.** Block limits on a transaction's ledger operations (22 ticket lookups and up to 22 inserts in a batch, 18 sealed tickets in a purchase) are only known once it runs on Preprod. Next: the Starfall CLI (deploy with a test settlement key, keeper, buy), then a 100-ticket draw on Preprod.
 
 ## The keeper
 

@@ -118,7 +118,7 @@ Once the player wallet has synced and has tNIGHT, buy a package for the draw on 
 | mega | 25 | 13 |
 | maxi | 50 | 25 |
 
-Or `--games <n>` for any number. Each transaction is a proof of up to 2 tickets (about a minute and 1 GB of memory). The numbers are printed when it's done: winnings go to the player wallet by themselves.
+Or `--games <n>` for any number. Each transaction is a proof of up to 18 tickets (a minute or two and about 1.3 GB of memory): a Super or smaller is one transaction, a Maxi three. The numbers are printed when it's done: winnings go to the player wallet by themselves.
 
 System, Pick and Moonball Sweep entries are **one ticket each**, however many games they hold (a contract with entries, PR #41 and later):
 

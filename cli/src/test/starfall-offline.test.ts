@@ -213,7 +213,8 @@ describe("Starfall's organiser commitment", () => {
 
 describe('buyGames', () => {
   const store = { setContractAddress() {}, async set() {} };
-  const games = Array.from({ length: 5 }, () => Starfall.makeTicket(1n, quickPick(), OPERATOR));
+  // 40 tickets: 18 a purchase, so 18, 18, then 4.
+  const games = Array.from({ length: 40 }, () => Starfall.makeTicket(1n, quickPick(), OPERATOR));
   const calls = (buy: () => Promise<unknown>) => ({ callTx: { buyTickets: buy } }) as unknown as StarfallCalls;
 
   it("stops with what it bought when a purchase hangs, instead of waiting for ever", async () => {
@@ -221,8 +222,8 @@ describe('buyGames', () => {
     const hangs = calls(() => (++n === 2 ? new Promise(() => {}) : Promise.resolve()));
     const err = await buyGames(hangs, store, 'addr', games, OPERATOR, { timeoutMs: 50 }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(BuyStopped);
-    expect((err as BuyStopped).bought).toBe(2);
-    expect((err as BuyStopped).of).toBe(5);
+    expect((err as BuyStopped).bought).toBe(18);
+    expect((err as BuyStopped).of).toBe(40);
     expect((err as BuyStopped).message).toMatch(/didn't land/);
   });
 
@@ -234,7 +235,7 @@ describe('buyGames', () => {
     let n = 0;
     const fails = calls(() => (++n === 3 ? Promise.reject(new Error('sales have closed')) : Promise.resolve()));
     const err = await buyGames(fails, store, 'addr', games, OPERATOR).catch((e: unknown) => e);
-    expect((err as BuyStopped).bought).toBe(4);
+    expect((err as BuyStopped).bought).toBe(36);
     expect((err as BuyStopped).message).toBe('sales have closed');
     expect(await buyGames(ok, store, 'addr', games, OPERATOR)).toBe(3);
   });

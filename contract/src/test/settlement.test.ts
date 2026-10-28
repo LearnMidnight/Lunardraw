@@ -10,6 +10,8 @@ import { combineDrawSeed, drawStarfall, seedCommitment } from '@nightcast/sdk';
 import { DrawStatus, pureCircuits, type TicketPreimage } from '../managed/settlement/contract/index.js';
 import { SettlementSimulator } from '../settlement-simulator.js';
 import {
+  addressHalves,
+  payeeAddress,
   entryOf,
   ENTRY_TYPES,
   expectedSettlement,
@@ -140,10 +142,13 @@ describe('sealed tickets', () => {
 
     const opened = pureCircuits.openTicket(settlementSecret, n, rec.cipher);
     expect(opened.entry).toEqual(t.entry);
-    expect(opened.payees.map((p) => [hex(p.address.bytes), p.share])).toEqual(
-      t.payees.map((p) => [hex(p.address.bytes), p.share]),
+    expect(opened.payees).toEqual(t.payees);
+    // The halves a ticket carries put back together into each payee's address.
+    expect(t.payees.map((p) => hex(pureCircuits.addressOf(p).bytes))).toEqual(
+      [...split.map((p) => hex(p.address))],
     );
-    expect(hex(opened.salt)).toBe(hex(t.salt));
+    expect(t.payees.map((p) => hex(payeeAddress(p)))).toEqual(split.map((p) => hex(p.address)));
+    expect(opened.salt).toBe(t.salt);
     expect(hex(sim.commitmentOf(opened))).toBe(hex(c));
 
     // Another key gets noise: it doesn't even decode to a ticket.
@@ -168,7 +173,7 @@ describe('sealed tickets', () => {
     expect(() => sim.buyTicket(badShares, me)).toThrow(/invalid ticket/);
 
     const untidy = makeTicket(n, quickPick(), me);
-    untidy.payees = [untidy.payees[0], { address: { bytes: randomAddress() }, share: 0n }, untidy.payees[2]];
+    untidy.payees = [untidy.payees[0], { ...addressHalves(randomAddress()), share: 0n }, untidy.payees[2]];
     expect(() => sim.buyTicket(untidy, me)).toThrow(/invalid ticket/);
 
     const badLine = withEntry(makeTicket(n, quickPick(), me), { numbers: nums([1, 2, 3, 4, 5, 6, 36]) });
@@ -185,32 +190,34 @@ describe('sealed tickets', () => {
 });
 
 describe('multi-ticket purchases', () => {
-  it('buys a QuickPick package two games at a time, each game a ticket of its own', () => {
+  it('buys a QuickPick package up to 18 games a transaction, each game a ticket of its own', () => {
     const { sim, oracleSecretKey, settlementSecret } = setup();
     const { n } = openWithSeed(sim, oracleSecretKey);
     const me = randomAddress();
-    const games = quickPickPackage(n, 'regular', me);
-    expect(games.length).toBe(12);
-    expect(Number(pureCircuits.maxTickets())).toBe(2);
-    expect(sim.buyPackage(games, me)).toBe(6);
-    expect(sim.ticketsSold(n)).toBe(12n);
+    expect(Number(pureCircuits.maxTickets())).toBe(18);
+    // Packages up to a Super are one transaction; a Maxi is three.
+    const txs = Object.fromEntries(Object.entries(QUICK_PICK_PACKAGES).map(([k, g]) => [k, Math.ceil(g / 18)]));
+    expect(txs).toEqual({ single: 1, starter: 1, mini: 1, regular: 1, super: 1, mega: 2, jumbo: 2, maxi: 3 });
+    const maxi = quickPickPackage(n, 'maxi', me);
+    expect(sim.buyPackage(maxi, me)).toBe(3);
+    expect(sim.ticketsSold(n)).toBe(50n);
     const opened = sim.decryptDrawTickets(n, settlementSecret);
-    expect(opened.map((t) => hex(sim.commitmentOf(t)))).toEqual(games.map((t) => hex(sim.commitmentOf(t))));
+    expect(opened.map((t) => hex(sim.commitmentOf(t)))).toEqual(maxi.map((t) => hex(sim.commitmentOf(t))));
     for (const [, r] of sim.getLedger().tickets) expect(hex(r.refundTo.bytes)).toBe(hex(me));
 
     // Mixed with single purchases, indexes stay sequential; a purchase returns its first index.
     sim.buyTicket(makeTicket(n, quickPick(), me), me);
-    expect(sim.buyTickets([makeTicket(n, quickPick(), me), makeTicket(n, quickPick(), me)], me)).toBe(13n);
-    expect(sim.ticketsSold(n)).toBe(15n);
-    expect(sim.decryptDrawTickets(n, settlementSecret).length).toBe(15);
+    expect(sim.buyTickets([makeTicket(n, quickPick(), me), makeTicket(n, quickPick(), me)], me)).toBe(51n);
+    expect(sim.ticketsSold(n)).toBe(53n);
+    expect(sim.decryptDrawTickets(n, settlementSecret).length).toBe(53);
   });
 
   it('rejects too many tickets, a bad ticket in the set, a duplicate, and a mixed draw', () => {
     const { sim, oracleSecretKey } = setup();
     const { n } = openWithSeed(sim, oracleSecretKey);
     const me = randomAddress();
-    const five = Array.from({ length: 5 }, () => makeTicket(n, quickPick(), me));
-    expect(() => sim.buyTickets(five, me)).toThrow(/tickets per purchase/);
+    const nineteen = Array.from({ length: 19 }, () => makeTicket(n, quickPick(), me));
+    expect(() => sim.buyTickets(nineteen, me)).toThrow(/tickets per purchase/);
     expect(() => sim.buyTickets([], me)).toThrow();
     const bad = [makeTicket(n, quickPick(), me), makeTicket(n, quickPick(), me)];
     bad[1] = withEntry(bad[1], { numbers: nums([1, 1, 2, 3, 4, 5, 6]) });
@@ -468,8 +475,8 @@ describe('settling 100 private tickets', () => {
     const ents = [...l.entitlements].map(([, e]) => e).filter((e) => e.drawId === n);
     expect(ents.length).toBe(winning.length);
     expect(ents.every((e) => e.paid)).toBe(true);
-    const key = (games: bigint[], payees: { address: { bytes: Uint8Array }; share: bigint }[]) =>
-      `${games.join('.')}:${payees.map((x) => `${hex(x.address.bytes)}/${x.share}`).join(',')}`;
+    const key = (games: bigint[], payees: { lo: bigint; hi: bigint; share: bigint }[]) =>
+      `${games.join('.')}:${payees.map((x) => `${hex(payeeAddress(x))}/${x.share}`).join(',')}`;
     expect(ents.map((e) => key(e.games, e.payees)).sort()).toEqual(
       winning.map((t) => key(expected.won[tickets.indexOf(t)], t.payees)).sort(),
     );
@@ -561,7 +568,7 @@ describe('settlement fails safely', () => {
     expect(() => sim.settleBatch(n, forged)).toThrow(/does not match its commitment/);
     // Paying the forger instead doesn't work either.
     const redirected = tickets.map((t) => ({ ...t }));
-    redirected[5] = { ...redirected[5], payees: [{ address: { bytes: randomAddress() }, share: 10_000n }, ...redirected[5].payees.slice(1)] };
+    redirected[5] = { ...redirected[5], payees: [{ ...addressHalves(randomAddress()), share: 10_000n }, ...redirected[5].payees.slice(1)] };
     expect(() => sim.settleBatch(n, redirected)).toThrow(/does not match its commitment/);
     expect(sim.getLedger().progress.lookup(n).next).toBe(0n);
   });
