@@ -11,7 +11,7 @@ import { encodeContractAddress } from '@midnight-ntwrk/compact-runtime';
 import { MidnightBech32m } from '@midnight-ntwrk/wallet-sdk-address-format';
 import { quickPick, Starfall } from '@lunardraw/contract';
 import { buildStarfallFeed, DerivedSeeds, DrawOracle, every, STARFALL_WEEKLY, StarfallKeeper, type StarfallView, writeFeed } from '@lunardraw/keeper';
-import { compilerInfo, localFingerprints, NETWORKS, openWallet, walletAddress, walletBalances } from '@nightcast/deploy';
+import { compilerInfo, localFingerprints, NETWORKS, openWallet, type Session, walletAddress, walletBalances } from '@nightcast/deploy';
 import {
   fromHex,
   hex,
@@ -30,6 +30,7 @@ import {
   walletSeed,
   withSession,
 } from './common.js';
+import { deadline, dustWait } from './dust-wait.js';
 import { type Check, currentCommit, formatChecks } from './deployment.js';
 import {
   acceptStarfallOracleKey,
@@ -58,8 +59,9 @@ export const STARFALL_USAGE = `usage: ./lunardraw starfall <command>
                [--operator <address>] [--price <STAR>] [--fee <STAR>] [--min-sales <s>] [--max-sales <s>] [--reveal <s>] [--draw <s>] [--settle <s>]
   accept-key   --network <network> --oracle <file> --wallet <file>
   keeper       --network <network> --organiser <file> --settlement <file> --wallet <file> [--every <seconds>] [--feed <file>]
-               [--proof-server-port <port>] [--prove-lead <secs>] [--restart-after <min>] [--stall-after <min>]
+               [--proof-server-port <port>] [--prove-lead <secs>] [--restart-after <min>] [--stall-after <min>] [--dust-wait <min>]
   oracle       --network <network> --oracle <file> --wallet <file> [--proof-server-port <port>] [--restart-after <min>] [--stall-after <min>]
+               [--dust-wait <min>]
   buy          --network <network> --wallet <file> [--pay-to <address>] [--proof-server-port <port>]
                [--games <n> | --package <${Object.keys(Starfall.QUICK_PICK_PACKAGES).join('|')}>] [--sweep]
                | [--system <8-12> | --pick <5|6>] [--numbers "<n n n ...>"] [--moonball <1-20> | --sweep]
@@ -156,6 +158,22 @@ export const parseUserAddress = (s: string): Uint8Array => {
 };
 
 const walletBytes = (wallet: { unshieldedKeystore: { getAddress(): string } }): Uint8Array => fromHex(wallet.unshieldedKeystore.getAddress());
+
+/**
+ * Opens the keeper's or the oracle's wallet, or gives undefined when it has
+ * waited for DUST longer than `minutes` (the caller then exits with RESTART;
+ * see dust-wait.ts).
+ */
+const openServiceWallet = async (session: Session, seed: string | undefined, minutes: number) => {
+  const dust = deadline(minutes, () =>
+    session.logger.error(`still no DUST after ${minutes} minutes of waiting (the wallet's view may be stale); restarting to resync it`),
+  );
+  try {
+    return await Promise.race([openWallet(session, { seed, onWaitingForDust: dust.start }), dust.late]);
+  } finally {
+    dust.cancel();
+  }
+};
 
 const STAGE = ['open', 'requested', 'fulfilled', 'drawn', 'settled', 'void'];
 const tn = (star: bigint) => `${Number(star) / 1e6} tNIGHT`;
@@ -271,6 +289,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
       'proof-server-port': { type: 'string' },
       'restart-after': { type: 'string' },
       'stall-after': { type: 'string' },
+      'dust-wait': { type: 'string' },
       'prove-lead': { type: 'string' },
       accept: { type: 'boolean', default: false },
       operator: { type: 'string' },
@@ -409,8 +428,10 @@ export const starfall = async (argv: string[]): Promise<number> => {
       }
       const schedule = values.every ? every(Number(values.every)) : STARFALL_WEEKLY;
       const seeds = new DerivedSeeds(organiserSecret, encodeContractAddress(record.contractAddress));
+      const dustMinutes = dustWait(values['dust-wait']);
       return withSession(network, async (session) => {
-        const wallet = await openWallet(session, { seed: walletSeed(values.wallet) });
+        const wallet = await openServiceWallet(session, walletSeed(values.wallet), dustMinutes);
+        if (!wallet) return RESTART;
         try {
           const providers = starfallProviders(session, wallet);
           // The contract is the judge: its stored organiser must be this secret's Starfall commitment.
@@ -464,8 +485,10 @@ export const starfall = async (argv: string[]): Promise<number> => {
       if (!values.oracle) throw new Error(STARFALL_USAGE);
       const { sk, pk } = oracleKeyFrom(values.oracle, true);
       const record = readStarfallRecord(network);
+      const dustMinutes = dustWait(values['dust-wait']);
       return withSession(network, async (session) => {
-        const wallet = await openWallet(session, { seed: walletSeed(values.wallet) });
+        const wallet = await openServiceWallet(session, walletSeed(values.wallet), dustMinutes);
+        if (!wallet) return RESTART;
         try {
           const providers = starfallProviders(session, wallet);
           const view = await readStarfallView(providers.publicDataProvider, record.contractAddress);
