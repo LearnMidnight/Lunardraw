@@ -100,12 +100,14 @@ const allPass = async (runs: Run[]) => {
 };
 
 describe('every circuit run passes the zkir check', () => {
-  it('purchases of 1 and 2 games, a settled draw with winners, payments to 1 and 3 payees', async () => {
+  it('purchases of 1, 2 and 18 tickets, a settled draw with winners, payments to 1 and 3 payees', async () => {
     const { sim, runs, open } = setup();
     const { n, seed, draw } = open();
     const me = randomAddress();
     sim.buyTickets([makeTicket(n, quickPick(), me)], me);
     sim.buyTickets([makeTicket(n, quickPick(), me), makeTicket(n, quickPick(), me)], me);
+    // A full purchase: every slot used.
+    sim.buyTickets(Array.from({ length: Number(pureCircuits.maxTickets()) }, () => makeTicket(n, quickPick(), me)), me);
     // A sure winner paid to one address, and one split between three payees.
     sim.buyTickets(
       [
@@ -123,7 +125,7 @@ describe('every circuit run passes the zkir check', () => {
     sim.requestAndOpenNext(n, seed, { salesClose: BigInt(sim.now + 3_600), seedCommitment: new Uint8Array(32).fill(99) });
     sim.fulfilDraw(n);
     sim.computeNumbers(n);
-    expect(sim.settleAll(n)).toBe(1); // 5 games: one partial batch
+    expect(sim.settleAll(n)).toBe(2); // 23 tickets: a full batch of 22, then 1
     expect(sim.entitlementsOf(n).length).toBeGreaterThanOrEqual(2);
     const circuits = new Set(runs.map((r) => r.circuit));
     for (const c of ['buyTickets', 'requestDraw', 'fulfilDraw', 'computeNumbers', 'settleBatch', 'finaliseDraw', 'payEntitlement']) {

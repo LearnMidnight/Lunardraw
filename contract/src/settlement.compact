@@ -68,9 +68,16 @@ export struct Entry {
   sweep: Boolean;
 }
 
-// A share of a ticket's prize, in basis points (10000 = all of it).
+// A share of a ticket's prize, in basis points (10000 = all of it), to an
+// unshielded address. The address is carried as its two 16-byte halves (bytes
+// 0-15 and 16-31, each read little-endian, as `Bytes<16> as Field` does): the
+// form a ticket is encrypted in, so buying a ticket never splits a 32-byte
+// value byte by byte (that cost about 11,000 rows per value, nearly all of a
+// purchase's proof). The address is put back together only when a prize is
+// paid (`addressOf`).
 export struct Payee {
-  address: UserAddress;
+  lo: Uint<128>;
+  hi: Uint<128>;
   share: Uint<16>;
 }
 
@@ -81,7 +88,8 @@ export struct TicketPreimage {
   drawId: Uint<32>;
   entry: Entry;
   payees: Vector<3, Payee>;
-  salt: Bytes<32>;
+  // A random field element: keeps the commitment and the entitlement id unguessable.
+  salt: Field;
 }
 
 // A ticket encrypted to the settlement key: ephemeral = r*G, and each packed
@@ -117,7 +125,7 @@ struct AlphaPreimage {
 struct EntitlementPreimage {
   domain: Bytes<32>;
   commitment: Bytes<32>;
-  salt: Bytes<32>;
+  salt: Field;
 }
 
 // Changes only when the draw moves to its next stage.
@@ -316,7 +324,7 @@ export pure circuit ticketCommitment(deployment: ContractAddress, t: TicketPreim
 
 // The id a winning ticket's entitlement is stored under. Needs the ticket's
 // secret salt, so nobody else can tell which purchase it came from.
-export pure circuit entitlementId(commitment: Bytes<32>, salt: Bytes<32>): Bytes<32> {
+export pure circuit entitlementId(commitment: Bytes<32>, salt: Field): Bytes<32> {
   return upgradeFromTransient(transientHash<EntitlementPreimage>(EntitlementPreimage {
     domain: pad(32, "starfall:entitlement:v2"),
     commitment: commitment,
@@ -370,7 +378,7 @@ export pure circuit gamesIn(e: Entry): Uint<32> {
 // Each payee is an address with a share, or empty (share 0, zero address).
 pure circuit validPayees(p: Vector<3, Payee>): Boolean {
   const total = fold((acc: Uint<32>, x: Payee): Uint<32> => (acc + x.share) as Uint<32>, 0, p);
-  const tidy = fold((acc: Boolean, x: Payee): Boolean => acc && (x.share > 0 || x.address == default<UserAddress>),
+  const tidy = fold((acc: Boolean, x: Payee): Boolean => acc && (x.share > 0 || (x.lo == 0 && x.hi == 0)),
                     true, p);
   return total == 10000 && p[0].share > 0 && tidy;
 }
@@ -408,40 +416,17 @@ export pure circuit gamesByDivision(e: Entry, numbers: Vector<7, Uint<8>>, moonb
 // --------------------------------------------------- ticket encryption
 //
 // A ticket packs into 9 field elements: the entry (kind, count, 12 numbers,
-// Moonball, sweep) and the three 2-byte shares (22 bytes), each payee address
-// as two 16-byte halves, and the salt as two.
+// Moonball, sweep) and the three 2-byte shares (22 bytes), each payee's
+// address halves as they're carried, the salt, and a 0 (unused). Nothing is
+// split byte by byte, which kept a purchase's proof small.
 // Encryption is ElGamal-style key agreement on Jubjub (the curve Nightcast's
 // VRF uses) with a Poseidon keystream: ephemeral R = r*G, shared S = r*K, and
 // body[i] = packed[i] + Poseidon(S.x, S.y, i). The settlement key holder
 // recovers S = k*R. Keeping this in circuits means off-chain code never
 // reimplements it.
 
-// 256^0 .. 256^15: a 16-byte value as a Field, least significant byte first.
-pure circuit weights16(): Vector<16, Field> {
-  return [1, 256, 65536, 16777216, 4294967296, 1099511627776, 281474976710656, 72057594037927936, 18446744073709551616, 4722366482869645213696, 1208925819614629174706176, 309485009821345068724781056, 79228162514264337593543950336, 20282409603651670423947251286016, 5192296858534827628530496329220096, 1329227995784915872903807060280344576];
-}
-
-// Bytes 0-15 and 16-31 of a 32-byte value as Fields (little-endian, as a
-// Bytes<16> converts). Folded by hand from the value's bytes: the same result
-// as `slice<16>(b, 0) as Field`, at a fraction of the circuit size (slicing
-// and converting cost about 25,000 rows per 32-byte value; a purchase seals
-// three addresses and a salt per game).
-pure circuit lo16(b: Bytes<32>): Field {
-  const v = b as Vector<32, Uint<8>>;
-  return fold((acc: Field, x: Uint<8>, w: Field): Field => acc + (x as Field) * w, 0,
-              [v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11], v[12], v[13], v[14], v[15]],
-              weights16());
-}
-
-pure circuit hi16(b: Bytes<32>): Field {
-  const v = b as Vector<32, Uint<8>>;
-  return fold((acc: Field, x: Uint<8>, w: Field): Field => acc + (x as Field) * w, 0,
-              [v[16], v[17], v[18], v[19], v[20], v[21], v[22], v[23], v[24], v[25], v[26], v[27], v[28], v[29], v[30], v[31]],
-              weights16());
-}
-
 // 256^0 .. 256^21: the 22-byte head as a Field, least significant byte first
-// (the same as `Bytes<22> as Field`, folded by hand like lo16).
+// (the same as `Bytes<22> as Field`, folded by hand: much cheaper in a proof).
 pure circuit weights22(): Vector<22, Field> {
   return [1, 256, 65536, 16777216, 4294967296, 1099511627776, 281474976710656, 72057594037927936, 18446744073709551616, 4722366482869645213696, 1208925819614629174706176, 309485009821345068724781056, 79228162514264337593543950336, 20282409603651670423947251286016, 5192296858534827628530496329220096, 1329227995784915872903807060280344576, 340282366920938463463374607431768211456, 87112285931760246646623899502532662132736, 22300745198530623141535718272648361505980416, 5708990770823839524233143877797980545530986496, 1461501637330902918203684832716283019655932542976, 374144419156711147060143317175368453031918731001856];
 }
@@ -461,18 +446,20 @@ pure circuit packTicket(t: TicketPreimage): Vector<9, Field> {
                                      ...shareBytes(t.payees[0]), ...shareBytes(t.payees[1]), ...shareBytes(t.payees[2])];
   return [
     fold((acc: Field, x: Uint<8>, w: Field): Field => acc + (x as Field) * w, 0, head, weights22()),
-    lo16(t.payees[0].address.bytes), hi16(t.payees[0].address.bytes),
-    lo16(t.payees[1].address.bytes), hi16(t.payees[1].address.bytes),
-    lo16(t.payees[2].address.bytes), hi16(t.payees[2].address.bytes),
-    lo16(t.salt), hi16(t.salt)
+    t.payees[0].lo as Field, t.payees[0].hi as Field,
+    t.payees[1].lo as Field, t.payees[1].hi as Field,
+    t.payees[2].lo as Field, t.payees[2].hi as Field,
+    t.salt, 0
   ];
 }
 
 pure circuit unpackPayee(b0: Uint<8>, b1: Uint<8>, lo: Field, hi: Field): Payee {
-  return Payee {
-    address: UserAddress { bytes: join16(lo, hi) },
-    share: ([b0, b1] as Bytes<2>) as Uint<16>
-  };
+  return Payee { lo: lo as Uint<128>, hi: hi as Uint<128>, share: ([b0, b1] as Bytes<2>) as Uint<16> };
+}
+
+// A payee's address, put back together from its halves (when a prize is paid).
+export pure circuit addressOf(p: Payee): UserAddress {
+  return UserAddress { bytes: join16(p.lo as Field, p.hi as Field) };
 }
 
 pure circuit unpackTicket(drawId: Uint<32>, f: Vector<9, Field>): TicketPreimage {
@@ -487,7 +474,7 @@ pure circuit unpackTicket(drawId: Uint<32>, f: Vector<9, Field>): TicketPreimage
       sweep: h[15] != 0
     },
     payees: [unpackPayee(h[16], h[17], f[1], f[2]), unpackPayee(h[18], h[19], f[3], f[4]), unpackPayee(h[20], h[21], f[5], f[6])],
-    salt: join16(f[7], f[8])
+    salt: f[7]
   };
 }
 
@@ -936,13 +923,13 @@ export circuit payEntitlement(id: Bytes<32>): [] {
   const a0 = (prize - a1 - a2) as Uint<128>;
   entitlements.insert(eid, Entitlement { ...e, paid: true });
   if (a0 > 0) {
-    sendUnshielded(nativeToken(), a0, right<ContractAddress, UserAddress>(e.payees[0].address));
+    sendUnshielded(nativeToken(), a0, right<ContractAddress, UserAddress>(addressOf(e.payees[0])));
   }
   if (a1 > 0) {
-    sendUnshielded(nativeToken(), a1, right<ContractAddress, UserAddress>(e.payees[1].address));
+    sendUnshielded(nativeToken(), a1, right<ContractAddress, UserAddress>(addressOf(e.payees[1])));
   }
   if (a2 > 0) {
-    sendUnshielded(nativeToken(), a2, right<ContractAddress, UserAddress>(e.payees[2].address));
+    sendUnshielded(nativeToken(), a2, right<ContractAddress, UserAddress>(addressOf(e.payees[2])));
   }
 }
 

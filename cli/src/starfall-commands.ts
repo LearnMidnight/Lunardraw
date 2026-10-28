@@ -80,7 +80,7 @@ stay offline. Starfall's commitments differ from v0's: a v0 deployment record's 
 the deploying wallet).
 The keeper works out each draw's seed from the organiser secret, so there is no seeds file.
 buy buys tickets for the draw on sale, paid to --pay-to (default: your wallet), with refunds to your
-wallet if the draw is cancelled; it sends up to 2 tickets per transaction. A ticket is one entry:
+wallet if the draw is cancelled; it sends up to 18 tickets per transaction. A ticket is one entry:
   --games <n> / --package <name>   that many random standard games (QuickPick), one ticket each;
   --numbers "3 9 14 21 27 33 35"   your own standard game (7 numbers), or a System with 8 to 12;
   --system <8-12>                  a System: every 7 of your numbers (random unless --numbers);

@@ -16,8 +16,44 @@ export const WHOLE = 10_000;
 /** A payee as plain values: a 32-byte unshielded address with a share in basis points. */
 export type PlainPayee = { address: Uint8Array; share: number };
 
-const ZERO_ADDRESS = new Uint8Array(32);
-const NO_PAYEE: Payee = { address: { bytes: ZERO_ADDRESS }, share: 0n };
+const NO_PAYEE: Payee = { lo: 0n, hi: 0n, share: 0n };
+
+/** A 16-byte little-endian value as a bigint. */
+const le16 = (b: Uint8Array): bigint => {
+  let x = 0n;
+  for (let i = 15; i >= 0; i--) x = (x << 8n) | BigInt(b[i]);
+  return x;
+};
+
+/**
+ * A 32-byte unshielded address as the contract carries it in a ticket: bytes
+ * 0-15 and 16-31, each read little-endian (the contract's `addressOf` puts it
+ * back together when it pays).
+ */
+export const addressHalves = (address: Uint8Array): { lo: bigint; hi: bigint } => {
+  if (address.length !== 32) throw new Error('an address is 32 bytes');
+  return { lo: le16(address.subarray(0, 16)), hi: le16(address.subarray(16, 32)) };
+};
+
+/** A payee's 32-byte address, from the halves a ticket carries. */
+export const payeeAddress = (p: { lo: bigint; hi: bigint }): Uint8Array => {
+  const out = new Uint8Array(32);
+  let lo = p.lo;
+  let hi = p.hi;
+  for (let i = 0; i < 16; i++) {
+    out[i] = Number(lo & 0xffn);
+    out[16 + i] = Number(hi & 0xffn);
+    lo >>= 8n;
+    hi >>= 8n;
+  }
+  return out;
+};
+
+/** A random salt: 31 random bytes, so always a valid field element. */
+export const randomSalt = (): bigint => {
+  const b = webcrypto.getRandomValues(new Uint8Array(31));
+  return BigInt('0x' + Buffer.from(b).toString('hex'));
+};
 
 /** How many numbers an entry can hold (a System 12). */
 export const MAX_NUMBERS = 12;
@@ -94,7 +130,7 @@ export const toEntry = (e: PlainEntry): Entry => {
 /**
  * Build a Starfall ticket (one entry) for draw `drawId`, paid to `payees`: a
  * single address (the whole prize) or up to three payees whose shares add up
- * to 10000. Numbers may be in any order. `salt` defaults to 32 random bytes.
+ * to 10000. Numbers may be in any order. `salt` defaults to a random field element (31 random bytes).
  * The buyer doesn't need to keep it: the settlement key holder decrypts the
  * ticket from the chain, and refunds go to the address given at purchase.
  */
@@ -102,7 +138,7 @@ export const makeTicket = (
   drawId: number | bigint,
   entry: PlainEntry | PlainLine,
   payees: Uint8Array | PlainPayee[],
-  salt?: Uint8Array,
+  salt?: bigint,
 ): TicketPreimage => {
   const e = toEntry(entry);
   const list = payees instanceof Uint8Array ? [{ address: payees, share: WHOLE }] : payees;
@@ -112,13 +148,13 @@ export const makeTicket = (
     if (p.address.length !== 32) throw new Error('an address is 32 bytes');
   }
   if (list.reduce((a, p) => a + p.share, 0) !== WHOLE) throw new Error('shares must add up to 10000');
-  const out: Payee[] = list.map((p) => ({ address: { bytes: p.address }, share: BigInt(p.share) }));
+  const out: Payee[] = list.map((p) => ({ ...addressHalves(p.address), share: BigInt(p.share) }));
   while (out.length < MAX_PAYEES) out.push(NO_PAYEE);
   return {
     drawId: BigInt(drawId),
     entry: e,
     payees: out,
-    salt: salt ?? webcrypto.getRandomValues(new Uint8Array(32)),
+    salt: salt ?? randomSalt(),
   };
 };
 
@@ -151,7 +187,7 @@ export const emptyTicket = (drawId: bigint): TicketPreimage => ({
   drawId,
   entry: { kind: 0n, count: 0n, numbers: Array.from({ length: MAX_NUMBERS }, () => 0n), moonball: 0n, sweep: false },
   payees: [NO_PAYEE, NO_PAYEE, NO_PAYEE],
-  salt: new Uint8Array(32),
+  salt: 0n,
 });
 
 /** A ticket's entry as plain numbers. */
@@ -290,7 +326,7 @@ export const expectedSettlement = (
     const amounts = splitPrize(prize, t.payees.map((p) => p.share));
     t.payees.forEach((p, j) => {
       if (amounts[j] === 0n) return;
-      const k = hex(p.address.bytes);
+      const k = hex(payeeAddress(p));
       payouts.set(k, (payouts.get(k) ?? 0n) + amounts[j]);
     });
   });
