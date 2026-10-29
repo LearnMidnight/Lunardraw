@@ -2,7 +2,7 @@
 
 A self-running lottery for AI agents on the Midnight network. Weekly Starfall draws with verifiable randomness from [Nightcast](https://github.com/LearnMidnight/Nightcast), private entries and on-chain claims. A stalled round is cancelled and refunded, never redrawn. Testnet only.
 
-**Status:** **Starfall runs on Preprod** since 27 Oct 2026: contract `46fb810f8c36140f8d0b2119d0b554504310f8002ef5667b278c5fd6789326bf`, hourly test draws (record in [deployments/starfall-preprod.json](deployments/starfall-preprod.json), check it with `./lunardraw starfall verify --network preprod`). Its first draw sold 76 games, settled them privately in 4 batches and paid 3 winners automatically, 14 minutes after sales closed. CI runs a full Starfall draw with real proofs on a local Midnight network. The v0 soak (#5, 24-27 Oct, contract `5bb124ee…6ec5`, [deployments/preprod.json](deployments/preprod.json)) has ended. Test tokens only.
+**Status:** **Starfall runs on Preprod** since 27 Oct 2026, redeployed 28 Oct with entries and 18-ticket purchases: contract `f868fc99557fd9194d1126d143774d060aeafe077f0dca5c11435fe6c1e374f6` (the first contract, `46fb810f…9326bf`, ran 27–28 Oct and is idle), hourly test draws (record in [deployments/starfall-preprod.json](deployments/starfall-preprod.json), check it with `./lunardraw starfall verify --network preprod`). Its first draw sold 76 games, settled them privately in 4 batches and paid 3 winners automatically, 14 minutes after sales closed. CI runs a full Starfall draw with real proofs on a local Midnight network. The v0 soak (#5, 24-27 Oct, contract `5bb124ee…6ec5`, [deployments/preprod.json](deployments/preprod.json)) has ended. Test tokens only.
 
 ## Starfall
 
@@ -30,6 +30,8 @@ Where Starfall is heading: no claim button, and no ticket's numbers ever made pu
 
 It has 12 circuits, the most that fit in a deploy transaction, and v0's oracle-key and organiser fixes. It's tested in the simulator with 100 private tickets and every failure case; not deployed yet. Syndicates are designed and tested on branch `starfall-syndicates` and wait for a later contract. Design, guarantees and the privacy that remains: [docs/SETTLEMENT.md](docs/SETTLEMENT.md).
 
+Where the remaining trust goes after that: a network of bonded operators (stake pool operators) holding threshold keys and rewarded from the fee, no second blockchain needed. [docs/OPERATOR-NETWORK.md](docs/OPERATOR-NETWORK.md).
+
 ## Repository
 
 | Path | What it is |
@@ -39,6 +41,7 @@ It has 12 circuits, the most that fit in a deploy transaction, and v0's oracle-k
 | `cli/` | `./lunardraw`: deploy the contract locked, activate the oracle key, run the keeper and the draw oracle, check a deployment. Its end-to-end test runs a real draw on a local Midnight network |
 | `docs/DESIGN.md` | Design: draw life cycle, number rule, prize divisions, privacy, remaining trust |
 | `docs/preview-guide.md` | Running it on Preview with 30-minute draws, step by step |
+| `docs/OPERATOR-NETWORK.md` | Stage 3 design note: bonded operators (SPOs) with threshold keys replacing the single keeper and oracle |
 | `contract/src/settlement.compact` | Starfall with private, automatic settlement, no claims ([docs/SETTLEMENT.md](docs/SETTLEMENT.md)) |
 | `nightcast/` | [Nightcast](https://github.com/LearnMidnight/Nightcast) as a git submodule, pinned to a tested commit: its contract and SDK are used for keys and test vectors |
 
