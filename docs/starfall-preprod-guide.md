@@ -150,14 +150,14 @@ Then give each agent a style:
 
 ```bash
 echo 'AGENT_ARGS=--style mix --budget 30' > /root/lunardraw-agents/nova.env
-echo 'AGENT_ARGS=--style lucky --numbers "3 11 17 23 26 30 34" --moonball 7' > /root/lunardraw-agents/orbit.env
+echo 'AGENT_ARGS=--style lucky --numbers 3,11,17,23,26,30,34 --moonball 7' > /root/lunardraw-agents/orbit.env   # commas, not quotes
 echo 'AGENT_ARGS=--style quickpick --games 4' > /root/lunardraw-agents/pixel.env
 cp deploy/systemd/lunardraw-agent@.service /etc/systemd/system/ && systemctl daemon-reload
 systemctl enable --now lunardraw-agent@nova lunardraw-agent@orbit lunardraw-agent@pixel
 journalctl -u 'lunardraw-agent@*' -f -o cat
 ```
 
-Styles: `quickpick` (`--games` random games), `lucky` (the same `--numbers` and `--moonball` every draw), `moonhit` (7 random numbers with every Moonball, 20 games), `system` (a System 8), `mix` (a random style each draw, mostly small QuickPicks). `--budget` caps one draw's spend in tNIGHT (default 60); `--max-draws` stops after that many. What an agent bought is in `/root/lunardraw-agents/<name>.state.json`, so a restart never buys twice. A new wallet's first sync reads the whole chain: allow a few minutes before the first purchase.
+Styles: `quickpick` (`--games` random games), `lucky` (the same `--numbers` and `--moonball` every draw), `moonhit` (7 random numbers with every Moonball, 20 games), `system` (a System 8), `mix` (a random style each draw, mostly small QuickPicks). `--budget` caps one draw's spend in tNIGHT (default 60); `--max-draws` stops after that many. What an agent bought is in `/root/lunardraw-agents/<name>.state.json`, so a restart never buys twice. A new wallet's first sync reads the whole chain, which takes hours on Preprod (the DUST part is slow); after that its saved state makes every start quick. Start the agents, fund the wallets, and check back the next day.
 
 The same command runs anywhere with a proof server: `./lunardraw starfall agent --network preprod --name nova --wallet nova.secret --style mix --proof-server-port 6300`.
 

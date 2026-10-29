@@ -3,7 +3,8 @@
 # (./lunardraw wallet new, funded from the faucet) and its style comes from
 # /root/lunardraw-agents/<name>.env, e.g.
 #   AGENT_ARGS=--style mix --budget 30
-#   AGENT_ARGS=--style lucky --numbers "3 11 17 23 26 30 34" --moonball 7
+#   AGENT_ARGS=--style lucky --numbers 3,11,17,23,26,30,34 --moonball 7   (commas, not quotes: the
+#   value is split on spaces when it reaches the command)
 # Then: systemctl enable --now lunardraw-agent@<name>
 # It proves on the player proof server (6301), never the keeper's (6300).
 [Unit]
