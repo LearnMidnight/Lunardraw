@@ -8,6 +8,7 @@
 import { Starfall } from '@lunardraw/contract';
 import type { FeedDraw } from './feed.js';
 import type { StarfallDrawView, StarfallView } from './starfall.js';
+import type { StepRecord } from './step-times.js';
 
 const { DrawStatus } = Starfall;
 
@@ -22,6 +23,12 @@ export type StarfallFeedDraw = Omit<FeedDraw, 'status' | 'claim_deadline'> & {
   refunded?: number;
   /** Tickets sold: entries, each a standard game, a System or a Pick (games_sold counts their games). */
   tickets?: number;
+  /**
+   * When each step happened, as the keeper saw it (its pass after the step
+   * landed, so up to its poll interval late; `drawn_at` is exact). For the
+   * site's "how long does a draw take" per step.
+   */
+  timeline?: { revealed_at?: string; answered_at?: string; drawn_at?: string; settled_at?: string; voided_at?: string };
 };
 
 export type StarfallFeed = {
@@ -68,7 +75,7 @@ export const starfallFeedStatus = (d: StarfallDrawView, nowSecs: number): Starfa
 /** Build the feed from a view of the Starfall contract at chain time `nowSecs`. */
 export const buildStarfallFeed = (
   view: StarfallView,
-  opts: { network: string; contract: string; nowSecs: number; generatedAt?: Date },
+  opts: { network: string; contract: string; nowSecs: number; generatedAt?: Date; steps?: (id: bigint) => StepRecord | undefined },
 ): StarfallFeed => {
   const batch = Starfall.pureCircuits.batchSize();
   const draws = [...view.draws].sort((a, b) => (a.id > b.id ? -1 : a.id < b.id ? 1 : 0));
@@ -107,6 +114,12 @@ export const buildStarfallFeed = (
       out.carry_out_star = star(carryOut.get(d.id) ?? 0n);
     }
     if (d.status === DrawStatus.voided) out.refunded = Number(d.refundedGames);
+    const t = opts.steps?.(d.id);
+    if (t) {
+      const at = (s: number | undefined) => (s === undefined ? undefined : iso(BigInt(s)));
+      const timeline = { revealed_at: at(t.revealed), answered_at: at(t.answered), drawn_at: at(t.drawn), settled_at: at(t.settled), voided_at: at(t.voided) };
+      out.timeline = Object.fromEntries(Object.entries(timeline).filter(([, v]) => v !== undefined));
+    }
     return out;
   };
 

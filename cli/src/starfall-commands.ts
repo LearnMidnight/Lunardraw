@@ -10,7 +10,7 @@ import { parseArgs } from 'node:util';
 import { encodeContractAddress } from '@midnight-ntwrk/compact-runtime';
 import { MidnightBech32m } from '@midnight-ntwrk/wallet-sdk-address-format';
 import { quickPick, Starfall } from '@lunardraw/contract';
-import { buildStarfallFeed, DerivedSeeds, DrawOracle, every, STARFALL_WEEKLY, StarfallKeeper, type StarfallView, writeFeed } from '@lunardraw/keeper';
+import { buildStarfallFeed, DerivedSeeds, DrawOracle, every, STARFALL_WEEKLY, StarfallKeeper, type StarfallView, StepTimes, writeFeed } from '@lunardraw/keeper';
 import { compilerInfo, localFingerprints, NETWORKS, openWallet, type Session, walletAddress, walletBalances } from '@nightcast/deploy';
 import {
   fromHex,
@@ -442,8 +442,13 @@ export const starfall = async (argv: string[]): Promise<number> => {
           const lead = values['prove-lead'] === undefined ? undefined : Number(values['prove-lead']);
           const chain = new MidnightStarfallChain(joined, providers.publicDataProvider, providers.privateStateProvider, record.contractAddress, base, lead);
           const feedPath = values.feed;
+          // When each draw's steps happened, as seen from here (kept beside the feed across restarts).
+          const stepTimes = feedPath ? new StepTimes(`${feedPath}.steps.json`) : undefined;
           const onView = feedPath
-            ? (view: StarfallView, nowSecs: number) => writeFeed(feedPath, buildStarfallFeed(view, { network, contract: record.contractAddress, nowSecs }))
+            ? (view: StarfallView, nowSecs: number) => {
+                stepTimes!.observe(view, nowSecs);
+                writeFeed(feedPath, buildStarfallFeed(view, { network, contract: record.contractAddress, nowSecs, steps: stepTimes!.lookup() }));
+              }
             : undefined;
           // The numbers and the settlement batches are the big proofs (about
           // 7 GB each on the proof server): run them in the background so
