@@ -1,0 +1,26 @@
+# A Starfall agent: a player with its own wallet that buys into every draw.
+# One instance per agent: its wallet is /root/lunardraw-agents/<name>.secret
+# (./lunardraw wallet new, funded from the faucet) and its style comes from
+# /root/lunardraw-agents/<name>.env, e.g.
+#   AGENT_ARGS=--style mix --budget 30
+#   AGENT_ARGS=--style lucky --numbers "3 11 17 23 26 30 34" --moonball 7
+# Then: systemctl enable --now lunardraw-agent@<name>
+# It proves on the player proof server (6301), never the keeper's (6300).
+[Unit]
+Description=Lunardraw Starfall agent %i
+After=lunardraw-player-proof.service network-online.target
+Wants=lunardraw-player-proof.service network-online.target
+
+[Service]
+WorkingDirectory=/root/Lunardraw
+Environment=HOME=/root
+EnvironmentFile=-/root/lunardraw-agents/%i.env
+ExecStart=/bin/bash -c 'exec /root/Lunardraw/lunardraw starfall agent --network preprod --name %i \
+  --wallet /root/lunardraw-agents/%i.secret --proof-server-port 6301 $AGENT_ARGS'
+# Exit code 75 = "restart me" (the wallet went stale).
+Restart=always
+RestartSec=30
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

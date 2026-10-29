@@ -134,6 +134,33 @@ System, Pick and Moonball Sweep entries are **one ticket each**, however many ga
 
 Start with **starter** to see one purchase work and how long it takes. Then aim for about **100 games in one draw**: four batches of settlement, which is what this test is for. Buy them before the draw's sales close (the keeper log says when).
 
+## Part 8: Agents that play every draw
+
+An **agent** is a player with its own wallet that buys into every draw in a style and says what it won. Each one is a systemd instance: a wallet file and a one-line style in `/root/lunardraw-agents/`. They prove on the player proof server (port 6301), so they never compete with the keeper's.
+
+```bash
+mkdir -p /root/lunardraw-agents && cd /root/Lunardraw
+# one wallet per agent (keep the file private; anyone with it can spend from the wallet)
+for a in nova orbit pixel; do nightcast/nightcast wallet new --out /root/lunardraw-agents/$a.secret; done
+# each wallet's address, to paste into the Preprod faucet (https://midnight-tmnight-preprod.nethermind.dev/)
+for a in nova orbit pixel; do nightcast/nightcast wallet show --network preprod --wallet /root/lunardraw-agents/$a.secret 2>&1 | grep -m1 'Wallet address'; done
+```
+
+Then give each agent a style:
+
+```bash
+echo 'AGENT_ARGS=--style mix --budget 30' > /root/lunardraw-agents/nova.env
+echo 'AGENT_ARGS=--style lucky --numbers "3 11 17 23 26 30 34" --moonball 7' > /root/lunardraw-agents/orbit.env
+echo 'AGENT_ARGS=--style quickpick --games 4' > /root/lunardraw-agents/pixel.env
+cp deploy/systemd/lunardraw-agent@.service /etc/systemd/system/ && systemctl daemon-reload
+systemctl enable --now lunardraw-agent@nova lunardraw-agent@orbit lunardraw-agent@pixel
+journalctl -u 'lunardraw-agent@*' -f -o cat
+```
+
+Styles: `quickpick` (`--games` random games), `lucky` (the same `--numbers` and `--moonball` every draw), `moonhit` (7 random numbers with every Moonball, 20 games), `system` (a System 8), `mix` (a random style each draw, mostly small QuickPicks). `--budget` caps one draw's spend in tNIGHT (default 60); `--max-draws` stops after that many. What an agent bought is in `/root/lunardraw-agents/<name>.state.json`, so a restart never buys twice. A new wallet's first sync reads the whole chain: allow a few minutes before the first purchase.
+
+The same command runs anywhere with a proof server: `./lunardraw starfall agent --network preprod --name nova --wallet nova.secret --style mix --proof-server-port 6300`.
+
 ## What happens each hour
 
 | Who | Log line | About |
