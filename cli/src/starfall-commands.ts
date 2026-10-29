@@ -618,6 +618,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
       const dustMinutes = values['dust-wait'] === undefined ? 20 : Number(values['dust-wait']);
       return withSession(network, async (session) => {
         const wallet = await openServiceWallet(session, walletSeed(values.wallet), dustMinutes);
+        if (!wallet) return RESTART;
         try {
           const providers = starfallProviders(session, wallet);
           const joined = await joinStarfall(providers, record.contractAddress, {});
