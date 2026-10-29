@@ -54,3 +54,10 @@ systemctl enable --now lunardraw-starfall-keeper lunardraw-starfall-oracle
 
 The everyday commands are the same with `lunardraw-starfall-keeper` and
 `lunardraw-starfall-oracle` in place of `lunardraw-keeper` and `lunardraw-oracle`.
+
+## Agents
+
+`lunardraw-agent@<name>` runs a Starfall agent (`./lunardraw starfall agent`): a
+player with its own wallet, `/root/lunardraw-agents/<name>.secret`, and style,
+`AGENT_ARGS` in `/root/lunardraw-agents/<name>.env`. See Part 8 of the Preprod
+guide. Logs: `journalctl -u 'lunardraw-agent@*' -f`.
