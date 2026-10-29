@@ -5,6 +5,10 @@ import { generateOperatorSecret, generateOracleSecretKey, pureCircuits as nightc
 import { combineDrawSeed, drawStarfall } from '@nightcast/sdk';
 import { every } from '../schedule.js';
 import { buildStarfallFeed } from '../starfall-feed.js';
+import { StepTimes } from '../step-times.js';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { commitmentOf, DerivedSeeds } from '../seeds.js';
 import {
   decryptTickets,
@@ -451,6 +455,46 @@ describe('the Starfall site feed', () => {
     expect(d1.prizes_star).toEqual(expected.prizes.map(Number));
     expect(d1.carry_out_star).toBe(Number(expected.carry));
     expect(d1.winners![7]).toBeGreaterThanOrEqual(1); // the sure 3 + Moonball
+  }, 60_000);
+
+  it('records when each step happened, as the keeper saw it, and keeps them across a restart', async () => {
+    const ctx = setup();
+    const { sim, chain } = ctx;
+    const keeper = ctx.keeper();
+    const dir = mkdtempSync(join(tmpdir(), 'steps-'));
+    const path = join(dir, 'feed.json.steps.json');
+    let times = new StepTimes(path);
+    const feed = async () => {
+      const view = await chain.view();
+      times.observe(view, sim.now);
+      return buildStarfallFeed(view, { network: 'local', contract: sim.address, nowSecs: sim.now, steps: times.lookup() });
+    };
+    await keeper.tick();
+    sim.buyTickets([makeTicket(1n, quickPick(), BUYER)], BUYER);
+    await feed();
+    passing(sim, draw(sim, 1n).salesClose);
+    await keeper.tick(); // reveal
+    const revealedAt = sim.now;
+    let d1 = (await feed()).games.starfall.draws.find((d) => d.num === 1)!;
+    expect(d1.timeline).toEqual({ revealed_at: new Date(revealedAt * 1000).toISOString() });
+    sim.advance(20);
+    oracleAnswers(sim);
+    const answeredAt = sim.now;
+    await feed();
+    sim.advance(100);
+    await keeper.tick(); // numbers
+    times = new StepTimes(path); // a restarted keeper reads the file back
+    d1 = (await feed()).games.starfall.draws.find((d) => d.num === 1)!;
+    expect(d1.timeline).toEqual({
+      revealed_at: new Date(revealedAt * 1000).toISOString(),
+      answered_at: new Date(answeredAt * 1000).toISOString(),
+      drawn_at: d1.drawn_at,
+    });
+    expect(JSON.parse(readFileSync(path, 'utf8'))['1']).toMatchObject({ revealed: revealedAt, answered: answeredAt });
+    for (let i = 0; i < 3; i++) await keeper.tick(); // settle, finalise
+    d1 = (await feed()).games.starfall.draws.find((d) => d.num === 1)!;
+    expect(d1.status).toBe('settled');
+    expect(d1.timeline?.settled_at).toBeDefined();
   }, 60_000);
 
   it('counts games (not tickets) sold and refunded: a System 8 is one ticket of 8 games', async () => {
