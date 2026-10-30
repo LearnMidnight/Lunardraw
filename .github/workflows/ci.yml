@@ -103,7 +103,7 @@ jobs:
       - name: Test the CLI (offline)
         if: ${{ !cancelled() }}
         working-directory: cli
-        run: npx vitest run src/test/offline.test.ts src/test/starfall-offline.test.ts src/test/dust-wait.test.ts src/test/sync-watch.test.ts src/test/starfall-agent.test.ts src/test/silence-watchdog.test.ts --reporter=default --reporter=github-actions --reporter=json --outputFile.json=../reports/cli.json
+        run: npx vitest run src/test/offline.test.ts src/test/starfall-offline.test.ts src/test/dust-wait.test.ts src/test/sync-watch.test.ts src/test/starfall-agent.test.ts src/test/silence-watchdog.test.ts src/test/wait-for-tip.test.ts src/test/fresh-fees.test.ts --reporter=default --reporter=github-actions --reporter=json --outputFile.json=../reports/cli.json
 
       - name: Summarise tests
         if: always()

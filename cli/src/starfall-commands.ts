@@ -10,7 +10,8 @@ import { parseArgs } from 'node:util';
 import { encodeContractAddress } from '@midnight-ntwrk/compact-runtime';
 import { MidnightBech32m } from '@midnight-ntwrk/wallet-sdk-address-format';
 import { quickPick, Starfall } from '@lunardraw/contract';
-import { buildStarfallFeed, DerivedSeeds, DrawOracle, every, STARFALL_WEEKLY, StarfallKeeper, type StarfallView, StepTimes, writeFeed } from '@lunardraw/keeper';
+import { buildStarfallFeed, DerivedSeeds, DrawOracle, every, isStaleDustProof, STARFALL_WEEKLY, StarfallKeeper, type StarfallView, StepTimes, writeFeed } from '@lunardraw/keeper';
+import { withFreshFees } from './fresh-fees.js';
 import { compilerInfo, localFingerprints, NETWORKS, openWallet, type Session, walletAddress, walletBalances } from '@nightcast/deploy';
 import {
   fromHex,
@@ -143,6 +144,15 @@ const backupCommitmentFrom = (value: string): Uint8Array => {
   }
   return starfallOrganiserCommitment(fromHex(f.secret));
 };
+
+/**
+ * The keeper's and oracle's providers: fees are paid from the wallet's DUST
+ * once it is at the tip (after the circuit is proven, which is when midnight-js
+ * balances), and paid again from the same proof if the node calls the fee
+ * proof stale. See fresh-fees.ts.
+ */
+const freshFees = <P extends ReturnType<typeof starfallProviders>>(providers: P, wallet: Parameters<typeof waitForTip>[0], logger: { info(msg: string): void; warn(msg: string): void }): P =>
+  withFreshFees(providers, { beforeBalance: () => waitForTip(wallet, { logger, timeoutMs: 60_000 }), isStale: isStaleDustProof, logger });
 
 /** The settlement key file: the secret scalar (decimal) and its public point. */
 const settlementFrom = (path: string, needSecret: boolean): { pk: { x: bigint; y: bigint }; sk?: bigint } => {
@@ -463,15 +473,14 @@ export const starfall = async (argv: string[]): Promise<number> => {
         const wallet = await openServiceWallet(session, walletSeed(values.wallet), dustMinutes);
         if (!wallet) return RESTART;
         try {
-          const providers = starfallProviders(session, wallet);
+          const providers = freshFees(starfallProviders(session, wallet), wallet, session.logger);
           // The contract is the judge: its stored organiser must be this secret's Starfall commitment.
           const opens = organiserCheck(await readStarfallLedger(providers.publicDataProvider, record.contractAddress), organiserSecret);
           if (!opens.ok) throw new Error(`${values.organiser} can't run this deployment: ${opens.detail}`);
           const base = { organiserSecret };
           const joined = await joinStarfall(providers, record.contractAddress, base);
           const lead = values['prove-lead'] === undefined ? undefined : Number(values['prove-lead']);
-          const atTip = () => waitForTip(wallet, { logger: session.logger });
-          const chain = new MidnightStarfallChain(joined, providers.publicDataProvider, providers.privateStateProvider, record.contractAddress, base, lead, Date.now, atTip);
+          const chain = new MidnightStarfallChain(joined, providers.publicDataProvider, providers.privateStateProvider, record.contractAddress, base, lead);
           const feedPath = values.feed;
           // When each draw's steps happened, as seen from here (kept beside the feed across restarts).
           const stepTimes = feedPath ? new StepTimes(`${feedPath}.steps.json`) : undefined;
@@ -529,13 +538,11 @@ export const starfall = async (argv: string[]): Promise<number> => {
         const wallet = await openServiceWallet(session, walletSeed(values.wallet), dustMinutes);
         if (!wallet) return RESTART;
         try {
-          const providers = starfallProviders(session, wallet);
+          const providers = freshFees(starfallProviders(session, wallet), wallet, session.logger);
           const view = await readStarfallView(providers.publicDataProvider, record.contractAddress);
           if (!view.oracleKeyReady) throw new Error('the oracle key is not active yet: run `./lunardraw starfall accept-key` first');
           const joined = await joinStarfall(providers, record.contractAddress, { oracleSecretKey: sk });
-          const chain = new MidnightStarfallChain(joined, providers.publicDataProvider, providers.privateStateProvider, record.contractAddress, {}, 300, Date.now, () =>
-            waitForTip(wallet, { logger: session.logger }),
-          );
+          const chain = new MidnightStarfallChain(joined, providers.publicDataProvider, providers.privateStateProvider, record.contractAddress);
           const oracle = new DrawOracle({ chain, publicKey: pk, logger: session.logger });
           oracle.start();
           session.logger.info(`Starfall draw oracle running for ${record.contractAddress}. Press Ctrl+C to stop.`);
