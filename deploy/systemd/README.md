@@ -30,6 +30,10 @@ systemctl status lunardraw-proof lunardraw-keeper lunardraw-oracle --no-pager | 
 
 ## Everyday commands
 
+> **Running Starfall?** Use the `lunardraw-starfall-*` names in the
+> [Starfall](#starfall) table below. The commands in this table are for the
+> retired v0 services, and starting a v0 service stops its Starfall twin.
+
 | What | Command |
 |---|---|
 | Watch the keeper's log live (Ctrl+C stops watching, not the keeper) | `journalctl -u lunardraw-keeper -f` |
@@ -54,8 +58,16 @@ systemctl daemon-reload
 systemctl enable --now lunardraw-starfall-keeper lunardraw-starfall-oracle
 ```
 
-The everyday commands are the same with `lunardraw-starfall-keeper` and
-`lunardraw-starfall-oracle` in place of `lunardraw-keeper` and `lunardraw-oracle`.
+| What | Command |
+|---|---|
+| Watch the keeper's log live | `journalctl -u lunardraw-starfall-keeper -f` |
+| Is everything running? | `systemctl is-active lunardraw-proof lunardraw-starfall-keeper lunardraw-starfall-oracle` |
+| After `git pull && npm run build` (between :30 and :55 past the hour) | `systemctl restart lunardraw-starfall-keeper lunardraw-starfall-oracle` |
+| Stop both | `systemctl stop lunardraw-starfall-keeper lunardraw-starfall-oracle` |
+
+Don't restart `lunardraw-keeper` or `lunardraw-oracle` while Starfall is
+running: `restart` starts a disabled unit, and its conflict rule then stops
+the Starfall twin.
 
 ## Agents
 
