@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { reasonOf, StepEngine } from '../engine.js';
+import { isStaleDustProof, reasonOf, StepEngine } from '../engine.js';
 
 type S = { kind: 'prove'; id: number };
 
@@ -85,6 +85,26 @@ describe('the step engine', () => {
     now += 80_000;
     r = await engine.tick();
     expect(r.done).toEqual(['prove 1']);
+  });
+
+  it('reasonOf drops stack frames from a message that carries its own stack, and finds the code in it', () => {
+    const raw =
+      "Unexpected error submitting scoped transaction '<unnamed>': (FiberFailure) SubmissionError: Transaction submission error\n" +
+      '    at file:///root/Lunardraw/node_modules/@midnight-ntwrk/wallet-sdk-capabilities/dist/submission/submissionService.js:31:279\n' +
+      '    at file:///root/Lunardraw/node_modules/effect/dist/esm/internal/fiberRuntime.js:945:41 {\n' +
+      '  [cause]: SubmissionError: Transaction submission failed\n' +
+      '      at process.processTicksAndRejections (node:internal/process/task_queues:103:5) {\n' +
+      '    [cause]: RpcError: 1010: Invalid Transaction: Custom error: 170\n' +
+      '        at checkError (file:///root/Lunardraw/node_modules/@polkadot/rpc-provider/coder/index.js:19:15)\n' +
+      '  }\n}';
+    expect(reasonOf(new Error(raw))).toBe(
+      "Unexpected error submitting scoped transaction '<unnamed>': (FiberFailure) SubmissionError: Transaction submission error: SubmissionError: Transaction submission failed: RpcError: 1010: Invalid Transaction: Custom error: 170",
+    );
+    // the code is found even when the readable form would be cut at 600 characters
+    const long = new Error(`${'x'.repeat(700)}\n    at file:///a.js:1:1 {\n  [cause]: RpcError: 1010: Invalid Transaction: Custom error: 170\n}`);
+    expect(reasonOf(long)).toHaveLength(603);
+    expect(isStaleDustProof(long)).toBe(true);
+    expect(isStaleDustProof(new Error('Custom error: 138'))).toBe(false);
   });
 
   it('reasonOf follows cause chains whose links are not Error instances', () => {
