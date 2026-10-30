@@ -19,17 +19,28 @@ export type TickReport = { done: string[]; failed: { step: string; error: string
  * An error's message and its causes, one line, for logs. midnight-js wraps
  * the reason a circuit failed (an assertion, a missing witness) as a cause.
  */
+/**
+ * Node error 1010 custom 170, InvalidDustSpendProof: the wallet built the fee
+ * proof a moment before it had synced the latest DUST events. Nothing is wrong
+ * with the step; rebuilding a few seconds later lands. Backing off
+ * exponentially on it turned seconds of lag into minutes (Preprod, 30 Oct 2026).
+ */
+export const isStaleDustProof = (error: string): boolean => /custom error: 170\b/i.test(error);
+const QUICK_RETRY_MS = 15_000;
+
 export const reasonOf = (err: unknown, max = 600): string => {
   const parts: string[] = [];
   const seen = new Set<unknown>();
   let current: unknown = err;
   while (current !== undefined && current !== null && !seen.has(current) && parts.length < 6) {
     seen.add(current);
-    const message = current instanceof Error ? current.message : typeof current === 'string' ? current : JSON.stringify(current);
+    const obj = typeof current === 'object' ? (current as { message?: unknown; cause?: unknown }) : undefined;
+    const message = obj && typeof obj.message === 'string' ? obj.message : typeof current === 'string' ? current : JSON.stringify(current);
     // one line: a pretty-printed JSON message would otherwise read as "{"
     const line = String(message).replace(/\s+/g, ' ').trim();
     if (line && !parts.includes(line)) parts.push(line);
-    current = current instanceof Error ? (current as Error & { cause?: unknown }).cause : undefined;
+    // follow `cause` whatever the class: effect's errors don't always pass instanceof Error
+    current = obj?.cause;
   }
   const text = parts.join(': ') || 'unknown error';
   return text.length > max ? `${text.slice(0, max)}...` : text;
@@ -303,7 +314,7 @@ export class StepEngine<V, S extends { kind: string }> {
       } catch (err) {
         const error = reasonOf(err);
         const n = (failed?.failures ?? 0) + 1;
-        const delay = Math.min(this.backoffMs * 2 ** (n - 1), this.maxBackoffMs);
+        const delay = isStaleDustProof(error) ? QUICK_RETRY_MS : Math.min(this.backoffMs * 2 ** (n - 1), this.maxBackoffMs);
         this.failures.set(key, { failures: n, nextTryAt: this.clock() + delay, error });
         this.streak.failed();
         report.failed.push({ step: key, error });
@@ -335,7 +346,7 @@ export class StepEngine<V, S extends { kind: string }> {
       (err: unknown) => {
         const error = reasonOf(err);
         const n = failuresSoFar + 1;
-        const delay = Math.min(this.backoffMs * 2 ** (n - 1), this.maxBackoffMs);
+        const delay = isStaleDustProof(error) ? QUICK_RETRY_MS : Math.min(this.backoffMs * 2 ** (n - 1), this.maxBackoffMs);
         this.failures.set(key, { failures: n, nextTryAt: this.clock() + delay, error });
         this.streak.failed();
         this.finished.push({ key, error });
