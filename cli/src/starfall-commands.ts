@@ -669,10 +669,11 @@ export const starfall = async (argv: string[]): Promise<number> => {
                 }
                 if (opts.maxDraws && state.purchases.length >= opts.maxDraws) break;
               } else if (plan && (attempts.get(plan.draw.toString())?.n ?? 0) >= 3) {
-                if (plan.draw.toString() !== skippedDraw) {
-                  skippedDraw = plan.draw.toString();
-                  log(`sitting out draw ${plan.draw}: three purchases were refused`);
-                }
+                // Three refusals in a row point at a stale wallet view (node error 1010 custom 170,
+                // a DUST spend proof built before every DUST event was synced): restart to resync.
+                session.logger.error(`[${name}] three purchases for draw ${plan.draw} were refused; restarting to resync the wallet`);
+                forceExit(RESTART);
+                return RESTART;
               } else if (plan && (attempts.get(plan.draw.toString())?.nextAt ?? 0) > Date.now()) {
                 /* waiting out the pause after a refused purchase */
               } else if (plan) {
@@ -708,6 +709,9 @@ export const starfall = async (argv: string[]): Promise<number> => {
                     a.nextAt = Date.now() + 3 * 60_000;
                     attempts.set(plan.draw.toString(), a);
                     log(`stopped after ${err.bought} of ${err.of} ticket(s): ${err.message}${a.n < 3 ? '; trying again in 3 minutes' : ''}`);
+                    if (/custom error: 170\b/i.test(err.message)) {
+                      log('(the wallet built its fee proof before it had synced every DUST event; a resync fixes it)');
+                    }
                   }
                   if (bought > 0) {
                     const entries = plan.entries.slice(0, bought);
