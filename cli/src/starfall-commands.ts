@@ -688,6 +688,11 @@ export const starfall = async (argv: string[]): Promise<number> => {
                     );
                   }
                 } else {
+                  // Purchases take the next ticket index, so two built in the same moment can't both
+                  // land: agents that started together wait a random 0-90 s before buying.
+                  const stagger = Math.floor(Math.random() * 90_000);
+                  if (stagger > 0) await Promise.race([new Promise((r) => setTimeout(r, stagger)), stopped]);
+                  if (stop) break;
                   const tickets = plan.entries.map((e) => Starfall.makeTicket(plan.draw, e, mine));
                   log(
                     `draw ${plan.draw} (sales close ${iso(plan.salesClose)}): buying ${tickets.length} ticket(s), ${plan.games} game(s), ${tn(plan.cost)}:\n` +

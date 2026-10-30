@@ -26,7 +26,8 @@ export const reasonOf = (err: unknown, max = 600): string => {
   while (current !== undefined && current !== null && !seen.has(current) && parts.length < 6) {
     seen.add(current);
     const message = current instanceof Error ? current.message : typeof current === 'string' ? current : JSON.stringify(current);
-    const line = String(message).split('\n')[0].trim();
+    // one line: a pretty-printed JSON message would otherwise read as "{"
+    const line = String(message).replace(/\s+/g, ' ').trim();
     if (line && !parts.includes(line)) parts.push(line);
     current = current instanceof Error ? (current as Error & { cause?: unknown }).cause : undefined;
   }
