@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { declaredTime, declareFeesAtDustTime } from '../dust-time.js';
 
 const at = (iso: string) => new Date(iso);
-const stateAt = (syncTime: Date | undefined, grace: bigint | undefined = 10_800n) => ({
-  dust: { state: { state: { syncTime, params: grace === undefined ? {} : { dustGracePeriodSeconds: grace } } } },
+const stateAt = (syncTime: Date | undefined, grace: bigint | null = 10_800n) => ({
+  dust: { state: { state: { syncTime, params: grace === null ? {} : { dustGracePeriodSeconds: grace } } } },
 });
 const NOW = at('2026-10-31T05:10:00Z').getTime();
 
@@ -12,14 +12,15 @@ describe('declaredTime', () => {
     expect(declaredTime(stateAt(at('2026-10-31T05:07:00Z')), NOW)).toEqual(at('2026-10-31T05:07:00Z'));
   });
   it('falls back (undefined) when the view is too old, in the future, or unknown', () => {
-    expect(declaredTime(stateAt(at('2026-10-31T02:30:00Z')), NOW)).toBeUndefined(); // 2h40 old, grace 3h less 10 min margin
+    expect(declaredTime(stateAt(at('2026-10-31T02:30:00Z')), NOW)).toEqual(at('2026-10-31T02:30:00Z')); // 2h40 old: inside 3h less 10 min
+    expect(declaredTime(stateAt(at('2026-10-31T02:15:00Z')), NOW)).toBeUndefined(); // 2h55 old: outside
     expect(declaredTime(stateAt(at('2026-10-31T05:11:00Z')), NOW)).toBeUndefined();
     expect(declaredTime(stateAt(undefined), NOW)).toBeUndefined();
     expect(declaredTime({}, NOW)).toBeUndefined();
   });
   it('assumes an hour of grace when the parameters are missing', () => {
-    expect(declaredTime(stateAt(at('2026-10-31T04:30:00Z'), undefined), NOW)).toEqual(at('2026-10-31T04:30:00Z'));
-    expect(declaredTime(stateAt(at('2026-10-31T04:15:00Z'), undefined), NOW)).toBeUndefined();
+    expect(declaredTime(stateAt(at('2026-10-31T04:30:00Z'), null), NOW)).toEqual(at('2026-10-31T04:30:00Z'));
+    expect(declaredTime(stateAt(at('2026-10-31T04:15:00Z'), null), NOW)).toBeUndefined();
   });
 });
 
