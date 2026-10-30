@@ -665,6 +665,21 @@ export const starfall = async (argv: string[]): Promise<number> => {
           const stopped = untilStopped().then(() => {
             stop = true;
           });
+          // The keeper's watchdogs, for agents too: a pass that never finishes (pixel sat silent
+          // for 7 hours on 30 Oct after a wallet sync problem, waiting for a synced state that
+          // never came) or a wallet whose sync stops moving restarts the agent.
+          let restartCode = 0;
+          let lastPassAt = Date.now();
+          const restartFor = (fired: boolean) => {
+            if (!fired || stop) return;
+            restartCode = RESTART;
+            stop = true;
+            forceExit(RESTART);
+          };
+          const silence = untilSilentFor(silentAfter(values['silent-after']), () => lastPassAt, session.logger);
+          const sync = watchSync(wallet, { stallMinutes: stallAfter(values['stall-after']), logger: session.logger });
+          void silence.done.then(restartFor);
+          void sync.stalled.then(restartFor);
           let failures = 0;
           let skippedDraw = '';
           // A refused purchase is tried again after a pause, three times a draw at most, so a
@@ -760,8 +775,12 @@ export const starfall = async (argv: string[]): Promise<number> => {
                 return RESTART;
               }
             }
+            lastPassAt = Date.now();
             await Promise.race([new Promise((r) => setTimeout(r, 30_000)), stopped]);
           }
+          silence.cancel();
+          sync.stop();
+          if (restartCode) return restartCode;
           log(opts.maxDraws && state.purchases.length >= opts.maxDraws ? `played ${opts.maxDraws} draw(s); done` : 'stopping');
           return 0;
         } finally {
