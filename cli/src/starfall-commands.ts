@@ -64,7 +64,7 @@ import {
   verifyStarfall,
   writeStarfallRecord,
 } from './starfall.js';
-import { watchSync } from './sync-watch.js';
+import { waitForTip, watchSync } from './sync-watch.js';
 
 export const STARFALL_USAGE = `usage: ./lunardraw starfall <command>
   keygen settlement --out <file>
@@ -470,7 +470,8 @@ export const starfall = async (argv: string[]): Promise<number> => {
           const base = { organiserSecret };
           const joined = await joinStarfall(providers, record.contractAddress, base);
           const lead = values['prove-lead'] === undefined ? undefined : Number(values['prove-lead']);
-          const chain = new MidnightStarfallChain(joined, providers.publicDataProvider, providers.privateStateProvider, record.contractAddress, base, lead);
+          const atTip = () => waitForTip(wallet, { logger: session.logger });
+          const chain = new MidnightStarfallChain(joined, providers.publicDataProvider, providers.privateStateProvider, record.contractAddress, base, lead, Date.now, atTip);
           const feedPath = values.feed;
           // When each draw's steps happened, as seen from here (kept beside the feed across restarts).
           const stepTimes = feedPath ? new StepTimes(`${feedPath}.steps.json`) : undefined;
@@ -532,7 +533,9 @@ export const starfall = async (argv: string[]): Promise<number> => {
           const view = await readStarfallView(providers.publicDataProvider, record.contractAddress);
           if (!view.oracleKeyReady) throw new Error('the oracle key is not active yet: run `./lunardraw starfall accept-key` first');
           const joined = await joinStarfall(providers, record.contractAddress, { oracleSecretKey: sk });
-          const chain = new MidnightStarfallChain(joined, providers.publicDataProvider, providers.privateStateProvider, record.contractAddress);
+          const chain = new MidnightStarfallChain(joined, providers.publicDataProvider, providers.privateStateProvider, record.contractAddress, {}, 300, Date.now, () =>
+            waitForTip(wallet, { logger: session.logger }),
+          );
           const oracle = new DrawOracle({ chain, publicKey: pk, logger: session.logger });
           oracle.start();
           session.logger.info(`Starfall draw oracle running for ${record.contractAddress}. Press Ctrl+C to stop.`);
