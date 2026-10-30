@@ -655,11 +655,15 @@ export const starfall = async (argv: string[]): Promise<number> => {
                 }
                 if (opts.maxDraws && state.purchases.length >= opts.maxDraws) break;
               } else if (plan) {
-                const { night } = await walletBalances(wallet);
-                if (night < plan.cost) {
+                const { night, dust } = await walletBalances(wallet);
+                if (night < plan.cost || dust <= 0n) {
                   if (plan.draw.toString() !== skippedDraw) {
                     skippedDraw = plan.draw.toString();
-                    log(`sitting out draw ${plan.draw}: ${plan.games} game(s) cost ${tn(plan.cost)} but the wallet holds ${tn(night)}`);
+                    log(
+                      night < plan.cost
+                        ? `sitting out draw ${plan.draw}: ${plan.games} game(s) cost ${tn(plan.cost)} but the wallet holds ${tn(night)}`
+                        : `sitting out draw ${plan.draw}: the wallet has ${tn(night)} but no DUST yet to pay the fee (it builds up a few minutes after the tNIGHT arrives)`,
+                    );
                   }
                 } else {
                   const tickets = plan.entries.map((e) => Starfall.makeTicket(plan.draw, e, mine));
