@@ -151,8 +151,22 @@ const backupCommitmentFrom = (value: string): Uint8Array => {
  * balances), and paid again from the same proof if the node calls the fee
  * proof stale. See fresh-fees.ts.
  */
-const freshFees = <P extends ReturnType<typeof starfallProviders>>(providers: P, wallet: Parameters<typeof waitForTip>[0], logger: { info(msg: string): void; warn(msg: string): void }): P =>
-  withFreshFees(providers, { beforeBalance: () => waitForTip(wallet, { logger, timeoutMs: 60_000 }), isStale: isStaleDustProof, logger });
+const freshFees = <P extends ReturnType<typeof starfallProviders>>(
+  providers: P,
+  wallet: Parameters<typeof waitForTip>[0],
+  logger: { info(msg: string): void; warn(msg: string): void; error(msg: string): void },
+): { providers: P; stuck: Promise<boolean> } => {
+  let markStuck: (v: boolean) => void = () => undefined;
+  const stuck = new Promise<boolean>((resolve) => (markStuck = resolve));
+  const onStuck = () => {
+    logger.error("the node still refuses the wallet's fee proofs after paying again: its DUST view is stuck; restarting to resync it");
+    markStuck(true);
+  };
+  return {
+    providers: withFreshFees(providers, { beforeBalance: () => waitForTip(wallet, { logger, timeoutMs: 60_000 }), isStale: isStaleDustProof, logger, onStuck }),
+    stuck,
+  };
+};
 
 /** The settlement key file: the secret scalar (decimal) and its public point. */
 const settlementFrom = (path: string, needSecret: boolean): { pk: { x: bigint; y: bigint }; sk?: bigint } => {
@@ -473,7 +487,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
         const wallet = await openServiceWallet(session, walletSeed(values.wallet), dustMinutes);
         if (!wallet) return RESTART;
         try {
-          const providers = freshFees(starfallProviders(session, wallet), wallet, session.logger);
+          const { providers, stuck } = freshFees(starfallProviders(session, wallet), wallet, session.logger);
           // The contract is the judge: its stored organiser must be this secret's Starfall commitment.
           const opens = organiserCheck(await readStarfallLedger(providers.publicDataProvider, record.contractAddress), organiserSecret);
           if (!opens.ok) throw new Error(`${values.organiser} can't run this deployment: ${opens.detail}`);
@@ -514,7 +528,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
           const watchdog = untilFailingFor(restartAfter(values['restart-after']), () => keeper.status().streak, session.logger);
           const sync = watchSync(wallet, { stallMinutes: stallAfter(values['stall-after']), logger: session.logger });
           const silence = untilSilentFor(silentAfter(values['silent-after']), () => keeper.status().lastTickAt, session.logger);
-          const restart = await Promise.race([untilStopped().then(() => false), watchdog.done, sync.stalled, silence.done]);
+          const restart = await Promise.race([untilStopped().then(() => false), watchdog.done, sync.stalled, silence.done, stuck]);
           watchdog.cancel();
           sync.stop();
           silence.cancel();
@@ -538,7 +552,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
         const wallet = await openServiceWallet(session, walletSeed(values.wallet), dustMinutes);
         if (!wallet) return RESTART;
         try {
-          const providers = freshFees(starfallProviders(session, wallet), wallet, session.logger);
+          const { providers, stuck } = freshFees(starfallProviders(session, wallet), wallet, session.logger);
           const view = await readStarfallView(providers.publicDataProvider, record.contractAddress);
           if (!view.oracleKeyReady) throw new Error('the oracle key is not active yet: run `./lunardraw starfall accept-key` first');
           const joined = await joinStarfall(providers, record.contractAddress, { oracleSecretKey: sk });
@@ -549,7 +563,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
           const watchdog = untilFailingFor(restartAfter(values['restart-after']), () => oracle.status().streak, session.logger);
           const sync = watchSync(wallet, { stallMinutes: stallAfter(values['stall-after']), logger: session.logger });
           const silence = untilSilentFor(silentAfter(values['silent-after']), () => oracle.status().lastTickAt, session.logger);
-          const restart = await Promise.race([untilStopped().then(() => false), watchdog.done, sync.stalled, silence.done]);
+          const restart = await Promise.race([untilStopped().then(() => false), watchdog.done, sync.stalled, silence.done, stuck]);
           watchdog.cancel();
           sync.stop();
           silence.cancel();

@@ -29,6 +29,12 @@ export interface FreshFeeOptions {
   pauseMs?: number;
   logger?: Logger;
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * Called when the fee is still refused as stale after every retry. A wallet
+   * whose connection has gone quiet keeps building the same stale fee, and
+   * reconnecting (restarting) is what fixes it.
+   */
+  onStuck?: () => void;
 }
 
 interface Providers<W, M> {
@@ -61,6 +67,9 @@ export const withFreshFees = <
   const midnight = providers.midnightProvider as unknown as { submitTx(tx: unknown): Promise<unknown> };
   /** Balanced transaction → what it was balanced from. */
   const sources = new WeakMap<object, unknown[]>();
+  // Midnight's submission errors arrive wrapped in an Effect FiberFailure,
+  // whose message can leave out the node's code; its text (toString) has it.
+  const stale = (err: unknown): boolean => opts.isStale(err) || opts.isStale(new Error(String(err)));
 
   const balance = async (...args: unknown[]): Promise<unknown> => {
     await opts.beforeBalance();
@@ -74,9 +83,9 @@ export const withFreshFees = <
       return await midnight.submitTx(tx);
     } catch (first) {
       const args = tx && typeof tx === 'object' ? sources.get(tx) : undefined;
-      if (!args || !opts.isStale(first)) throw first;
+      if (!args || !stale(first)) throw first;
       let err: unknown = first;
-      for (let i = 1; i <= retries && opts.isStale(err); i++) {
+      for (let i = 1; i <= retries && stale(err); i++) {
         opts.logger?.info(`the node refused the fee proof as stale (custom error 170); paying the fee again from the latest DUST (try ${i} of ${retries})`);
         await sleep(pauseMs);
         let again: unknown;
@@ -94,6 +103,7 @@ export const withFreshFees = <
           err = e;
         }
       }
+      if (stale(err)) opts.onStuck?.();
       throw err;
     }
   };
