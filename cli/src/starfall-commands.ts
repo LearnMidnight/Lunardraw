@@ -643,6 +643,9 @@ export const starfall = async (argv: string[]): Promise<number> => {
           });
           let failures = 0;
           let skippedDraw = '';
+          // A refused purchase is tried again after a pause, three times a draw at most, so a
+          // wallet or node problem doesn't turn into a proof every 30 seconds.
+          const attempts = new Map<string, { n: number; nextAt: number }>();
           while (!stop) {
             try {
               const view = await readStarfallView(providers.publicDataProvider, record.contractAddress);
@@ -665,6 +668,14 @@ export const starfall = async (argv: string[]): Promise<number> => {
                   log(`sitting out draw ${key}: ${plan.skipped}`);
                 }
                 if (opts.maxDraws && state.purchases.length >= opts.maxDraws) break;
+              } else if (plan && (attempts.get(plan.draw.toString())?.n ?? 0) >= 3) {
+                // Three refusals in a row point at a stale wallet view (node error 1010 custom 170,
+                // a DUST spend proof built before every DUST event was synced): restart to resync.
+                session.logger.error(`[${name}] three purchases for draw ${plan.draw} were refused; restarting to resync the wallet`);
+                forceExit(RESTART);
+                return RESTART;
+              } else if (plan && (attempts.get(plan.draw.toString())?.nextAt ?? 0) > Date.now()) {
+                /* waiting out the pause after a refused purchase */
               } else if (plan) {
                 const { night, dust } = await walletBalances(wallet);
                 if (night < plan.cost || dust <= 0n) {
@@ -693,7 +704,14 @@ export const starfall = async (argv: string[]): Promise<number> => {
                     if (!(err instanceof BuyStopped)) throw err;
                     bought = err.bought;
                     txs = Math.ceil(err.bought / Number(Starfall.pureCircuits.maxTickets()));
-                    log(`stopped after ${err.bought} of ${err.of} ticket(s): ${err.message}`);
+                    const a = attempts.get(plan.draw.toString()) ?? { n: 0, nextAt: 0 };
+                    a.n += 1;
+                    a.nextAt = Date.now() + 3 * 60_000;
+                    attempts.set(plan.draw.toString(), a);
+                    log(`stopped after ${err.bought} of ${err.of} ticket(s): ${err.message}${a.n < 3 ? '; trying again in 3 minutes' : ''}`);
+                    if (/custom error: 170\b/i.test(err.message)) {
+                      log('(the wallet built its fee proof before it had synced every DUST event; a resync fixes it)');
+                    }
                   }
                   if (bought > 0) {
                     const entries = plan.entries.slice(0, bought);

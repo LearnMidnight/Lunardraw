@@ -15,6 +15,7 @@ import { sampleSigningKey } from '@midnight-ntwrk/midnight-js-protocol/ledger';
 import type { MidnightWalletProvider } from '@midnight-ntwrk/testkit-js';
 import { Starfall } from '@lunardraw/contract';
 import {
+  reasonOf,
   type DrawOracleChain,
   type StarfallChain,
   type StarfallView,
@@ -258,7 +259,7 @@ export const buyGames = async (
     try {
       await Promise.race([contract.callTx.buyTickets(BigInt(part.length), { bytes: refundTo }), timedOut]);
     } catch (err) {
-      throw new BuyStopped(i, games.length, err instanceof Error ? err.message : String(err));
+      throw new BuyStopped(i, games.length, reasonOf(err)); // the cause chain carries the node's reason (1010 custom codes)
     } finally {
       clearTimeout(timer);
     }
