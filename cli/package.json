@@ -15,7 +15,7 @@
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json && chmod +x dist/main.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run src/test/offline.test.ts src/test/starfall-offline.test.ts src/test/dust-wait.test.ts src/test/sync-watch.test.ts src/test/starfall-agent.test.ts",
+    "test": "vitest run src/test/offline.test.ts src/test/starfall-offline.test.ts src/test/dust-wait.test.ts src/test/sync-watch.test.ts src/test/starfall-agent.test.ts src/test/silence-watchdog.test.ts",
     "test:e2e": "LUNARDRAW_E2E=1 vitest run src/test/e2e.test.ts src/test/starfall-e2e.test.ts"
   },
   "dependencies": {

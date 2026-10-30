@@ -72,14 +72,18 @@ export class DrawOracle {
   }
 
   /** Answers failing in a row (see {@link FailureStreak}). */
-  status(): { streak: FailureStreak } {
-    return { streak: this.streak.get() };
+  /** When the last pass ended (local clock), hung or not: for the silence watchdog. */
+  private lastTickAt: number | undefined;
+
+  status(): { streak: FailureStreak; lastTickAt?: number } {
+    return { streak: this.streak.get(), lastTickAt: this.lastTickAt };
   }
 
   tick(): Promise<OracleReport> {
     if (!this.busy) {
       this.busy = this.doTick().finally(() => {
         this.busy = undefined;
+        this.lastTickAt = this.cfg.clock();
       });
     }
     return this.busy;
