@@ -148,6 +148,49 @@ export const untilFailingFor = (
   };
 };
 
+/**
+ * Resolves (true) when no pass has finished for `minutes`: the process is
+ * hung inside a pass (a chain read that never returns, say), which the
+ * failing-transactions and sync watchdogs can't see. The caller exits so the
+ * service manager restarts it. 0 turns it off. Because the hung pass may never
+ * let a graceful stop finish, `forceExit` arms a hard exit after `graceMs`.
+ */
+export const untilSilentFor = (
+  minutes: number,
+  lastPassAt: () => number | undefined,
+  logger: { error(msg: string): void },
+): { done: Promise<boolean>; cancel(): void } => {
+  let timer: ReturnType<typeof setInterval> | undefined;
+  const started = Date.now();
+  const done = new Promise<boolean>((resolve) => {
+    if (!(minutes > 0)) return;
+    timer = setInterval(() => {
+      const last = lastPassAt() ?? started;
+      if (Date.now() - last >= minutes * 60_000) {
+        logger.error(`no pass has finished for ${Math.round((Date.now() - last) / 60_000)} minutes: the process is stuck; restarting`);
+        resolve(true);
+      }
+    }, 30_000);
+  });
+  return {
+    done,
+    cancel: () => {
+      if (timer) clearInterval(timer);
+    },
+  };
+};
+
+/** Exit with `code` after `ms` whatever is still running (a stuck pass can block a graceful stop forever). */
+export const forceExit = (code: number, ms = 30_000): void => {
+  setTimeout(() => process.exit(code), ms).unref();
+};
+
+export const silentAfter = (value: string | undefined): number => {
+  const m = value === undefined ? 10 : Number(value);
+  if (!(m >= 0)) throw new Error('--silent-after must be a number of minutes (0 to turn it off)');
+  return m;
+};
+
 export const stallAfter = (value: string | undefined): number => {
   const m = value === undefined ? 15 : Number(value);
   if (!(m >= 0)) throw new Error('--stall-after must be a number of minutes (0 to turn it off)');

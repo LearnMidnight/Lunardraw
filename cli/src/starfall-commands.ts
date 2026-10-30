@@ -22,10 +22,13 @@ import {
   proofServerPort,
   publicDataFor,
   readKeyFile,
+  forceExit,
   RESTART,
   restartAfter,
+  silentAfter,
   stallAfter,
   untilFailingFor,
+  untilSilentFor,
   untilStopped,
   walletSeed,
   withSession,
@@ -71,8 +74,9 @@ export const STARFALL_USAGE = `usage: ./lunardraw starfall <command>
   accept-key   --network <network> --oracle <file> --wallet <file>
   keeper       --network <network> --organiser <file> --settlement <file> --wallet <file> [--every <seconds>] [--feed <file>]
                [--proof-server-port <port>] [--prove-lead <secs>] [--restart-after <min>] [--stall-after <min>] [--dust-wait <min>]
+               [--silent-after <min>]
   oracle       --network <network> --oracle <file> --wallet <file> [--proof-server-port <port>] [--restart-after <min>] [--stall-after <min>]
-               [--dust-wait <min>]
+               [--dust-wait <min>] [--silent-after <min>]
   buy          --network <network> --wallet <file> [--pay-to <address>] [--proof-server-port <port>]
                [--games <n> | --package <${Object.keys(Starfall.QUICK_PICK_PACKAGES).join('|')}>] [--sweep]
                | [--system <8-12> | --pick <5|6>] [--numbers "<n n n ...>"] [--moonball <1-20> | --sweep]
@@ -309,6 +313,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
       'proof-server-port': { type: 'string' },
       'restart-after': { type: 'string' },
       'stall-after': { type: 'string' },
+      'silent-after': { type: 'string' },
       'dust-wait': { type: 'string' },
       'prove-lead': { type: 'string' },
       accept: { type: 'boolean', default: false },
@@ -498,9 +503,12 @@ export const starfall = async (argv: string[]): Promise<number> => {
           );
           const watchdog = untilFailingFor(restartAfter(values['restart-after']), () => keeper.status().streak, session.logger);
           const sync = watchSync(wallet, { stallMinutes: stallAfter(values['stall-after']), logger: session.logger });
-          const restart = await Promise.race([untilStopped().then(() => false), watchdog.done, sync.stalled]);
+          const silence = untilSilentFor(silentAfter(values['silent-after']), () => keeper.status().lastTickAt, session.logger);
+          const restart = await Promise.race([untilStopped().then(() => false), watchdog.done, sync.stalled, silence.done]);
           watchdog.cancel();
           sync.stop();
+          silence.cancel();
+          if (restart) forceExit(RESTART);
           session.logger.info('Stopping the keeper...');
           await keeper.stop();
           return restart ? RESTART : 0;
@@ -530,9 +538,12 @@ export const starfall = async (argv: string[]): Promise<number> => {
           session.logger.info(`Starfall draw oracle running for ${record.contractAddress}. Press Ctrl+C to stop.`);
           const watchdog = untilFailingFor(restartAfter(values['restart-after']), () => oracle.status().streak, session.logger);
           const sync = watchSync(wallet, { stallMinutes: stallAfter(values['stall-after']), logger: session.logger });
-          const restart = await Promise.race([untilStopped().then(() => false), watchdog.done, sync.stalled]);
+          const silence = untilSilentFor(silentAfter(values['silent-after']), () => oracle.status().lastTickAt, session.logger);
+          const restart = await Promise.race([untilStopped().then(() => false), watchdog.done, sync.stalled, silence.done]);
           watchdog.cancel();
           sync.stop();
+          silence.cancel();
+          if (restart) forceExit(RESTART);
           session.logger.info('Stopping the oracle...');
           await oracle.stop();
           return restart ? RESTART : 0;
