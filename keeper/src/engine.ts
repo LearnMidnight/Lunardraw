@@ -29,13 +29,13 @@ export const isStaleDustProof = (err: unknown): boolean => /custom error: 170\b/
 const QUICK_RETRY_MS = 15_000;
 
 /** Drop stack frames ("at file:///…", "at process.x (node:…)") from a message that carries its own stack. */
-const stripFrames = (line: string): string =>
-  line
-    .replace(/ at (?:async )?(?:[\w.<>#$[\]]+ \()?(?:file:\/\/|node:|\/)[^ )]*\)?/g, '')
-    .replace(/ \{ \[cause\]: /g, ': ')
-    .replace(/( \})+$/g, '')
-    .replace(/ +/g, ' ')
-    .trim();
+const stripFrames = (line: string): string => {
+  const noFrames = line.replace(/ at (?:async )?(?:[\w.<>#$[\]]+ \()?(?:file:\/\/|node:|\/)[^ )]*\)?/g, '');
+  const causes = / \{ \[cause\]: /.test(noFrames);
+  const flat = noFrames.replace(/ \{ \[cause\]: /g, ': ');
+  // the closing braces of the [cause] blocks, only when there were any
+  return (causes ? flat.replace(/( \})+$/g, '') : flat).replace(/ +/g, ' ').trim();
+};
 
 export const reasonOf = (err: unknown, max = 600): string => {
   const parts: string[] = [];
