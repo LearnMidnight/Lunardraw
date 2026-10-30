@@ -11,6 +11,7 @@ import { encodeContractAddress } from '@midnight-ntwrk/compact-runtime';
 import { MidnightBech32m } from '@midnight-ntwrk/wallet-sdk-address-format';
 import { quickPick, Starfall } from '@lunardraw/contract';
 import { buildStarfallFeed, DerivedSeeds, DrawOracle, every, isStaleDustProof, STARFALL_WEEKLY, StarfallKeeper, type StarfallView, StepTimes, writeFeed } from '@lunardraw/keeper';
+import { declareFeesAtDustTime, type DustTimeWallet } from './dust-time.js';
 import { withFreshFees } from './fresh-fees.js';
 import { compilerInfo, localFingerprints, NETWORKS, openWallet, type Session, walletAddress, walletBalances } from '@nightcast/deploy';
 import {
@@ -217,7 +218,10 @@ const openServiceWallet = async (session: Session, seed: string | undefined, min
     session.logger.error(`still no DUST after ${minutes} minutes of waiting (the wallet's view may be stale); restarting to resync it`),
   );
   try {
-    return await Promise.race([openWallet(session, { seed, onWaitingForDust: dust.start }), dust.late]);
+    const wallet = await Promise.race([openWallet(session, { seed, onWaitingForDust: dust.start }), dust.late]);
+    // Fees are declared at the time the wallet's DUST view is from (see dust-time.ts).
+    if (wallet) declareFeesAtDustTime(wallet as unknown as DustTimeWallet, session.logger);
+    return wallet;
   } finally {
     dust.cancel();
   }
