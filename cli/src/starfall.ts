@@ -137,8 +137,15 @@ export class MidnightStarfallChain implements StarfallChain, DrawOracleChain {
     private readonly proveLeadSecs = 300,
     /** Local clock in ms (the simulator's in tests). */
     private readonly clock: () => number = Date.now,
+    /** Run before every transaction (the keeper waits for its wallet to reach the tip). */
+    private readonly beforeTx?: () => Promise<unknown>,
   ) {
     this.addressBytes = encodeContractAddress(contractAddress);
+  }
+
+  private async tx(send: () => Promise<unknown>): Promise<void> {
+    await this.beforeTx?.();
+    await send();
   }
 
   view(): Promise<StarfallView> {
@@ -154,19 +161,19 @@ export class MidnightStarfallChain implements StarfallChain, DrawOracleChain {
   }
 
   async openDraw(salesClose: bigint, seedCommitment: Uint8Array): Promise<void> {
-    await this.contract.callTx.requestDraw(0n, new Uint8Array(32), { is_some: true, value: { salesClose, seedCommitment } });
+    await this.tx(() => this.contract.callTx.requestDraw(0n, new Uint8Array(32), { is_some: true, value: { salesClose, seedCommitment } }));
   }
 
   async requestDraw(n: bigint, seed: Uint8Array, next?: NextDraw): Promise<void> {
-    await this.contract.callTx.requestDraw(n, seed, next ? { is_some: true, value: next } : NO_NEXT);
+    await this.tx(() => this.contract.callTx.requestDraw(n, seed, next ? { is_some: true, value: next } : NO_NEXT));
   }
 
   async fulfilDraw(n: bigint): Promise<void> {
-    await this.contract.callTx.fulfilDraw(n);
+    await this.tx(() => this.contract.callTx.fulfilDraw(n));
   }
 
   async computeNumbers(n: bigint): Promise<void> {
-    await this.contract.callTx.computeNumbers(n, BigInt(Math.floor(this.clock() / 1000) + this.proveLeadSecs));
+    await this.tx(() => this.contract.callTx.computeNumbers(n, BigInt(Math.floor(this.clock() / 1000) + this.proveLeadSecs)));
   }
 
   /** The settlement witness reads the decrypted tickets from the private state, so put them there first. */
@@ -174,7 +181,7 @@ export class MidnightStarfallChain implements StarfallChain, DrawOracleChain {
     this.privateState.setContractAddress(this.contractAddress);
     await this.privateState.set(STARFALL_PRIVATE_STATE_ID, { ...this.base, settling: { drawId: n, tickets } });
     try {
-      await this.contract.callTx.settleBatch(n);
+      await this.tx(() => this.contract.callTx.settleBatch(n));
     } finally {
       // Don't keep a draw's decrypted tickets around any longer than needed.
       this.privateState.setContractAddress(this.contractAddress);
@@ -183,19 +190,19 @@ export class MidnightStarfallChain implements StarfallChain, DrawOracleChain {
   }
 
   async finaliseDraw(n: bigint): Promise<void> {
-    await this.contract.callTx.finaliseDraw(n);
+    await this.tx(() => this.contract.callTx.finaliseDraw(n));
   }
 
   async payEntitlement(id: Uint8Array): Promise<void> {
-    await this.contract.callTx.payEntitlement(id);
+    await this.tx(() => this.contract.callTx.payEntitlement(id));
   }
 
   async voidDraw(n: bigint): Promise<void> {
-    await this.contract.callTx.voidDraw(n);
+    await this.tx(() => this.contract.callTx.voidDraw(n));
   }
 
   async refundTicket(n: bigint, index: bigint): Promise<void> {
-    await this.contract.callTx.refundTicket(n, index);
+    await this.tx(() => this.contract.callTx.refundTicket(n, index));
   }
 }
 

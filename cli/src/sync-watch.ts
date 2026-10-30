@@ -27,6 +27,55 @@ export const positionsOf = (state: unknown): string => {
   return `shielded:${pos(s.shielded?.state?.progress)}|unshielded:${pos(s.unshielded?.progress)}|dust:${pos(s.dust?.state?.progress)}`;
 };
 
+/** Whether one part of the wallet has applied everything the indexer has (its progress is complete). */
+const partAtTip = (p: (Progress & { isStrictlyComplete?: () => boolean }) | undefined): boolean => {
+  if (!p) return true; // nothing known: don't hold the transaction on it
+  if (typeof p.isStrictlyComplete === 'function') return p.isStrictlyComplete();
+  const applied = p.appliedIndex ?? p.appliedId;
+  const target = p.highestRelevantWalletIndex ?? p.highestTransactionId ?? p.highestIndex;
+  return applied === undefined || target === undefined || applied >= target;
+};
+
+/** Synced, with the DUST and shielded parts at the tip: a fee proof built now refers to the current DUST state. */
+export const atTip = (state: unknown): boolean => {
+  const s = state as StateLike & { dust?: { state?: { progress?: Progress & { isStrictlyComplete?: () => boolean } } } };
+  return s.isSynced === true && partAtTip(s.dust?.state?.progress) && partAtTip(s.shielded?.state?.progress as never);
+};
+
+/**
+ * Wait until the wallet is at the tip before building a transaction. A fee
+ * proof built while the DUST part lags, even by a few events, is refused by
+ * the node (1010 custom 170, InvalidDustSpendProof); on the Preprod soak this
+ * cost each reveal three or four 50-second attempts just after the hour, when
+ * the purchases before close leave the wallet behind. Gives up after
+ * `timeoutMs` (the transaction is then tried anyway).
+ */
+export const waitForTip = async (
+  wallet: { wallet: { state(): Subscribable } },
+  opts: { timeoutMs?: number; logger?: { info(msg: string): void } } = {},
+): Promise<boolean> => {
+  const timeoutMs = opts.timeoutMs ?? 90_000;
+  const started = Date.now();
+  let waited = false;
+  return new Promise<boolean>((resolve) => {
+    let sub: { unsubscribe(): void } | undefined;
+    const finish = (ok: boolean) => {
+      clearTimeout(timer);
+      sub?.unsubscribe();
+      if (waited) opts.logger?.info(ok ? `wallet at the tip after ${Math.round((Date.now() - started) / 1000)} s` : `wallet still behind after ${Math.round(timeoutMs / 1000)} s; sending anyway`);
+      resolve(ok);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    sub = wallet.wallet.state().subscribe((s) => {
+      if (atTip(s)) finish(true);
+      else if (!waited) {
+        waited = true;
+        opts.logger?.info('waiting for the wallet to reach the tip before building the transaction');
+      }
+    });
+  });
+};
+
 /** Tracks when the wallet's positions last moved. */
 export class SyncWatch {
   private last = '';
