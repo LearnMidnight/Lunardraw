@@ -25,8 +25,17 @@ export type TickReport = { done: string[]; failed: { step: string; error: string
  * with the step; rebuilding a few seconds later lands. Backing off
  * exponentially on it turned seconds of lag into minutes (Preprod, 30 Oct 2026).
  */
-export const isStaleDustProof = (error: string): boolean => /custom error: 170\b/i.test(error);
+export const isStaleDustProof = (err: unknown): boolean => /custom error: 170\b/i.test(reasonOf(err, 100_000));
 const QUICK_RETRY_MS = 15_000;
+
+/** Drop stack frames ("at file:///…", "at process.x (node:…)") from a message that carries its own stack. */
+const stripFrames = (line: string): string =>
+  line
+    .replace(/ at (?:async )?(?:[\w.<>#$[\]]+ \()?(?:file:\/\/|node:|\/)[^ )]*\)?/g, '')
+    .replace(/ \{ \[cause\]: /g, ': ')
+    .replace(/( \})+$/g, '')
+    .replace(/ +/g, ' ')
+    .trim();
 
 export const reasonOf = (err: unknown, max = 600): string => {
   const parts: string[] = [];
@@ -37,7 +46,7 @@ export const reasonOf = (err: unknown, max = 600): string => {
     const obj = typeof current === 'object' ? (current as { message?: unknown; cause?: unknown }) : undefined;
     const message = obj && typeof obj.message === 'string' ? obj.message : typeof current === 'string' ? current : JSON.stringify(current);
     // one line: a pretty-printed JSON message would otherwise read as "{"
-    const line = String(message).replace(/\s+/g, ' ').trim();
+    const line = stripFrames(String(message).replace(/\s+/g, ' ').trim());
     if (line && !parts.includes(line)) parts.push(line);
     // follow `cause` whatever the class: effect's errors don't always pass instanceof Error
     current = obj?.cause;
@@ -314,7 +323,7 @@ export class StepEngine<V, S extends { kind: string }> {
       } catch (err) {
         const error = reasonOf(err);
         const n = (failed?.failures ?? 0) + 1;
-        const delay = isStaleDustProof(error) ? QUICK_RETRY_MS : Math.min(this.backoffMs * 2 ** (n - 1), this.maxBackoffMs);
+        const delay = isStaleDustProof(err) ? QUICK_RETRY_MS : Math.min(this.backoffMs * 2 ** (n - 1), this.maxBackoffMs);
         this.failures.set(key, { failures: n, nextTryAt: this.clock() + delay, error });
         this.streak.failed();
         report.failed.push({ step: key, error });
@@ -346,7 +355,7 @@ export class StepEngine<V, S extends { kind: string }> {
       (err: unknown) => {
         const error = reasonOf(err);
         const n = failuresSoFar + 1;
-        const delay = isStaleDustProof(error) ? QUICK_RETRY_MS : Math.min(this.backoffMs * 2 ** (n - 1), this.maxBackoffMs);
+        const delay = isStaleDustProof(err) ? QUICK_RETRY_MS : Math.min(this.backoffMs * 2 ** (n - 1), this.maxBackoffMs);
         this.failures.set(key, { failures: n, nextTryAt: this.clock() + delay, error });
         this.streak.failed();
         this.finished.push({ key, error });
