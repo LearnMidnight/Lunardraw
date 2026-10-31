@@ -35,7 +35,7 @@ import {
   walletSeed,
   withSession,
 } from './common.js';
-import { deadline, dustWait } from './dust-wait.js';
+import { deadline, dustWait, quietWatch } from './dust-wait.js';
 import { homedir } from 'node:os';
 import {
   type AgentOptions,
@@ -213,17 +213,22 @@ const walletBytes = (wallet: { unshieldedKeystore: { getAddress(): string } }): 
  * waited for DUST longer than `minutes` (the caller then exits with RESTART;
  * see dust-wait.ts).
  */
-const openServiceWallet = async (session: Session, seed: string | undefined, minutes: number) => {
+const openServiceWallet = async (session: Session, seed: string | undefined, minutes: number, quietMinutes = 15) => {
   const dust = deadline(minutes, () =>
     session.logger.error(`still no DUST after ${minutes} minutes of waiting (the wallet's view may be stale); restarting to resync it`),
   );
+  // Opening logs progress every 30-60 s while the wallet's state moves; silence means the state stream stopped.
+  const opening = quietWatch(session, quietMinutes, (m) =>
+    session.logger.error(`the wallet has reported nothing for ${m} minutes while opening (its sync stopped); restarting to resync it`),
+  );
   try {
-    const wallet = await Promise.race([openWallet(session, { seed, onWaitingForDust: dust.start }), dust.late]);
+    const wallet = await Promise.race([openWallet(opening.session, { seed, onWaitingForDust: dust.start }), dust.late, opening.quiet]);
     // Fees are declared at the time the wallet's DUST view is from (see dust-time.ts).
     if (wallet) declareFeesAtDustTime(wallet as unknown as DustTimeWallet, session.logger);
     return wallet;
   } finally {
     dust.cancel();
+    opening.cancel();
   }
 };
 
