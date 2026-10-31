@@ -544,7 +544,7 @@ describe('the Starfall site feed', () => {
     await keeper.tick(); // reveals draw 1 and opens draw 2 in the same transaction
     let f = await feed();
     expect(f.games.starfall.draws.find((d) => d.num === 1)!.tx).toEqual({ open: 'open-1', reveal: 'request-2' });
-    expect(f.games.starfall.draws.find((d) => d.num === 2)!.tx).toEqual({ open: 'request-2' });
+    expect(times.get(2n)?.tx).toEqual({ open: 'request-2' }); // draw 2 is on sale: the feed lists it under open, and its tx once it closes
     sim.advance(20);
     oracleAnswers(sim);
     sim.advance(100);
