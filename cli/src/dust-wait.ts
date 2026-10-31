@@ -60,3 +60,65 @@ export const deadline = (
     },
   };
 };
+
+type LoggerLike = { info(msg: string): void; warn(msg: string): void; error(msg: string): void };
+
+/**
+ * Watch a session's logger while a wallet opens: openWallet logs sync progress
+ * every 30 s and DUST waits every minute, both driven by the wallet's state
+ * updates. If nothing is logged for `minutes`, the wallet's state stream has
+ * stopped (nova, 31 Oct: silent for 7 hours at 99.9% of its first sync), and
+ * `quiet` resolves after `onQuiet` so the caller can restart.
+ */
+export const quietWatch = <S extends { logger: LoggerLike }>(
+  session: S,
+  minutes: number,
+  onQuiet: (minutes: number) => void,
+  now: () => number = Date.now,
+): { session: S; quiet: Promise<undefined>; cancel: () => void } => {
+  let last = now();
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let fire: (v: undefined) => void = () => undefined;
+  const quiet = new Promise<undefined>((resolve) => {
+    fire = resolve;
+  });
+  if (minutes > 0) {
+    timer = setInterval(() => {
+      if (now() - last >= minutes * 60_000) {
+        clearInterval(timer);
+        timer = undefined;
+        onQuiet(Math.round((now() - last) / 60_000));
+        fire(undefined);
+      }
+    }, 30_000);
+  }
+  const touched = new Set(['info', 'warn', 'error']);
+  const logger = new Proxy(session.logger, {
+    get(t, p) {
+      const v = Reflect.get(t, p, t);
+      if (typeof v !== 'function') return v;
+      if (typeof p === 'string' && touched.has(p)) {
+        return (...args: unknown[]) => {
+          last = now();
+          return (v as (...a: unknown[]) => unknown).apply(t, args);
+        };
+      }
+      return (v as (...a: unknown[]) => unknown).bind(t);
+    },
+  });
+  const watched = new Proxy(session, {
+    get(t, p) {
+      if (p === 'logger') return logger;
+      const v = Reflect.get(t, p, t);
+      return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(t) : v;
+    },
+  });
+  return {
+    session: watched,
+    quiet,
+    cancel: () => {
+      if (timer) clearInterval(timer);
+      timer = undefined;
+    },
+  };
+};

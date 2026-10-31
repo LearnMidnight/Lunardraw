@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { deadline, dustWait } from '../dust-wait.js';
+import { deadline, dustWait, quietWatch } from '../dust-wait.js';
 
 describe('the DUST wait limit', () => {
   beforeEach(() => {
@@ -72,5 +72,69 @@ describe('the DUST wait limit', () => {
     d.start();
     await vi.advanceTimersByTimeAsync(24 * 60 * 60_000);
     expect(late).not.toHaveBeenCalled();
+  });
+});
+
+describe('quietWatch', () => {
+  const session = () => {
+    const lines: string[] = [];
+    return {
+      lines,
+      s: {
+        name: 'session',
+        logger: {
+          prefix: '>',
+          info(this: { prefix: string }, m: string) {
+            lines.push(`${this.prefix} ${m}`);
+          },
+          warn(m: string) {
+            lines.push(`warn ${m}`);
+          },
+          error(m: string) {
+            lines.push(`error ${m}`);
+          },
+        },
+        hello() {
+          return (this as { name: string }).name;
+        },
+      },
+    };
+  };
+
+  it('stays quiet while the wallet keeps logging, and fires after the silence', async () => {
+    vi.useFakeTimers();
+    try {
+      const { s, lines } = session();
+      const fired: number[] = [];
+      const w = quietWatch(s, 15, (m) => fired.push(m));
+      let resolved = false;
+      void w.quiet.then(() => (resolved = true));
+      for (let i = 0; i < 40; i++) {
+        await vi.advanceTimersByTimeAsync(30_000);
+        w.session.logger.info('Syncing: dust 99.9%');
+      }
+      expect(fired).toEqual([]);
+      expect(lines[0]).toBe('> Syncing: dust 99.9%');
+      expect(w.session.hello()).toBe('session');
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      expect(fired).toEqual([15]);
+      expect(resolved).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does nothing once cancelled', async () => {
+    vi.useFakeTimers();
+    try {
+      const { s } = session();
+      const fired: number[] = [];
+      const w = quietWatch(s, 15, (m) => fired.push(m));
+      w.cancel();
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(fired).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
