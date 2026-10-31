@@ -497,6 +497,74 @@ describe('the Starfall site feed', () => {
     expect(d1.timeline?.settled_at).toBeDefined();
   }, 60_000);
 
+  it("links each step to the transaction the keeper sent it in, across a restart; a failing listener doesn't stop the keeper", async () => {
+    const ctx = setup();
+    const { sim } = ctx;
+    // The simulator has no transactions: this chain makes up an id for each step it sends.
+    let n = 0;
+    const id = (step: string) => `${step}-${++n}`;
+    class IdChain extends StarfallSimulatorChain {
+      override async openDraw(c: bigint, s: Uint8Array) {
+        await super.openDraw(c, s);
+        return id('open');
+      }
+      override async requestDraw(d: bigint, seed: Uint8Array, next?: Parameters<StarfallSimulatorChain['requestDraw']>[2]) {
+        await super.requestDraw(d, seed, next);
+        return id('request');
+      }
+      override async computeNumbers(d: bigint) {
+        await super.computeNumbers(d);
+        return id('numbers');
+      }
+      override async finaliseDraw(d: bigint) {
+        await super.finaliseDraw(d);
+        return id('finalise');
+      }
+    }
+    const chain = new IdChain(sim);
+    const dir = mkdtempSync(join(tmpdir(), 'steps-'));
+    const path = join(dir, 'feed.json.steps.json');
+    let times = new StepTimes(path);
+    let fail = false;
+    const keeper = ctx.keeper({
+      chain,
+      onTx: (draw, step, txId) => {
+        if (fail) throw new Error('disk full');
+        times.noteTx(draw, step, txId);
+      },
+    });
+    const feed = async () => {
+      const view = await chain.view();
+      times.observe(view, sim.now);
+      return buildStarfallFeed(view, { network: 'local', contract: sim.address, nowSecs: sim.now, steps: times.lookup() });
+    };
+    await keeper.tick(); // opens draw 1
+    sim.buyTickets([makeTicket(1n, quickPick(), BUYER)], BUYER);
+    passing(sim, draw(sim, 1n).salesClose);
+    await keeper.tick(); // reveals draw 1 and opens draw 2 in the same transaction
+    let f = await feed();
+    expect(f.games.starfall.draws.find((d) => d.num === 1)!.tx).toEqual({ open: 'open-1', reveal: 'request-2' });
+    expect(f.games.starfall.draws.find((d) => d.num === 2)!.tx).toEqual({ open: 'request-2' });
+    sim.advance(20);
+    oracleAnswers(sim);
+    sim.advance(100);
+    await keeper.tick(); // numbers
+    times = new StepTimes(path); // a restarted keeper reads the ids back
+    for (let i = 0; i < 4 && draw(sim, 1n).status !== DrawStatus.settled; i++) await keeper.tick(); // settle, finalise
+    f = await feed();
+    const d1 = f.games.starfall.draws.find((d) => d.num === 1)!;
+    expect(d1.status).toBe('settled');
+    expect(d1.tx).toEqual({ open: 'open-1', reveal: 'request-2', numbers: 'numbers-3', finalise: 'finalise-4' });
+    expect(JSON.parse(readFileSync(path, 'utf8'))['1'].tx).toEqual(d1.tx);
+
+    // The draw is settled even when its id can't be written down.
+    fail = true;
+    sim.buyTickets([makeTicket(2n, quickPick(), BUYER)], BUYER);
+    passing(sim, draw(sim, 2n).salesClose);
+    await keeper.tick();
+    expect(draw(sim, 2n).status).toBe(DrawStatus.requested);
+  }, 60_000);
+
   it('counts games (not tickets) sold and refunded: a System 8 is one ticket of 8 games', async () => {
     const ctx = setup();
     const { sim, chain } = ctx;

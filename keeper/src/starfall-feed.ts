@@ -29,6 +29,12 @@ export type StarfallFeedDraw = Omit<FeedDraw, 'status' | 'claim_deadline'> & {
    * site's "how long does a draw take" per step.
    */
   timeline?: { revealed_at?: string; answered_at?: string; drawn_at?: string; settled_at?: string; voided_at?: string };
+  /**
+   * The transactions of the draw's steps that this keeper sent (`open`,
+   * `reveal`, `numbers`, `finalise`, `void`), by step: the site links its
+   * record check to `numbers` and its settlement check to `finalise`.
+   */
+  tx?: Partial<Record<'open' | 'reveal' | 'numbers' | 'finalise' | 'void', string>>;
 };
 
 export type StarfallFeed = {
@@ -119,6 +125,7 @@ export const buildStarfallFeed = (
       const at = (s: number | undefined) => (s === undefined ? undefined : iso(BigInt(s)));
       const timeline = { revealed_at: at(t.revealed), answered_at: at(t.answered), drawn_at: at(t.drawn), settled_at: at(t.settled), voided_at: at(t.voided) };
       out.timeline = Object.fromEntries(Object.entries(timeline).filter(([, v]) => v !== undefined));
+      if (t.tx && Object.keys(t.tx).length) out.tx = { ...t.tx };
     }
     return out;
   };

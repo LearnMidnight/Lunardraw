@@ -11,7 +11,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { Starfall } from '@lunardraw/contract';
-import type { StarfallView } from './starfall.js';
+import type { StarfallTxStep, StarfallView } from './starfall.js';
 
 const { DrawStatus } = Starfall;
 
@@ -22,6 +22,8 @@ export type StepRecord = {
   drawn?: number;
   settled?: number;
   voided?: number;
+  /** The transactions this keeper sent for the draw's steps, by step (the feed's `tx`). */
+  tx?: Partial<Record<StarfallTxStep, string>>;
 };
 
 export class StepTimes {
@@ -81,6 +83,15 @@ export class StepTimes {
       }
     }
     if (changed) this.save();
+  }
+
+  /** Note the transaction a step of draw `id` went in (the keeper's `onTx`). */
+  noteTx(id: bigint, step: StarfallTxStep, txId: string): void {
+    this.load();
+    const rec = this.times.get(id) ?? {};
+    if (rec.tx?.[step] === txId) return;
+    this.times.set(id, { ...rec, tx: { ...rec.tx, [step]: txId } });
+    this.save();
   }
 
   get(id: bigint): StepRecord | undefined {
