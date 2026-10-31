@@ -8,7 +8,7 @@
  * Kept in a small JSON file next to the feed, so a restart doesn't lose them;
  * at most the last `keep` draws.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { Starfall } from '@lunardraw/contract';
 import type { StarfallTxStep, StarfallView } from './starfall.js';
@@ -29,11 +29,35 @@ export type StepRecord = {
 export class StepTimes {
   private readonly times = new Map<bigint, StepRecord>();
   private loaded = false;
+  /** Transaction ids read back from the chain for older draws (`starfall backfill-tx`), reloaded when the file changes. */
+  private backfill = new Map<bigint, Partial<Record<StarfallTxStep, string>>>();
+  private backfillStamp = -1;
 
   constructor(
     private readonly path?: string,
     private readonly keep = 60,
+    private readonly backfillPath?: string,
   ) {}
+
+  private loadBackfill(): void {
+    if (!this.backfillPath) return;
+    let stamp = 0;
+    try {
+      stamp = existsSync(this.backfillPath) ? statSync(this.backfillPath).mtimeMs : 0;
+    } catch {
+      return;
+    }
+    if (stamp === this.backfillStamp) return;
+    this.backfillStamp = stamp;
+    this.backfill = new Map();
+    if (!stamp) return;
+    try {
+      const raw = JSON.parse(readFileSync(this.backfillPath, 'utf8')) as Record<string, { tx?: Partial<Record<StarfallTxStep, string>> }>;
+      for (const [id, rec] of Object.entries(raw)) if (rec?.tx) this.backfill.set(BigInt(id), rec.tx);
+    } catch {
+      /* a broken file adds nothing */
+    }
+  }
 
   /** Load the file, once (a missing or broken file is an empty record). */
   private load(): void {
@@ -94,13 +118,18 @@ export class StepTimes {
     this.save();
   }
 
+  /** A draw's record, with any backfilled transaction ids under its own (its own win). */
   get(id: bigint): StepRecord | undefined {
     this.load();
-    return this.times.get(id);
+    const own = this.times.get(id);
+    const back = this.backfill.get(id);
+    if (!back) return own;
+    return { ...own, tx: { ...back, ...own?.tx } };
   }
 
-  /** For the feed: a lookup by draw id. */
+  /** For the feed: a lookup by draw id (the backfill file is checked for changes once per call). */
   lookup(): (id: bigint) => StepRecord | undefined {
+    this.loadBackfill();
     return (id) => this.get(id);
   }
 }

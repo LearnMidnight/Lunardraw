@@ -6,7 +6,7 @@ import { combineDrawSeed, drawStarfall } from '@nightcast/sdk';
 import { every } from '../schedule.js';
 import { buildStarfallFeed } from '../starfall-feed.js';
 import { StepTimes } from '../step-times.js';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { commitmentOf, DerivedSeeds } from '../seeds.js';
@@ -564,6 +564,18 @@ describe('the Starfall site feed', () => {
     await keeper.tick();
     expect(draw(sim, 2n).status).toBe(DrawStatus.requested);
   }, 60_000);
+
+  it("merges transaction ids read back from the chain under the keeper's own, and picks up a new backfill file", () => {
+    const dir = mkdtempSync(join(tmpdir(), 'steps-'));
+    const back = join(dir, 'feed.json.backfill.json');
+    const times = new StepTimes(join(dir, 'feed.json.steps.json'), 60, back);
+    times.noteTx(5n, 'numbers', 'mine');
+    expect(times.lookup()(4n)).toBeUndefined(); // no backfill file yet
+    writeFileSync(back, JSON.stringify({ 4: { tx: { reveal: 'r4', numbers: 'n4' } }, 5: { tx: { numbers: 'old', finalise: 'f5' } } }));
+    const look = times.lookup();
+    expect(look(4n)).toEqual({ tx: { reveal: 'r4', numbers: 'n4' } });
+    expect(look(5n)?.tx).toEqual({ numbers: 'mine', finalise: 'f5' }); // its own record wins
+  });
 
   it('counts games (not tickets) sold and refunded: a System 8 is one ticket of 8 games', async () => {
     const ctx = setup();
