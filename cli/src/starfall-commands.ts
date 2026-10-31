@@ -525,6 +525,8 @@ export const starfall = async (argv: string[]): Promise<number> => {
             schedule,
             logger: session.logger,
             onView,
+            // each step's transaction id, for the feed's tx (the site's verification links to them)
+            onTx: stepTimes ? (draw, step, txId) => stepTimes.noteTx(draw, step, txId) : undefined,
             background: ['compute', 'settle'],
             backgroundLimit: 1,
             backgroundGapMs: 30_000,

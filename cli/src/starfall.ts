@@ -143,9 +143,11 @@ export class MidnightStarfallChain implements StarfallChain, DrawOracleChain {
     this.addressBytes = encodeContractAddress(contractAddress);
   }
 
-  private async tx(send: () => Promise<unknown>): Promise<void> {
+  /** Send a transaction; resolves with its id once it's on chain. */
+  private async tx(send: () => Promise<unknown>): Promise<string | undefined> {
     await this.beforeTx?.();
-    await send();
+    const r = (await send()) as { public?: { txId?: unknown } } | undefined;
+    return typeof r?.public?.txId === 'string' ? r.public.txId : undefined;
   }
 
   view(): Promise<StarfallView> {
@@ -160,20 +162,20 @@ export class MidnightStarfallChain implements StarfallChain, DrawOracleChain {
     return storedTicketsOf(await readStarfallLedger(this.publicData, this.contractAddress), n);
   }
 
-  async openDraw(salesClose: bigint, seedCommitment: Uint8Array): Promise<void> {
-    await this.tx(() => this.contract.callTx.requestDraw(0n, new Uint8Array(32), { is_some: true, value: { salesClose, seedCommitment } }));
+  async openDraw(salesClose: bigint, seedCommitment: Uint8Array): Promise<string | undefined> {
+    return this.tx(() => this.contract.callTx.requestDraw(0n, new Uint8Array(32), { is_some: true, value: { salesClose, seedCommitment } }));
   }
 
-  async requestDraw(n: bigint, seed: Uint8Array, next?: NextDraw): Promise<void> {
-    await this.tx(() => this.contract.callTx.requestDraw(n, seed, next ? { is_some: true, value: next } : NO_NEXT));
+  async requestDraw(n: bigint, seed: Uint8Array, next?: NextDraw): Promise<string | undefined> {
+    return this.tx(() => this.contract.callTx.requestDraw(n, seed, next ? { is_some: true, value: next } : NO_NEXT));
   }
 
   async fulfilDraw(n: bigint): Promise<void> {
     await this.tx(() => this.contract.callTx.fulfilDraw(n));
   }
 
-  async computeNumbers(n: bigint): Promise<void> {
-    await this.tx(() => this.contract.callTx.computeNumbers(n, BigInt(Math.floor(this.clock() / 1000) + this.proveLeadSecs)));
+  async computeNumbers(n: bigint): Promise<string | undefined> {
+    return this.tx(() => this.contract.callTx.computeNumbers(n, BigInt(Math.floor(this.clock() / 1000) + this.proveLeadSecs)));
   }
 
   /** The settlement witness reads the decrypted tickets from the private state, so put them there first. */
@@ -189,16 +191,16 @@ export class MidnightStarfallChain implements StarfallChain, DrawOracleChain {
     }
   }
 
-  async finaliseDraw(n: bigint): Promise<void> {
-    await this.tx(() => this.contract.callTx.finaliseDraw(n));
+  async finaliseDraw(n: bigint): Promise<string | undefined> {
+    return this.tx(() => this.contract.callTx.finaliseDraw(n));
   }
 
   async payEntitlement(id: Uint8Array): Promise<void> {
     await this.tx(() => this.contract.callTx.payEntitlement(id));
   }
 
-  async voidDraw(n: bigint): Promise<void> {
-    await this.tx(() => this.contract.callTx.voidDraw(n));
+  async voidDraw(n: bigint): Promise<string | undefined> {
+    return this.tx(() => this.contract.callTx.voidDraw(n));
   }
 
   async refundTicket(n: bigint, index: bigint): Promise<void> {

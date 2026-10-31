@@ -163,16 +163,19 @@ export interface StarfallChain {
   readonly addressBytes: Uint8Array;
   /** Draw `n`'s tickets, in index order. */
   storedTickets(n: bigint): Promise<StoredTicket[]>;
-  /** Organiser only. Each resolves once the transaction is on chain. */
-  openDraw(salesClose: bigint, seedCommitment: Uint8Array): Promise<void>;
-  requestDraw(n: bigint, seed: Uint8Array, next?: NextDraw): Promise<void>;
+  /**
+   * Organiser only. Each resolves once the transaction is on chain, with its
+   * transaction id when the chain knows it (the site's feed links to it).
+   */
+  openDraw(salesClose: bigint, seedCommitment: Uint8Array): Promise<string | void>;
+  requestDraw(n: bigint, seed: Uint8Array, next?: NextDraw): Promise<string | void>;
   /** Anyone. */
-  computeNumbers(n: bigint): Promise<void>;
+  computeNumbers(n: bigint): Promise<string | void>;
   /** Anyone holding the decrypted tickets: settles the next batch. `tickets` is every ticket of the draw, in index order. */
   settleBatch(n: bigint, tickets: readonly TicketPreimage[]): Promise<void>;
-  finaliseDraw(n: bigint): Promise<void>;
+  finaliseDraw(n: bigint): Promise<string | void>;
   payEntitlement(id: Uint8Array): Promise<void>;
-  voidDraw(n: bigint): Promise<void>;
+  voidDraw(n: bigint): Promise<string | void>;
   refundTicket(n: bigint, index: bigint): Promise<void>;
 }
 
@@ -196,11 +199,11 @@ export class StarfallSimulatorChain implements StarfallChain {
     return storedTicketsOf(this.sim.getLedger(), n);
   }
 
-  async openDraw(salesClose: bigint, seedCommitment: Uint8Array): Promise<void> {
+  async openDraw(salesClose: bigint, seedCommitment: Uint8Array): Promise<string | void> {
     this.sim.openDraw(salesClose, seedCommitment);
   }
 
-  async requestDraw(n: bigint, seed: Uint8Array, next?: NextDraw): Promise<void> {
+  async requestDraw(n: bigint, seed: Uint8Array, next?: NextDraw): Promise<string | void> {
     if (next) this.sim.requestAndOpenNext(n, seed, next);
     else this.sim.requestDraw(n, seed);
   }
@@ -209,7 +212,7 @@ export class StarfallSimulatorChain implements StarfallChain {
     this.sim.fulfilDraw(n);
   }
 
-  async computeNumbers(n: bigint): Promise<void> {
+  async computeNumbers(n: bigint): Promise<string | void> {
     this.sim.computeNumbers(n);
   }
 
@@ -217,7 +220,7 @@ export class StarfallSimulatorChain implements StarfallChain {
     this.sim.settleBatch(n, tickets);
   }
 
-  async finaliseDraw(n: bigint): Promise<void> {
+  async finaliseDraw(n: bigint): Promise<string | void> {
     this.sim.finaliseDraw(n);
   }
 
@@ -225,7 +228,7 @@ export class StarfallSimulatorChain implements StarfallChain {
     this.sim.payEntitlement(id);
   }
 
-  async voidDraw(n: bigint): Promise<void> {
+  async voidDraw(n: bigint): Promise<string | void> {
     this.sim.voidDraw(n);
   }
 
@@ -412,6 +415,9 @@ export const isMine = (s: StarfallStep, role: StarfallRole, split: Split): boole
 
 // ------------------------------------------------------------------ keeper
 
+/** The steps of a draw whose transactions the site's feed links to (`tx` in the feed). */
+export type StarfallTxStep = 'open' | 'reveal' | 'numbers' | 'finalise' | 'void';
+
 export type StarfallKeeperOptions = EngineTiming & {
   chain: StarfallChain;
   schedule: Schedule;
@@ -434,6 +440,8 @@ export type StarfallKeeperOptions = EngineTiming & {
   marginSecs?: number;
   openNew?: boolean;
   onView?: (view: StarfallView, nowSecs: number) => void;
+  /** Called with the id of each draw step this keeper sends (the feed's `tx`). */
+  onTx?: (draw: bigint, step: StarfallTxStep, txId: string) => void;
   /** Step kinds to run in the background (see the v0 keeper). */
   background?: StarfallStep['kind'][];
   /** At most this many background proofs at once, and the gap between them (see the engine). */
@@ -484,6 +492,16 @@ export class StarfallKeeper {
 
   private get logger() {
     return this.options.logger ?? silent;
+  }
+
+  /** Pass a sent step's transaction id on (when the chain gave one); a failing listener never stops the keeper. */
+  private noteTx(draw: bigint, step: StarfallTxStep, txId: string | void): void {
+    if (typeof txId !== 'string' || !txId) return;
+    try {
+      this.options.onTx?.(draw, step, txId);
+    } catch (err) {
+      this.logger.warn(`couldn't note draw ${draw}'s ${step} transaction: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   private warnOnce(key: string, level: 'warn' | 'error', msg: string): void {
@@ -570,7 +588,7 @@ export class StarfallKeeper {
         if (!keyReady()) return false;
         const close = nextClose();
         const sealed = await this.options.seeds!.forDraw(view.lastDraw + 1n);
-        await chain.openDraw(close, sealed.commitment);
+        this.noteTx(view.lastDraw + 1n, 'open', await chain.openDraw(close, sealed.commitment));
         this.logger.info(`opened draw ${view.lastDraw + 1n}, selling until ${new Date(Number(close) * 1000).toISOString()}`);
         return true;
       }
@@ -589,15 +607,17 @@ export class StarfallKeeper {
         if (step.openNext && keyReady()) {
           const close = nextClose();
           const sealed = await this.options.seeds!.forDraw(view.lastDraw + 1n);
-          await chain.requestDraw(step.draw, seed, { salesClose: close, seedCommitment: sealed.commitment });
+          const id = await chain.requestDraw(step.draw, seed, { salesClose: close, seedCommitment: sealed.commitment });
+          this.noteTx(step.draw, 'reveal', id);
+          this.noteTx(view.lastDraw + 1n, 'open', id); // the same transaction opens the next draw
           this.logger.info(`opened draw ${view.lastDraw + 1n}, selling until ${new Date(Number(close) * 1000).toISOString()}`);
         } else {
-          await chain.requestDraw(step.draw, seed);
+          this.noteTx(step.draw, 'reveal', await chain.requestDraw(step.draw, seed));
         }
         return true;
       }
       case 'compute':
-        await chain.computeNumbers(step.draw);
+        this.noteTx(step.draw, 'numbers', await chain.computeNumbers(step.draw));
         return true;
       case 'settle': {
         const tickets = await this.ticketsOf(step.draw, step.of);
@@ -605,14 +625,14 @@ export class StarfallKeeper {
         return true;
       }
       case 'finalise':
-        await chain.finaliseDraw(step.draw);
+        this.noteTx(step.draw, 'finalise', await chain.finaliseDraw(step.draw));
         this.decrypted.delete(step.draw);
         return true;
       case 'pay':
         await chain.payEntitlement(step.id);
         return true;
       case 'void':
-        await chain.voidDraw(step.draw);
+        this.noteTx(step.draw, 'void', await chain.voidDraw(step.draw));
         return true;
       case 'refund':
         await chain.refundTicket(step.draw, step.index);

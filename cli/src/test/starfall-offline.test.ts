@@ -126,6 +126,17 @@ describe('MidnightStarfallChain', () => {
     // ... and the private state is back to just the organiser secret.
     expect(m.state()).toEqual(base);
   }, 120_000);
+
+  it('gives back the id midnight-js reports for a transaction (the feed links to it), or nothing when there is none', async () => {
+    const { sim, organiserSecret } = setup();
+    const m = fakeMidnight(sim, { organiserSecret });
+    const calls = {
+      callTx: { ...m.calls.callTx, computeNumbers: async () => ({ public: { txId: '00ab12' } }), voidDraw: async () => undefined },
+    } as unknown as StarfallCalls;
+    const chain = new MidnightStarfallChain(calls, m.publicData, m.store, sim.address);
+    expect(await chain.computeNumbers(1n)).toBe('00ab12');
+    expect(await chain.voidDraw(1n)).toBeUndefined();
+  });
 });
 
 describe('verifyStarfall', () => {
