@@ -124,7 +124,8 @@ export const buildStarfallFeed = (
     if (t) {
       const at = (s: number | undefined) => (s === undefined ? undefined : iso(BigInt(s)));
       const timeline = { revealed_at: at(t.revealed), answered_at: at(t.answered), drawn_at: at(t.drawn), settled_at: at(t.settled), voided_at: at(t.voided) };
-      out.timeline = Object.fromEntries(Object.entries(timeline).filter(([, v]) => v !== undefined));
+      const seen = Object.entries(timeline).filter(([, v]) => v !== undefined);
+      if (seen.length) out.timeline = Object.fromEntries(seen); // a draw known only from the backfill has ids but no times
       if (t.tx && Object.keys(t.tx).length) out.tx = { ...t.tx };
     }
     return out;

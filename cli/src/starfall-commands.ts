@@ -34,6 +34,7 @@ import {
   untilStopped,
   walletSeed,
   withSession,
+  indexerUrlFor,
 } from './common.js';
 import { deadline, dustWait, quietWatch } from './dust-wait.js';
 import { homedir } from 'node:os';
@@ -67,6 +68,7 @@ import {
   writeStarfallRecord,
 } from './starfall.js';
 import { waitForTip, watchSync } from './sync-watch.js';
+import { backfillJson, contractActions, indexerGql, txIdsByDraw } from './tx-backfill.js';
 
 export const STARFALL_USAGE = `usage: ./lunardraw starfall <command>
   keygen settlement --out <file>
@@ -87,6 +89,9 @@ export const STARFALL_USAGE = `usage: ./lunardraw starfall <command>
                [--state <file>] [--proof-server-port <port>] [--dust-wait <min>]
   status       --network <network>
   verify       --network <network>
+  backfill-tx  --network <network> --feed <file>
+               (the transaction ids of draws from before the keeper kept them, read back from the
+               indexer into <file>.backfill.json, which the keeper's feed merges in)
   fingerprints
 
 An agent (\`agent\`) is a player with its own wallet that buys into every draw in its style and reports
@@ -506,7 +511,8 @@ export const starfall = async (argv: string[]): Promise<number> => {
           const chain = new MidnightStarfallChain(joined, providers.publicDataProvider, providers.privateStateProvider, record.contractAddress, base, lead);
           const feedPath = values.feed;
           // When each draw's steps happened, as seen from here (kept beside the feed across restarts).
-          const stepTimes = feedPath ? new StepTimes(`${feedPath}.steps.json`) : undefined;
+          // (with the transaction ids of older draws, read back from the chain by `starfall backfill-tx`)
+          const stepTimes = feedPath ? new StepTimes(`${feedPath}.steps.json`, 60, `${feedPath}.backfill.json`) : undefined;
           const onView = feedPath
             ? (view: StarfallView, nowSecs: number) => {
                 stepTimes!.observe(view, nowSecs);
@@ -805,6 +811,26 @@ export const starfall = async (argv: string[]): Promise<number> => {
       const record = readStarfallRecord(network);
       const view = await readStarfallView(publicDataFor(network), record.contractAddress);
       process.stdout.write(`Starfall on ${network} at ${record.contractAddress}\n${describeView(view, Date.now() / 1000)}\n`);
+      return 0;
+    }
+
+    case 'backfill-tx': {
+      const network = networkArg(values.network);
+      if (!values.feed) throw new Error(STARFALL_USAGE);
+      const record = readStarfallRecord(network);
+      const gql = indexerGql(indexerUrlFor(network), { pauseMs: 150 });
+      process.stdout.write(`Reading every action on ${record.contractAddress} from the indexer, newest first (a few minutes)...\n`);
+      const actions = await contractActions(gql, record.contractAddress, {
+        onBlock: (height, blocks) => {
+          if (blocks % 50 === 0) process.stdout.write(`  ${blocks} blocks so far, now at block ${height}\n`);
+        },
+      });
+      const ids = txIdsByDraw(actions);
+      const out = `${values.feed}.backfill.json`;
+      writeFileSync(out, backfillJson(ids));
+      const steps = [...ids.values()].reduce((n, r) => n + Object.keys(r).length, 0);
+      process.stdout.write(`${actions.length} actions; ${steps} step transactions for ${ids.size} draws written to ${out}\n`);
+      for (const [id, r] of [...ids.entries()].slice(-3)) process.stdout.write(`  draw ${id}: ${JSON.stringify(r)}\n`);
       return 0;
     }
 
