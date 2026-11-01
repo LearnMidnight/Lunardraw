@@ -177,6 +177,22 @@ describe('the Starfall keeper', () => {
     if (sim.payments) for (const b of buyers) expect(sim.payments).toContainEqual({ to: hex(b), amount: PRICE });
   }, 60_000);
 
+  it('back after missing a reveal: voids that draw and opens the next in the same pass, then refunds', async () => {
+    // Chaos test 3 (1 Nov 2026): the next draw opened only a pass of refunds after the void.
+    const ctx = setup();
+    const { sim } = ctx;
+    const keeper = ctx.keeper({ paymentsPerPass: 2 });
+    expect((await keeper.tick()).done).toEqual(['open after 0']);
+    for (let i = 0; i < 3; i++) sim.buyTickets([makeTicket(1n, quickPick(), BUYER)], BUYER);
+    // The keeper is down through draw 1's close and reveal deadline.
+    passing(sim, draw(sim, 1n).revealDeadline);
+    expect((await keeper.tick()).done).toEqual(['void 1', 'open after 1']);
+    expect(draw(sim, 1n).status).toBe(DrawStatus.voided);
+    expect(draw(sim, 2n).status).toBe(DrawStatus.open);
+    // Then the refunds, a few per pass.
+    expect((await keeper.tick()).done).toEqual(['refund 1 #0', 'refund 1 #1']);
+  }, 60_000);
+
   it('voids a draw that was not settled in time, and refunds it', async () => {
     const ctx = setup();
     const { sim } = ctx;
@@ -402,6 +418,28 @@ describe('the Starfall plan', () => {
     expect(starfallSteps(view, 999, opts)).toEqual([{ kind: 'settle', draw: 1n, from: 25n, of: 50n }]);
     expect(starfallSteps(view, 1_010, opts)).toEqual([]);
     expect(starfallSteps(view, 1_030, opts)).toEqual([{ kind: 'void', draw: 1n, reason: 'it was not settled in time' }]);
+  });
+
+  it('opens the next draw in the same pass as voiding a draw whose reveal was missed, after the void and before refunds', () => {
+    const view = base([
+      { status: DrawStatus.voided, unrefunded: [3n, 4n] },
+      { status: DrawStatus.open, salesClose: 100n, revealDeadline: 700n },
+    ]);
+    // Before the deadline (and its margin): nothing to do yet.
+    expect(starfallSteps(view, 720, { ...opts, openNew: true })).toEqual([
+      { kind: 'refund', draw: 1n, index: 3n },
+      { kind: 'refund', draw: 1n, index: 4n },
+    ]);
+    // Past it: void, then open, then the refunds.
+    expect(starfallSteps(view, 740, { ...opts, openNew: true })).toEqual([
+      { kind: 'void', draw: 2n, reason: 'its seed was not revealed in time' },
+      { kind: 'open' },
+      { kind: 'refund', draw: 1n, index: 3n },
+      { kind: 'refund', draw: 1n, index: 4n },
+    ]);
+    // Without openNew, or without the organiser's seeds, only the void.
+    expect(starfallSteps(view, 740, opts).map((x) => x.kind)).toEqual(['void', 'refund', 'refund']);
+    expect(starfallSteps(view, 740, { ...opts, openNew: true, organise: false }).map((x) => x.kind)).toEqual(['void', 'refund', 'refund']);
   });
 
   it("doesn't open or reveal without the organiser's seeds", () => {
