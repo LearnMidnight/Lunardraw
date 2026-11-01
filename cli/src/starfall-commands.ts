@@ -5,7 +5,7 @@
  * encrypted to.
  */
 import { webcrypto } from 'node:crypto';
-import { writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { encodeContractAddress } from '@midnight-ntwrk/compact-runtime';
 import { MidnightBech32m } from '@midnight-ntwrk/wallet-sdk-address-format';
@@ -68,7 +68,7 @@ import {
   writeStarfallRecord,
 } from './starfall.js';
 import { waitForTip, watchSync } from './sync-watch.js';
-import { backfillJson, contractActions, heightOfTx, indexerGql, indexerSubscribe, txIdsByDraw } from './tx-backfill.js';
+import { backfillJson, contractActions, heightOfTx, indexerGql, indexerSubscribe, named, namingLike, txIdsByDraw } from './tx-backfill.js';
 
 export const STARFALL_USAGE = `usage: ./lunardraw starfall <command>
   keygen settlement --out <file>
@@ -830,7 +830,43 @@ export const starfall = async (argv: string[]): Promise<number> => {
           if (n % 200 === 0) process.stdout.write(`  ${n} actions so far, at block ${a.height}\n`);
         },
       });
-      const ids = txIdsByDraw(actions);
+      // Name each transaction the way the keeper's own records do (it has noted ids since #64).
+      const own: Record<string, { tx?: Record<string, string> }> = existsSync(`${values.feed}.steps.json`)
+        ? JSON.parse(readFileSync(`${values.feed}.steps.json`, 'utf8'))
+        : {};
+      const known = new Set(Object.values(own).flatMap((r) => Object.values(r.tx ?? {})));
+      const { naming, matched } = namingLike(actions, known);
+      if (known.size && !matched) {
+        const sample = actions.find((x) => x.entryPoint === 'computeNumbers');
+        process.stdout.write(
+          `None of the indexer's names for these transactions matches the keeper's own records, so nothing was written.\n` +
+            `  the keeper's: ${[...known].slice(0, 2).join(', ')}\n` +
+            (sample ? `  the indexer's for one transaction: hash ${sample.hash}; identifiers ${sample.ids.join(', ') || 'none'}\n` : ''),
+        );
+        return 1;
+      }
+      process.stdout.write(
+        known.size
+          ? `Naming transactions by their ${naming.label}, as the keeper does (${matched} of its ${known.size} records found).\n`
+          : `The keeper has no records to compare yet: naming transactions by their ${naming.label}.\n`,
+      );
+      const ids = txIdsByDraw(named(actions, naming));
+      // Where both have a step, they must agree.
+      let agree = 0;
+      const differ: string[] = [];
+      for (const [d, r] of Object.entries(own)) {
+        for (const [k, v] of Object.entries(r.tx ?? {})) {
+          const b = (ids.get(BigInt(d)) as Record<string, string> | undefined)?.[k];
+          if (!b) continue;
+          if (b === v) agree++;
+          else differ.push(`draw ${d} ${k}`);
+        }
+      }
+      process.stdout.write(`Checked against the keeper's records: ${agree} agree, ${differ.length} differ${differ.length ? ` (${differ.slice(0, 5).join('; ')})` : ''}.\n`);
+      if (differ.length) {
+        process.stdout.write('Nothing was written: the two should name the same transactions.\n');
+        return 1;
+      }
       const out = `${values.feed}.backfill.json`;
       writeFileSync(out, backfillJson(ids));
       const steps = [...ids.values()].reduce((n, r) => n + Object.keys(r).length, 0);

@@ -55,8 +55,12 @@ export const indexerGql =
     }
   };
 
-/** One action on the contract: its block, its transaction's id, the circuit it called, the state after. */
-export type Action = { height: number; tx: string; kind: string; entryPoint?: string; state: string };
+/**
+ * One action on the contract: its block, its transaction (`tx`, the name it's
+ * filed under; `hash` and `ids`, every name the indexer gives it), the circuit
+ * it called, the state after.
+ */
+export type Action = { height: number; tx: string; hash: string; ids: string[]; kind: string; entryPoint?: string; state: string };
 
 /** A GraphQL subscription: calls `onData` with each result's `data`; `close` ends it. */
 export type Subscribe = (
@@ -203,8 +207,16 @@ export const contractActions = async (
           const a = data.contractActions as RawAction | undefined;
           if (!a) return;
           const t = a.transaction;
-          // midnight-js reports a transaction by its first identifier (the keeper's own records do too)
-          const action: Action = { height: t.block.height, tx: t.identifiers?.[0] ?? t.hash, kind: a.__typename, entryPoint: a.entryPoint, state: a.state };
+          // filed under its hash until namingLike() picks the name the keeper's own records use
+          const action: Action = {
+            height: t.block.height,
+            tx: t.hash,
+            hash: t.hash,
+            ids: t.identifiers ?? [],
+            kind: a.__typename,
+            entryPoint: a.entryPoint,
+            state: a.state,
+          };
           out.push(action);
           opts.onAction?.(action, out.length);
           if (action.height >= top) {
@@ -218,6 +230,34 @@ export const contractActions = async (
     );
   });
 };
+
+/** One way of naming a transaction: its hash, or one of its identifiers. */
+export type Naming = { label: string; name: (a: Action) => string | undefined };
+
+/**
+ * The naming the keeper's own records use (`known`: the transaction ids it
+ * noted since #64): whichever of the hash and the identifiers matches most of
+ * them. `matched` 0 means none does (or there are no records to compare).
+ */
+export const namingLike = (actions: readonly Action[], known: ReadonlySet<string>): { naming: Naming; matched: number } => {
+  const most = actions.reduce((n, a) => Math.max(n, a.ids.length), 0);
+  const options: Naming[] = [{ label: 'hash', name: (a) => a.hash }];
+  for (let i = 0; i < most; i++) options.push({ label: `identifier ${i + 1}`, name: (a) => a.ids[i] });
+  if (most > 1) options.push({ label: 'last identifier', name: (a) => a.ids[a.ids.length - 1] });
+  const want = new Set([...known].map(bare));
+  let best = { naming: options[0], matched: 0 };
+  for (const o of options) {
+    const matched = actions.filter((a) => {
+      const n = o.name(a);
+      return n !== undefined && want.has(bare(n));
+    }).length;
+    if (matched > best.matched) best = { naming: o, matched };
+  }
+  return best;
+};
+
+/** The actions filed under a naming (the hash where it has no such identifier). */
+export const named = (actions: readonly Action[], naming: Naming): Action[] => actions.map((a) => ({ ...a, tx: naming.name(a) ?? a.hash }));
 
 /** The view of the contract from an action's state (hex). */
 export const viewOfState = (hex: string): StarfallView =>
