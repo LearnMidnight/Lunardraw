@@ -75,3 +75,55 @@ the Starfall twin.
 player with its own wallet, `/root/lunardraw-agents/<name>.secret`, and style,
 `AGENT_ARGS` in `/root/lunardraw-agents/<name>.env`. See Part 8 of the Preprod
 guide. Logs: `journalctl -u 'lunardraw-agent@*' -f`.
+
+## Email alerts (the monitor)
+
+`lunardraw-monitor.timer` runs `./lunardraw monitor` every 5 minutes. It emails
+`ops@lunardraw.io` (forwarded to the operator) through [Resend](https://resend.com)
+when Starfall needs a person:
+
+| Alert | When |
+|---|---|
+| A service is not running | any watched unit not active (keeper, oracle, proof server, agents) |
+| Restarting over and over | 3 or more restarts within an hour |
+| The keeper or oracle isn't reporting | its status file is over 10 minutes old (stopped or frozen) |
+| Hasn't checked the chain | no finished pass for 15 minutes (stuck) |
+| Transactions failing | 3 or more in a row for 10 minutes |
+| Wallet not synced, low on DUST, no tNIGHT | not synced 20 minutes after starting; under 1 DUST (`--min-dust`); 0 tNIGHT |
+| A draw near its reveal, oracle or settlement deadline | 5 minutes before the reveal or oracle deadline, or the oracle 10 minutes late; an hour before the settlement deadline |
+| A draw voided | each one, once, with the reason |
+| The site feed is stale, the disk nearly full | no new feed for 10 minutes; under 10% or 5 GB free |
+
+A problem is emailed once it has been seen on two runs in a row (so a service
+that restarts itself doesn't page anyone), reminded every 6 hours while it
+lasts, and followed by a "resolved" email. A daily summary comes at 08:00
+Brisbane (`--digest-hour`): **if it stops arriving, the monitor or the VM is down.**
+
+The keeper and the oracle write the health files it reads with
+`--status /root/lunardraw-status/keeper.json` and `oracle.json` (in their unit
+files). Nothing in them is secret.
+
+### Install
+
+1. Resend: verify the sending domain (its DNS records) and create an API key
+   with sending access only. Put the key on the VM, never in the repository:
+   `nano /root/.lunardraw-mail` (paste, save), then `chmod 600 /root/.lunardraw-mail`.
+2. Between :30 and :55 past the hour (the keeper and oracle restart):
+   ```bash
+   cd ~/Lunardraw && git pull && npm run build
+   cp deploy/systemd/lunardraw-starfall-*.service deploy/systemd/lunardraw-monitor.* /etc/systemd/system/
+   systemctl daemon-reload
+   systemctl restart lunardraw-starfall-keeper lunardraw-starfall-oracle
+   ./lunardraw monitor --test --from "Lunardraw alerts <alerts@lunardraw.io>" --to ops@lunardraw.io --mail-key /root/.lunardraw-mail
+   systemctl enable --now lunardraw-monitor.timer
+   ```
+3. Check: `./lunardraw monitor --dry-run --feed /root/lunardraw-feed/feed.json --status-dir /root/lunardraw-status`
+   prints what it would send now (and changes nothing).
+
+| What | Command |
+|---|---|
+| When it last ran, and when it runs next | `systemctl list-timers lunardraw-monitor.timer` |
+| What it found on its last runs | `journalctl -u lunardraw-monitor --since "1 hour ago" --no-pager` |
+| Run it now | `systemctl start lunardraw-monitor` |
+| The keeper's or the oracle's health | `cat /root/lunardraw-status/oracle.json` |
+| Pause the emails | `systemctl stop lunardraw-monitor.timer` (`start` to resume) |

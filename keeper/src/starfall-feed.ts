@@ -49,7 +49,7 @@ export type StarfallFeed = {
       fee_star: number;
       allocation_bp: number[];
       carry_star: number;
-      open?: { num: number; sales_close: string; seed_commitment: string; games_sold: number; tickets: number };
+      open?: { num: number; sales_close: string; reveal_deadline?: string; seed_commitment: string; games_sold: number; tickets: number };
       draws: StarfallFeedDraw[];
     };
   };
@@ -150,6 +150,8 @@ export const buildStarfallFeed = (
           ? {
               num: Number(selling.id),
               sales_close: iso(selling.salesClose),
+              // the keeper must reveal by then or the draw voids (for the monitor's alert)
+              reveal_deadline: iso(selling.revealDeadline),
               seed_commitment: hex(selling.seedCommitment),
               games_sold: Number(selling.games),
               tickets: Number(selling.tickets),

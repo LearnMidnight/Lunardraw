@@ -1,0 +1,22 @@
+# Email alerts for Starfall: one check of the services, the keeper's and the
+# oracle's health files, the site feed and the disk, then exit. Run every 5
+# minutes by lunardraw-monitor.timer. Needs a Resend API key (sending access)
+# in /root/.lunardraw-mail and a verified sending domain. See README.md.
+[Unit]
+Description=Lunardraw monitor (email alerts)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/Lunardraw
+Environment=HOME=/root
+Environment=NODE_OPTIONS=--max-old-space-size=512
+ExecStart=/root/Lunardraw/lunardraw monitor \
+  --feed /root/lunardraw-feed/feed.json \
+  --status-dir /root/lunardraw-status \
+  --units lunardraw-proof,lunardraw-starfall-keeper,lunardraw-starfall-oracle,lunardraw-agent@nova,lunardraw-agent@orbit,lunardraw-agent@pixel \
+  --from "Lunardraw alerts <alerts@lunardraw.io>" \
+  --to ops@lunardraw.io \
+  --mail-key /root/.lunardraw-mail
+TimeoutStartSec=120
