@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Starfall } from '@lunardraw/contract';
 import type { StarfallView } from '@lunardraw/keeper';
-import { type Action, backfillJson, contractActions, type Gql, named, namingLike, type Subscribe, txIdsByDraw } from '../tx-backfill.js';
+import { type Action, backfillJson, contractActions, Dropped, type Gql, named, namingLike, type Subscribe, txIdsByDraw } from '../tx-backfill.js';
 
 const { DrawStatus } = Starfall;
 const ADDR = 'f868fc99';
@@ -60,6 +60,39 @@ describe('backfilling transaction ids', () => {
     await expect(contractActions(latest, refusing, ADDR, { idleMs: 10 })).rejects.toThrow(/unknown field/);
     const none: Gql = async () => ({ contractAction: null });
     expect(await contractActions(none, refusing, ADDR)).toEqual([]);
+  });
+
+  it('carries on after a dropped connection from the last block it had, reading that block again whole', async () => {
+    const msg = (h: number, hash: string) => ({ contractActions: { __typename: 'ContractCall', state: hash, entryPoint: 'buyTickets', transaction: { hash, identifiers: [], block: { height: h } } } });
+    const chain = [msg(10, 'a'), msg(20, 'b'), msg(20, 'c'), msg(30, 'd'), msg(40, 'e')];
+    const latest: Gql = async () => ({ contractAction: { transaction: { block: { height: 40 } } } });
+    const froms: number[] = [];
+    let calls = 0;
+    const flaky: Subscribe = (_q, v, on) => {
+      const from = (v.offset as { height: number }).height;
+      froms.push(from);
+      calls++;
+      const rest = chain.filter((m) => m.contractActions.transaction.block.height >= from);
+      // the first connection drops after block 20's first action; a stale message from it arrives late
+      const send = calls === 1 ? rest.slice(0, 2) : rest;
+      send.forEach((m, i) => setTimeout(() => on.data(m), 2 * (i + 1)));
+      if (calls === 1) {
+        setTimeout(() => on.error(new Dropped('the indexer closed the WebSocket (1006)')), 10);
+        setTimeout(() => on.data(msg(20, 'stale')), 15);
+      }
+      return { close() {} };
+    };
+    const resumed: number[] = [];
+    const acts = await contractActions(latest, flaky, ADDR, { idleMs: 20, retryPauseMs: 1, onResume: (h) => resumed.push(h) });
+    expect(acts.map((a) => a.hash)).toEqual(['a', 'b', 'c', 'd', 'e']);
+    expect(froms).toEqual([0, 20]);
+    expect(resumed).toEqual([20]);
+    // a refusal (not a drop) isn't retried, and drops stop after the allowed reconnections
+    const dropping: Subscribe = (_q, _v, on) => {
+      setTimeout(() => on.error(new Dropped('closed')), 2);
+      return { close() {} };
+    };
+    await expect(contractActions(latest, dropping, ADDR, { retries: 2, retryPauseMs: 1 })).rejects.toThrow(/closed/);
   });
 
   it("names the transactions the way the keeper's own records do: by hash or by an identifier, whichever matches", () => {

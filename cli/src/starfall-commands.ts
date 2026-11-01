@@ -826,6 +826,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
       );
       const actions = await contractActions(gql, indexerSubscribe(urls.ws), record.contractAddress, {
         fromHeight: from,
+        onResume: (height, attempt, why) => process.stdout.write(`  ${why}; reconnecting and carrying on from block ${height} (${attempt} of 8)\n`),
         onAction: (a, n) => {
           if (n % 200 === 0) process.stdout.write(`  ${n} actions so far, at block ${a.height}\n`);
         },
@@ -859,7 +860,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
           const b = (ids.get(BigInt(d)) as Record<string, string> | undefined)?.[k];
           if (!b) continue;
           if (b === v) agree++;
-          else differ.push(`draw ${d} ${k}`);
+          else differ.push(`draw ${d} ${k}: keeper ${v.slice(0, 14)}…, indexer ${b.slice(0, 14)}…`);
         }
       }
       process.stdout.write(`Checked against the keeper's records: ${agree} agree, ${differ.length} differ${differ.length ? ` (${differ.slice(0, 5).join('; ')})` : ''}.\n`);
