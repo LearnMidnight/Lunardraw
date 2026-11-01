@@ -11,6 +11,7 @@ import {
   buyGames,
   BuyStopped,
   MidnightStarfallChain,
+  onChainCheck,
   STARFALL_PRIVATE_STATE_ID,
   type StarfallCalls,
   type StarfallDeploymentRecord,
@@ -249,6 +250,38 @@ describe('buyGames', () => {
     expect((err as BuyStopped).bought).toBe(36);
     expect((err as BuyStopped).message).toBe('sales have closed');
     expect(await buyGames(ok, store, 'addr', games, OPERATOR)).toBe(3);
+  });
+
+  it("counts a purchase the wallet lost track of if the chain has it, and not if it doesn't", async () => {
+    let n = 0;
+    const hangs = calls(() => (++n === 2 ? new Promise(() => {}) : Promise.resolve()));
+    const went = await buyGames(hangs, store, 'addr', games, OPERATOR, { timeoutMs: 50, onChain: async (p) => p.map(() => true) }).catch((e: unknown) => e);
+    expect((went as BuyStopped).bought).toBe(36);
+    expect((went as BuyStopped).message).toMatch(/did go in/);
+    n = 0;
+    const lost = await buyGames(hangs, store, 'addr', games, OPERATOR, { timeoutMs: 50, onChain: async (p) => p.map(() => false) }).catch((e: unknown) => e);
+    expect((lost as BuyStopped).bought).toBe(18);
+    expect((lost as BuyStopped).message).toMatch(/didn't go in/);
+    n = 0;
+    const unknown = await buyGames(hangs, store, 'addr', games, OPERATOR, {
+      timeoutMs: 50,
+      onChain: async () => {
+        throw new Error('indexer down');
+      },
+    }).catch((e: unknown) => e);
+    expect((unknown as BuyStopped).bought).toBe(18);
+    expect((unknown as BuyStopped).message).toMatch(/couldn't be checked/);
+  });
+
+  it('finds bought games on the chain by their ticket commitments', async () => {
+    const { sim } = setup();
+    sim.openDraw(BigInt(sim.now + 3_600), new Uint8Array(32).fill(1));
+    const me = webcrypto.getRandomValues(new Uint8Array(32));
+    const bought = [Starfall.makeTicket(1n, quickPick(), me), Starfall.makeTicket(1n, quickPick(), me)];
+    const notBought = Starfall.makeTicket(1n, quickPick(), me);
+    sim.buyTickets(bought, me);
+    const publicData = { queryContractState: async () => ({ data: sim.publicState() }) } as unknown as Parameters<typeof onChainCheck>[0];
+    expect(await onChainCheck(publicData, sim.address)([...bought, notBought])).toEqual([true, true, false]);
   });
 });
 

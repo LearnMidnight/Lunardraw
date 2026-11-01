@@ -26,7 +26,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { buildFeed, type ChainView, DrawOracle, every, FileSeedStore, Keeper, STARFALL_WEEKLY, writeFeed } from '@lunardraw/keeper';
-import { compilerInfo, localFingerprints, NETWORKS, openWallet, walletAddress, walletBalances } from '@nightcast/deploy';
+import { compilerInfo, localFingerprints, NETWORKS, walletAddress, walletBalances } from '@nightcast/deploy';
+import { openWallet } from './wallet-lock.js';
 import {
   hex,
   iso,

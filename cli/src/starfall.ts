@@ -229,7 +229,24 @@ export type BuyOptions = {
   timeoutMs?: number;
   /** Don't start a transaction after this time (seconds): sales close soon. */
   stopAt?: number;
+  /**
+   * Which of these games are on the chain (by their ticket commitments). When
+   * a transaction fails or times out, the wallet may just have lost track of
+   * it: this says whether it really went in, so the count reported is the
+   * chain's, not the wallet's (and a purchase that did land isn't bought
+   * again). See {@link onChainCheck}.
+   */
+  onChain?: (games: readonly TicketPreimage[]) => Promise<boolean[]>;
 };
+
+/** For {@link BuyOptions.onChain}: looks the games' ticket commitments up in the contract. */
+export const onChainCheck =
+  (publicData: ContractStateSource, contractAddress: string) =>
+  async (games: readonly TicketPreimage[]): Promise<boolean[]> => {
+    const ledger = await readStarfallLedger(publicData, contractAddress);
+    const deployment = { bytes: encodeContractAddress(contractAddress) };
+    return games.map((g) => ledger.ticketCommitments.member(Starfall.pureCircuits.ticketCommitment(deployment, g)));
+  };
 
 /**
  * Buy tickets for an open draw, `maxTickets()` per transaction, refundable to
@@ -268,7 +285,20 @@ export const buyGames = async (
     try {
       await Promise.race([contract.callTx.buyTickets(BigInt(part.length), { bytes: refundTo }), timedOut]);
     } catch (err) {
-      throw new BuyStopped(i, games.length, reasonOf(err)); // the cause chain carries the node's reason (1010 custom codes)
+      const reason = reasonOf(err); // the cause chain carries the node's reason (1010 custom codes)
+      if (!o.onChain) throw new BuyStopped(i, games.length, reason);
+      let landed: boolean[];
+      try {
+        landed = await o.onChain(part);
+      } catch {
+        throw new BuyStopped(i, games.length, `${reason} (and the chain couldn't be checked, so look with status)`);
+      }
+      if (landed.length && landed.every(Boolean)) {
+        // It went in; the wallet just lost track. Carrying on with a wallet
+        // in that state risks more of the same, so stop here.
+        throw new BuyStopped(i + part.length, games.length, `${reason}, but the chain shows that purchase did go in (the wallet lost track of it)`);
+      }
+      throw new BuyStopped(i, games.length, `${reason}; the chain confirms that purchase didn't go in`);
     } finally {
       clearTimeout(timer);
     }
