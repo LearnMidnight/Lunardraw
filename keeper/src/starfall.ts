@@ -340,15 +340,21 @@ export const starfallSteps = (view: StarfallView, now: number, opts: StarfallPla
     }
   }
 
-  // Nothing selling and nothing about to open one: open a draw directly.
+  // Nothing selling and nothing about to open one: open a draw directly. That
+  // includes a last draw whose reveal was missed: it is voided in this same
+  // pass (its void comes first: the contract won't open a draw while the
+  // previous one is selling), so the next draw opens straight after it rather
+  // than a pass of refunds later.
   const last = byId.get(view.lastDraw);
-  if (opts.organise && opts.openNew && !opensNext && (view.lastDraw === 0n || (last !== undefined && last.status !== DrawStatus.open))) {
+  const lastMissedReveal = last !== undefined && last.status === DrawStatus.open && past(last.revealDeadline);
+  if (opts.organise && opts.openNew && !opensNext && (view.lastDraw === 0n || (last !== undefined && last.status !== DrawStatus.open) || lastMissedReveal)) {
     steps.push({ kind: 'open' });
   }
   // Most urgent first: reveals have the shortest deadline and only the
-  // organiser can send them; settling has a deadline too; payments and
+  // organiser can send them; voids come before opening (a missed reveal's void
+  // makes room for the next draw); settling has a deadline too; payments and
   // refunds have none.
-  const rank: Record<StarfallStep['kind'], number> = { reveal: 0, open: 1, void: 2, settle: 3, finalise: 4, compute: 5, pay: 6, refund: 7 };
+  const rank: Record<StarfallStep['kind'], number> = { reveal: 0, void: 1, open: 2, settle: 3, finalise: 4, compute: 5, pay: 6, refund: 7 };
   return steps
     .map((step, i) => ({ step, i }))
     .sort((a, b) => rank[a.step.kind] - rank[b.step.kind] || a.i - b.i)
