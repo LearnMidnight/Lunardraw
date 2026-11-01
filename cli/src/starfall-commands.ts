@@ -34,7 +34,7 @@ import {
   untilStopped,
   walletSeed,
   withSession,
-  indexerUrlFor,
+  indexerUrlsFor,
 } from './common.js';
 import { deadline, dustWait, quietWatch } from './dust-wait.js';
 import { homedir } from 'node:os';
@@ -68,7 +68,7 @@ import {
   writeStarfallRecord,
 } from './starfall.js';
 import { waitForTip, watchSync } from './sync-watch.js';
-import { backfillJson, contractActions, indexerGql, txIdsByDraw } from './tx-backfill.js';
+import { backfillJson, contractActions, heightOfTx, indexerGql, indexerSubscribe, txIdsByDraw } from './tx-backfill.js';
 
 export const STARFALL_USAGE = `usage: ./lunardraw starfall <command>
   keygen settlement --out <file>
@@ -818,11 +818,16 @@ export const starfall = async (argv: string[]): Promise<number> => {
       const network = networkArg(values.network);
       if (!values.feed) throw new Error(STARFALL_USAGE);
       const record = readStarfallRecord(network);
-      const gql = indexerGql(indexerUrlFor(network), { pauseMs: 150 });
-      process.stdout.write(`Reading every action on ${record.contractAddress} from the indexer, newest first (a few minutes)...\n`);
-      const actions = await contractActions(gql, record.contractAddress, {
-        onBlock: (height, blocks) => {
-          if (blocks % 50 === 0) process.stdout.write(`  ${blocks} blocks so far, now at block ${height}\n`);
+      const urls = indexerUrlsFor(network);
+      const gql = indexerGql(urls.http);
+      const from = await heightOfTx(gql, record.transactions?.deploy);
+      process.stdout.write(
+        `Reading every action on ${record.contractAddress} from the indexer, oldest first, from ${from === undefined ? 'the first block' : `block ${from} (the deployment)`}...\n`,
+      );
+      const actions = await contractActions(gql, indexerSubscribe(urls.ws), record.contractAddress, {
+        fromHeight: from,
+        onAction: (a, n) => {
+          if (n % 200 === 0) process.stdout.write(`  ${n} actions so far, at block ${a.height}\n`);
         },
       });
       const ids = txIdsByDraw(actions);

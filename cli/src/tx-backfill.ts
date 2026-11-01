@@ -3,9 +3,9 @@
  * read back from the indexer, which has every action on the contract with
  * its state after the action.
  *
- * The walk goes back from the latest action a block at a time (the latest
- * action at or before a height, then every action of the contract in that
- * block, in order), down to the deployment. Then, oldest first, each call
+ * The indexer streams the contract's actions, oldest first, from the
+ * deployment's block (its WebSocket subscription), up to the latest action.
+ * Then each call
  * that moves a draw (requestDraw, computeNumbers, finaliseDraw, voidDraw) is
  * matched to the draws whose status it changed, by decoding the contract's
  * state after it. The result is written beside the feed
@@ -58,57 +58,165 @@ export const indexerGql =
 /** One action on the contract: its block, its transaction's id, the circuit it called, the state after. */
 export type Action = { height: number; tx: string; kind: string; entryPoint?: string; state: string };
 
-const LATEST_AT = `query Q($address: HexEncoded!, $offset: ContractActionOffset) {
-  contractAction(address: $address, offset: $offset) { __typename transaction { block { height } } }
-}`;
-const BLOCK = `query B($height: Int!) {
-  block(offset: { height: $height }) {
-    height
-    transactions {
-      hash
-      ... on RegularTransaction { identifiers }
-      contractActions { __typename address state ... on ContractCall { entryPoint } }
-    }
+/** A GraphQL subscription: calls `onData` with each result's `data`; `close` ends it. */
+export type Subscribe = (
+  query: string,
+  variables: Record<string, unknown>,
+  on: { data: (data: Record<string, unknown>) => void; error: (err: Error) => void },
+) => { close(): void };
+
+/** The parts of a WebSocket used here (Node 22's global, typed without the DOM library). */
+type Socket = {
+  send(data: string): void;
+  close(): void;
+  onopen: (() => void) | null;
+  onerror: (() => void) | null;
+  onclose: ((e: { code?: number; reason?: string }) => void) | null;
+  onmessage: ((e: { data: unknown }) => void) | null;
+};
+
+/**
+ * The indexer's WebSocket (the graphql-transport-ws protocol midnight-js
+ * uses), with Node's built-in WebSocket.
+ */
+export const indexerSubscribe =
+  (wsUrl: string): Subscribe =>
+  (query, variables, on) => {
+    const WS = (globalThis as { WebSocket?: new (url: string, protocols?: string | string[]) => Socket }).WebSocket;
+    if (!WS) throw new Error('this Node has no WebSocket (Node 22 or later is needed)');
+    const ws = new WS(wsUrl, 'graphql-transport-ws');
+    let closed = false;
+    const fail = (err: Error) => {
+      if (closed) return;
+      closed = true;
+      try {
+        ws.close();
+      } catch {
+        /* already closed */
+      }
+      on.error(err);
+    };
+    ws.onopen = () => ws.send(JSON.stringify({ type: 'connection_init', payload: {} }));
+    ws.onerror = () => fail(new Error(`couldn't reach the indexer's WebSocket (${wsUrl.replace(/project_id=[^&]+/, 'project_id=***')})`));
+    ws.onclose = (e: { code?: number; reason?: string }) => {
+      if (!closed) fail(new Error(`the indexer closed the WebSocket (${e.code ?? ''} ${e.reason ?? ''})`.trim()));
+    };
+    ws.onmessage = (e: { data: unknown }) => {
+      let m: { type?: string; id?: string; payload?: { data?: Record<string, unknown>; errors?: { message: string }[] } | { message: string }[] };
+      try {
+        m = JSON.parse(String(e.data));
+      } catch {
+        return;
+      }
+      if (m.type === 'connection_ack') ws.send(JSON.stringify({ id: '1', type: 'subscribe', payload: { query, variables } }));
+      else if (m.type === 'ping') ws.send(JSON.stringify({ type: 'pong' }));
+      else if (m.type === 'next') {
+        const p = m.payload as { data?: Record<string, unknown>; errors?: { message: string }[] };
+        if (p?.errors?.length) fail(new Error(`the indexer: ${p.errors.map((x) => x.message).join('; ')}`));
+        else if (p?.data) on.data(p.data);
+      } else if (m.type === 'error') {
+        const errs = (Array.isArray(m.payload) ? m.payload : []) as { message: string }[];
+        fail(new Error(`the indexer: ${errs.map((x) => x.message).join('; ') || 'subscription refused'}`));
+      } else if (m.type === 'complete') fail(new Error('the indexer ended the subscription early'));
+    };
+    return {
+      close() {
+        closed = true;
+        try {
+          ws.send(JSON.stringify({ id: '1', type: 'complete' }));
+          ws.close();
+        } catch {
+          /* already closed */
+        }
+      },
+    };
+  };
+
+const LATEST = `query Q($address: HexEncoded!) { contractAction(address: $address) { transaction { block { height } } } }`;
+const TX_HEIGHT = `query T($id: HexEncoded!) { transactions(offset: { identifier: $id }) { block { height } } }`;
+const ACTIONS = `subscription S($address: HexEncoded!, $offset: BlockOffset) {
+  contractActions(address: $address, offset: $offset) {
+    __typename
+    state
+    ... on ContractCall { entryPoint }
+    transaction { hash ... on RegularTransaction { identifiers } block { height } }
   }
 }`;
 
 const bare = (h: string): string => h.toLowerCase().replace(/^0x/, '');
 
-type BlockData = {
-  height: number;
-  transactions: { hash: string; identifiers?: string[]; contractActions?: { __typename: string; address: string; state: string; entryPoint?: string }[] }[];
+type RawAction = {
+  __typename: string;
+  state: string;
+  entryPoint?: string;
+  transaction: { hash: string; identifiers?: string[]; block: { height: number } };
 };
 
-/** Every action on the contract, oldest first. */
+/** The block a transaction is in (the deployment's, to start from), or undefined if the indexer can't say. */
+export const heightOfTx = async (gql: Gql, id: string | undefined): Promise<number | undefined> => {
+  if (!id) return undefined;
+  try {
+    const t = (await gql(TX_HEIGHT, { id: bare(id) })).transactions as { block: { height: number } }[] | null;
+    return t?.[0]?.block.height;
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Every action on the contract, oldest first: the indexer's stream of the
+ * contract's actions from `fromHeight` (default the first block), until it
+ * has passed the latest action (found first) and gone quiet for `idleMs`.
+ */
 export const contractActions = async (
   gql: Gql,
+  subscribe: Subscribe,
   address: string,
-  opts: { onBlock?: (height: number, blocks: number) => void } = {},
+  opts: { fromHeight?: number; idleMs?: number; timeoutMs?: number; onAction?: (a: Action, count: number) => void } = {},
 ): Promise<Action[]> => {
-  const blocks: Action[][] = [];
-  let offset: unknown = undefined;
-  for (;;) {
-    const a = (await gql(LATEST_AT, offset === undefined ? { address } : { address, offset })).contractAction as
-      | { __typename: string; transaction: { block: { height: number } } }
-      | null;
-    if (!a) break;
-    const height = a.transaction.block.height;
-    const b = (await gql(BLOCK, { height })).block as BlockData | null;
-    if (!b) throw new Error(`the indexer has no block ${height}`);
-    const acts: Action[] = [];
-    for (const t of b.transactions) {
-      for (const c of t.contractActions ?? []) {
-        if (bare(c.address) !== bare(address)) continue;
-        // midnight-js reports a transaction by its first identifier (the keeper's own records do too)
-        acts.push({ height, tx: t.identifiers?.[0] ?? t.hash, kind: c.__typename, entryPoint: c.entryPoint, state: c.state });
-      }
-    }
-    blocks.push(acts);
-    opts.onBlock?.(height, blocks.length);
-    if (a.__typename === 'ContractDeploy' || acts.some((x) => x.kind === 'ContractDeploy') || height <= 0) break;
-    offset = { blockOffset: { height: height - 1 } };
-  }
-  return blocks.reverse().flat();
+  const latest = (await gql(LATEST, { address: bare(address) })).contractAction as { transaction: { block: { height: number } } } | null;
+  if (!latest) return [];
+  const top = latest.transaction.block.height;
+  const idleMs = opts.idleMs ?? 5_000;
+  const out: Action[] = [];
+  return new Promise<Action[]>((resolve, reject) => {
+    let idle: ReturnType<typeof setTimeout> | undefined;
+    let done = false;
+    const finish = (err?: Error) => {
+      if (done) return;
+      done = true;
+      clearTimeout(idle);
+      clearTimeout(overall);
+      sub.close();
+      if (err) reject(err);
+      else resolve(out);
+    };
+    const overall = setTimeout(
+      () => finish(new Error(`the indexer hadn't sent the contract's history up to block ${top} after ${Math.round((opts.timeoutMs ?? 30 * 60_000) / 60_000)} minutes (${out.length} actions so far)`)),
+      opts.timeoutMs ?? 30 * 60_000,
+    );
+    const sub = subscribe(
+      ACTIONS,
+      { address: bare(address), offset: { height: opts.fromHeight ?? 0 } },
+      {
+        data: (data) => {
+          const a = data.contractActions as RawAction | undefined;
+          if (!a) return;
+          const t = a.transaction;
+          // midnight-js reports a transaction by its first identifier (the keeper's own records do too)
+          const action: Action = { height: t.block.height, tx: t.identifiers?.[0] ?? t.hash, kind: a.__typename, entryPoint: a.entryPoint, state: a.state };
+          out.push(action);
+          opts.onAction?.(action, out.length);
+          if (action.height >= top) {
+            // caught up: wait for the rest of that block (and anything newer), then stop
+            clearTimeout(idle);
+            idle = setTimeout(() => finish(), idleMs);
+          }
+        },
+        error: (err) => finish(err),
+      },
+    );
+  });
 };
 
 /** The view of the contract from an action's state (hex). */

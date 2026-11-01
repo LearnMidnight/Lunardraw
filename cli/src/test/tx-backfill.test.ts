@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Starfall } from '@lunardraw/contract';
 import type { StarfallView } from '@lunardraw/keeper';
-import { type Action, backfillJson, contractActions, type Gql, txIdsByDraw } from '../tx-backfill.js';
+import { type Action, backfillJson, contractActions, type Gql, type Subscribe, txIdsByDraw } from '../tx-backfill.js';
 
 const { DrawStatus } = Starfall;
 const ADDR = 'f868fc99';
@@ -11,45 +11,54 @@ const view = (draws: Record<number, number>): StarfallView =>
   ({ draws: Object.entries(draws).map(([id, status]) => ({ id: BigInt(id), status })) }) as unknown as StarfallView;
 
 describe('backfilling transaction ids', () => {
-  it("walks the contract's actions back a block at a time to the deployment, and returns them oldest first", async () => {
-    // blocks 10 (deploy), 20 (two actions), 30 (one, beside another contract's)
-    const blocks: Record<number, { hash: string; identifiers?: string[]; contractActions: { __typename: string; address: string; state: string; entryPoint?: string }[] }[]> = {
-      10: [{ hash: 'h0', identifiers: ['id0'], contractActions: [{ __typename: 'ContractDeploy', address: ADDR, state: 's0' }] }],
-      20: [
-        { hash: 'h1', identifiers: ['id1'], contractActions: [{ __typename: 'ContractCall', address: ADDR, state: 's1', entryPoint: 'requestDraw' }] },
-        { hash: 'h2', contractActions: [{ __typename: 'ContractCall', address: '0x' + ADDR.toUpperCase(), state: 's2', entryPoint: 'buyTickets' }] },
-      ],
-      30: [
-        { hash: 'h3', identifiers: ['id3'], contractActions: [{ __typename: 'ContractCall', address: 'other', state: 'x', entryPoint: 'f' }] },
-        { hash: 'h4', identifiers: ['id4'], contractActions: [{ __typename: 'ContractCall', address: ADDR, state: 's4', entryPoint: 'computeNumbers' }] },
-      ],
+  it("reads the contract's actions from the indexer's stream, oldest first, until it has passed the latest and gone quiet", async () => {
+    const raw = (h: number, kind: string, entryPoint: string | undefined, ids: string[] | undefined, hash: string, state: string) => ({
+      contractActions: { __typename: kind, state, entryPoint, transaction: { hash, identifiers: ids, block: { height: h } } },
+    });
+    const stream = [
+      raw(10, 'ContractDeploy', undefined, ['id0'], 'h0', 's0'),
+      raw(20, 'ContractCall', 'requestDraw', ['id1'], 'h1', 's1'),
+      raw(20, 'ContractCall', 'buyTickets', undefined, 'h2', 's2'), // no identifiers: the hash
+      raw(30, 'ContractCall', 'computeNumbers', ['id4'], 'h4', 's4'),
+    ];
+    const gql: Gql = async (q, v) => {
+      expect(q).toContain('contractAction(');
+      expect(v).toEqual({ address: ADDR });
+      return { contractAction: { transaction: { block: { height: 30 } } } };
     };
-    const latestAt = (h: number) => {
-      const hs = Object.keys(blocks).map(Number).filter((x) => x <= h);
-      if (!hs.length) return null;
-      const top = Math.max(...hs);
-      const acts = blocks[top].flatMap((t) => t.contractActions).filter((c) => c.address.toLowerCase().endsWith(ADDR));
-      return { __typename: acts[acts.length - 1].__typename, transaction: { block: { height: top } } };
+    let subscribed: Record<string, unknown> | undefined;
+    let closed = false;
+    const subscribe: Subscribe = (_q, v, on) => {
+      subscribed = v;
+      stream.forEach((d, i) => setTimeout(() => on.data(d), 5 * (i + 1)));
+      return {
+        close() {
+          closed = true;
+        },
+      };
     };
-    const asked: unknown[] = [];
-    const gql: Gql = async (query, v) => {
-      asked.push(v);
-      if (query.includes('contractAction(')) {
-        const off = v.offset as { blockOffset: { height: number } } | undefined;
-        return { contractAction: latestAt(off ? off.blockOffset.height : Infinity) };
-      }
-      return { block: { height: v.height, transactions: blocks[v.height as number] } };
-    };
-    const acts = await contractActions(gql, ADDR);
+    const seen: number[] = [];
+    const acts = await contractActions(gql, subscribe, '0x' + ADDR.toUpperCase(), { fromHeight: 10, idleMs: 30, onAction: (_a, n) => seen.push(n) });
+    expect(subscribed).toEqual({ address: ADDR, offset: { height: 10 } });
     expect(acts.map((a) => [a.height, a.tx, a.entryPoint ?? a.kind, a.state])).toEqual([
       [10, 'id0', 'ContractDeploy', 's0'],
       [20, 'id1', 'requestDraw', 's1'],
-      [20, 'h2', 'buyTickets', 's2'], // no identifiers: the hash
+      [20, 'h2', 'buyTickets', 's2'],
       [30, 'id4', 'computeNumbers', 's4'],
     ]);
-    expect(asked[0]).toEqual({ address: ADDR }); // the latest first, then each block below the last
-    expect(asked).toContainEqual({ address: ADDR, offset: { blockOffset: { height: 29 } } });
-    expect(asked).toContainEqual({ address: ADDR, offset: { blockOffset: { height: 19 } } });
+    expect(seen).toEqual([1, 2, 3, 4]);
+    expect(closed).toBe(true);
+  });
+
+  it("stops with the indexer's error, and with nothing when the contract has no actions", async () => {
+    const latest: Gql = async () => ({ contractAction: { transaction: { block: { height: 5 } } } });
+    const refusing: Subscribe = (_q, _v, on) => {
+      setTimeout(() => on.error(new Error('the indexer: unknown field')), 5);
+      return { close() {} };
+    };
+    await expect(contractActions(latest, refusing, ADDR, { idleMs: 10 })).rejects.toThrow(/unknown field/);
+    const none: Gql = async () => ({ contractAction: null });
+    expect(await contractActions(none, refusing, ADDR)).toEqual([]);
   });
 
   it("names each draw's open, reveal, numbers, finalise and void transactions from the calls that moved it", () => {

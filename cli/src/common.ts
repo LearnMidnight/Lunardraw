@@ -98,10 +98,11 @@ export const publicDataFor = (network: Network) => {
   return indexerPublicDataProvider(config.indexer, config.indexerWS);
 };
 
-/** The network's indexer GraphQL address (with the Blockfrost project id where needed). */
-export const indexerUrlFor = (network: Network): string => {
+/** The network's indexer GraphQL addresses, HTTP and WebSocket (with the Blockfrost project id where needed). */
+export const indexerUrlsFor = (network: Network): { http: string; ws: string } => {
   if (network === 'local') throw new Error('this command needs a public network');
-  return publicEndpoints(network, createLogger('warn'), BLOCKFROST[network] ? blockfrostProjectId(network) : undefined).indexer;
+  const c = publicEndpoints(network, createLogger('warn'), BLOCKFROST[network] ? blockfrostProjectId(network) : undefined);
+  return { http: c.indexer, ws: c.indexerWS };
 };
 
 export const localFingerprintsOrNone = () => {
