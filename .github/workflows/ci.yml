@@ -40,7 +40,7 @@ jobs:
         run: echo "::notice title=Nightcast::$(git -C nightcast log -1 --format='%h %s')"
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Dust fee-loop fix applied
         run: node nightcast/deploy/scripts/patch-dust-fee-loop.mjs --check --root .
@@ -142,7 +142,7 @@ jobs:
         run: compact update "$COMPACT_TOOLCHAIN"
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Compile with proving keys
         shell: bash
@@ -273,7 +273,7 @@ jobs:
         run: compact update "$COMPACT_TOOLCHAIN"
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Compile with proving keys
         run: npm run compact:starfall > keys.log 2>&1 || { tail -c 2000 keys.log; exit 1; }
@@ -319,7 +319,7 @@ jobs:
         run: compact update "$COMPACT_TOOLCHAIN"
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Compile with proving keys
         shell: bash
