@@ -13,7 +13,8 @@ import { quickPick, Starfall } from '@lunardraw/contract';
 import { buildStarfallFeed, DerivedSeeds, DrawOracle, every, isStaleDustProof, STARFALL_WEEKLY, StarfallKeeper, type StarfallView, StepTimes, writeFeed } from '@lunardraw/keeper';
 import { declareFeesAtDustTime, type DustTimeWallet } from './dust-time.js';
 import { withFreshFees } from './fresh-fees.js';
-import { compilerInfo, localFingerprints, NETWORKS, openWallet, type Session, walletAddress, walletBalances } from '@nightcast/deploy';
+import { compilerInfo, localFingerprints, NETWORKS, type Session, walletAddress, walletBalances } from '@nightcast/deploy';
+import { openWallet } from './wallet-lock.js';
 import {
   fromHex,
   hex,
@@ -66,6 +67,7 @@ import {
   starfallZkConfigPath,
   verifyStarfall,
   writeStarfallRecord,
+  onChainCheck,
 } from './starfall.js';
 import { waitForTip, watchSync } from './sync-watch.js';
 import { backfillJson, contractActions, heightOfTx, indexerGql, indexerSubscribe, named, namingLike, txIdsByDraw } from './tx-backfill.js';
@@ -623,6 +625,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
             await buyGames(joined, providers.privateStateProvider, record.contractAddress, tickets, mine, {
               onEach: (done, of) => session.logger.info(`bought ${done} of ${of} ticket(s)`),
               stopAt: Number(selling.salesClose) - 60,
+              onChain: onChainCheck(providers.publicDataProvider, record.contractAddress),
             });
           } catch (err) {
             if (!(err instanceof BuyStopped)) throw err;
@@ -760,6 +763,8 @@ export const starfall = async (argv: string[]): Promise<number> => {
                     txs = await buyGames(joined, providers.privateStateProvider, record.contractAddress, tickets, mine, {
                       onEach: (done, of) => log(`bought ${done} of ${of} ticket(s)`),
                       stopAt: Number(plan.salesClose) - 60,
+                      // a purchase that timed out but did land counts (and isn't bought again)
+                      onChain: onChainCheck(providers.publicDataProvider, record.contractAddress),
                     });
                   } catch (err) {
                     if (!(err instanceof BuyStopped)) throw err;
