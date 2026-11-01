@@ -69,6 +69,10 @@ export type Subscribe = (
   on: { data: (data: Record<string, unknown>) => void; error: (err: Error) => void },
 ) => { close(): void };
 
+/** A lost connection (as opposed to the indexer refusing the query): worth reconnecting. */
+export class Dropped extends Error {}
+const dropped = (msg: string) => new Dropped(msg);
+
 /** The parts of a WebSocket used here (Node 22's global, typed without the DOM library). */
 type Socket = {
   send(data: string): void;
@@ -101,9 +105,9 @@ export const indexerSubscribe =
       on.error(err);
     };
     ws.onopen = () => ws.send(JSON.stringify({ type: 'connection_init', payload: {} }));
-    ws.onerror = () => fail(new Error(`couldn't reach the indexer's WebSocket (${wsUrl.replace(/project_id=[^&]+/, 'project_id=***')})`));
+    ws.onerror = () => fail(dropped(`couldn't reach the indexer's WebSocket (${wsUrl.replace(/project_id=[^&]+/, 'project_id=***')})`));
     ws.onclose = (e: { code?: number; reason?: string }) => {
-      if (!closed) fail(new Error(`the indexer closed the WebSocket (${e.code ?? ''} ${e.reason ?? ''})`.trim()));
+      if (!closed) fail(dropped(`the indexer closed the WebSocket (${e.code ?? ''} ${e.reason ?? ''})`.trim()));
     };
     ws.onmessage = (e: { data: unknown }) => {
       let m: { type?: string; id?: string; payload?: { data?: Record<string, unknown>; errors?: { message: string }[] } | { message: string }[] };
@@ -121,7 +125,7 @@ export const indexerSubscribe =
       } else if (m.type === 'error') {
         const errs = (Array.isArray(m.payload) ? m.payload : []) as { message: string }[];
         fail(new Error(`the indexer: ${errs.map((x) => x.message).join('; ') || 'subscription refused'}`));
-      } else if (m.type === 'complete') fail(new Error('the indexer ended the subscription early'));
+      } else if (m.type === 'complete') fail(dropped('the indexer ended the subscription early'));
     };
     return {
       close() {
@@ -176,16 +180,28 @@ export const contractActions = async (
   gql: Gql,
   subscribe: Subscribe,
   address: string,
-  opts: { fromHeight?: number; idleMs?: number; timeoutMs?: number; onAction?: (a: Action, count: number) => void } = {},
+  opts: {
+    fromHeight?: number;
+    idleMs?: number;
+    timeoutMs?: number;
+    /** Reconnections allowed after a dropped connection (default 8), and the pause before each (ms, default 3000). */
+    retries?: number;
+    retryPauseMs?: number;
+    onAction?: (a: Action, count: number) => void;
+    onResume?: (fromHeight: number, attempt: number, why: string) => void;
+  } = {},
 ): Promise<Action[]> => {
   const latest = (await gql(LATEST, { address: bare(address) })).contractAction as { transaction: { block: { height: number } } } | null;
   if (!latest) return [];
   const top = latest.transaction.block.height;
   const idleMs = opts.idleMs ?? 5_000;
-  const out: Action[] = [];
+  const retries = opts.retries ?? 8;
+  let out: Action[] = [];
   return new Promise<Action[]>((resolve, reject) => {
     let idle: ReturnType<typeof setTimeout> | undefined;
     let done = false;
+    let sub: { close(): void } = { close() {} };
+    let attempt = 0;
     const finish = (err?: Error) => {
       if (done) return;
       done = true;
@@ -195,15 +211,36 @@ export const contractActions = async (
       if (err) reject(err);
       else resolve(out);
     };
+    /*
+     * A dropped connection resumes from the block of the last action received:
+     * that block's actions are dropped and read again whole, so nothing is
+     * missed or counted twice.
+     */
+    const resume = (err: Error) => {
+      if (done) return;
+      if (!(err instanceof Dropped) || attempt >= retries) return finish(err);
+      attempt++;
+      clearTimeout(idle);
+      const from = out.length ? out[out.length - 1].height : (opts.fromHeight ?? 0);
+      out = out.filter((a) => a.height < from);
+      opts.onResume?.(from, attempt, err.message);
+      setTimeout(() => {
+        if (!done) start(from);
+      }, opts.retryPauseMs ?? 3_000);
+    };
     const overall = setTimeout(
       () => finish(new Error(`the indexer hadn't sent the contract's history up to block ${top} after ${Math.round((opts.timeoutMs ?? 30 * 60_000) / 60_000)} minutes (${out.length} actions so far)`)),
       opts.timeoutMs ?? 30 * 60_000,
     );
-    const sub = subscribe(
+    let generation = 0;
+    const start = (from: number) => {
+     const mine = ++generation; // a dropped connection's late messages are ignored
+     sub = subscribe(
       ACTIONS,
-      { address: bare(address), offset: { height: opts.fromHeight ?? 0 } },
+      { address: bare(address), offset: { height: from } },
       {
         data: (data) => {
+          if (mine !== generation) return;
           const a = data.contractActions as RawAction | undefined;
           if (!a) return;
           const t = a.transaction;
@@ -225,9 +262,13 @@ export const contractActions = async (
             idle = setTimeout(() => finish(), idleMs);
           }
         },
-        error: (err) => finish(err),
+        error: (err) => {
+          if (mine === generation) resume(err);
+        },
       },
-    );
+     );
+    };
+    start(opts.fromHeight ?? 0);
   });
 };
 
