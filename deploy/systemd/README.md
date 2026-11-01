@@ -89,7 +89,7 @@ when Starfall needs a person:
 | The keeper or oracle isn't reporting | its status file is over 10 minutes old (stopped or frozen) |
 | Hasn't checked the chain | no finished pass for 15 minutes (stuck) |
 | Transactions failing | 3 or more in a row for 10 minutes |
-| Wallet not synced, low on DUST, no tNIGHT | not synced 20 minutes after starting; under 1 DUST (`--min-dust`); 0 tNIGHT |
+| Wallet not synced, low on DUST, no tNIGHT | not synced 20 minutes after starting; under `--min-dust` (5,000 DUST in the unit; the default is 1); 0 tNIGHT |
 | A draw near its reveal, oracle or settlement deadline | 5 minutes before the reveal or oracle deadline, or the oracle 10 minutes late; an hour before the settlement deadline |
 | A draw voided | each one, once, with the reason |
 | The site feed is stale, the disk nearly full | no new feed for 10 minutes; under 10% or 5 GB free |
