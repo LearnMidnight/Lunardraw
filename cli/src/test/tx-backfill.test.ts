@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Starfall } from '@lunardraw/contract';
 import type { StarfallView } from '@lunardraw/keeper';
-import { type Action, backfillJson, contractActions, type Gql, type Subscribe, txIdsByDraw } from '../tx-backfill.js';
+import { type Action, backfillJson, contractActions, type Gql, named, namingLike, type Subscribe, txIdsByDraw } from '../tx-backfill.js';
 
 const { DrawStatus } = Starfall;
 const ADDR = 'f868fc99';
@@ -40,11 +40,12 @@ describe('backfilling transaction ids', () => {
     const seen: number[] = [];
     const acts = await contractActions(gql, subscribe, '0x' + ADDR.toUpperCase(), { fromHeight: 10, idleMs: 30, onAction: (_a, n) => seen.push(n) });
     expect(subscribed).toEqual({ address: ADDR, offset: { height: 10 } });
-    expect(acts.map((a) => [a.height, a.tx, a.entryPoint ?? a.kind, a.state])).toEqual([
-      [10, 'id0', 'ContractDeploy', 's0'],
-      [20, 'id1', 'requestDraw', 's1'],
-      [20, 'h2', 'buyTickets', 's2'],
-      [30, 'id4', 'computeNumbers', 's4'],
+    // filed under the hash, with every name the indexer gave
+    expect(acts.map((a) => [a.height, a.tx, a.ids, a.entryPoint ?? a.kind, a.state])).toEqual([
+      [10, 'h0', ['id0'], 'ContractDeploy', 's0'],
+      [20, 'h1', ['id1'], 'requestDraw', 's1'],
+      [20, 'h2', [], 'buyTickets', 's2'],
+      [30, 'h4', ['id4'], 'computeNumbers', 's4'],
     ]);
     expect(seen).toEqual([1, 2, 3, 4]);
     expect(closed).toBe(true);
@@ -59,6 +60,19 @@ describe('backfilling transaction ids', () => {
     await expect(contractActions(latest, refusing, ADDR, { idleMs: 10 })).rejects.toThrow(/unknown field/);
     const none: Gql = async () => ({ contractAction: null });
     expect(await contractActions(none, refusing, ADDR)).toEqual([]);
+  });
+
+  it("names the transactions the way the keeper's own records do: by hash or by an identifier, whichever matches", () => {
+    const act = (hash: string, ids: string[]): Action => ({ height: 1, tx: hash, hash, ids, kind: 'ContractCall', entryPoint: 'requestDraw', state: '' });
+    const acts = [act('h1', ['a1', 'b1']), act('h2', ['a2', 'b2']), act('h3', ['a3'])];
+    expect(namingLike(acts, new Set(['h2', 'h3'])).naming.label).toBe('hash');
+    const byFirst = namingLike(acts, new Set(['0xA1', 'a3']));
+    expect([byFirst.naming.label, byFirst.matched]).toEqual(['identifier 1', 2]);
+    const bySecond = namingLike(acts, new Set(['b1', 'b2']));
+    expect(bySecond.naming.label).toBe('identifier 2');
+    expect(named(acts, bySecond.naming).map((a) => a.tx)).toEqual(['b1', 'b2', 'h3']); // no second identifier: its hash
+    expect(namingLike(acts, new Set(['zz'])).matched).toBe(0); // none matches
+    expect(namingLike(acts, new Set()).naming.label).toBe('hash'); // nothing to compare: the hash
   });
 
   it("names each draw's open, reveal, numbers, finalise and void transactions from the calls that moved it", () => {
@@ -76,16 +90,16 @@ describe('backfilling transaction ids', () => {
       void2: view({ 1: settled, 2: voided, 3: open }),
     };
     const acts: Action[] = [
-      { height: 1, tx: 'tx-deploy', kind: 'ContractDeploy', state: 'deploy' },
-      { height: 2, tx: 'tx-open1', kind: 'ContractCall', entryPoint: 'requestDraw', state: 'open1' },
-      { height: 3, tx: 'tx-buy', kind: 'ContractCall', entryPoint: 'buyTickets', state: 'buy' },
-      { height: 4, tx: 'tx-reveal1', kind: 'ContractCall', entryPoint: 'requestDraw', state: 'reveal1' },
-      { height: 5, tx: 'tx-fulfil1', kind: 'ContractCall', entryPoint: 'fulfilDraw', state: 'fulfil1' },
-      { height: 6, tx: 'tx-numbers1', kind: 'ContractCall', entryPoint: 'computeNumbers', state: 'numbers1' },
-      { height: 7, tx: 'tx-settle1', kind: 'ContractCall', entryPoint: 'settleBatch', state: 'settle1' },
-      { height: 8, tx: 'tx-final1', kind: 'ContractCall', entryPoint: 'finaliseDraw', state: 'final1' },
-      { height: 9, tx: 'tx-reveal2', kind: 'ContractCall', entryPoint: 'requestDraw', state: 'reveal2' },
-      { height: 10, tx: 'tx-void2', kind: 'ContractCall', entryPoint: 'voidDraw', state: 'void2' },
+      { height: 1, tx: 'tx-deploy', hash: 'tx-deploy', ids: [], kind: 'ContractDeploy', state: 'deploy' },
+      { height: 2, tx: 'tx-open1', hash: 'tx-open1', ids: [], kind: 'ContractCall', entryPoint: 'requestDraw', state: 'open1' },
+      { height: 3, tx: 'tx-buy', hash: 'tx-buy', ids: [], kind: 'ContractCall', entryPoint: 'buyTickets', state: 'buy' },
+      { height: 4, tx: 'tx-reveal1', hash: 'tx-reveal1', ids: [], kind: 'ContractCall', entryPoint: 'requestDraw', state: 'reveal1' },
+      { height: 5, tx: 'tx-fulfil1', hash: 'tx-fulfil1', ids: [], kind: 'ContractCall', entryPoint: 'fulfilDraw', state: 'fulfil1' },
+      { height: 6, tx: 'tx-numbers1', hash: 'tx-numbers1', ids: [], kind: 'ContractCall', entryPoint: 'computeNumbers', state: 'numbers1' },
+      { height: 7, tx: 'tx-settle1', hash: 'tx-settle1', ids: [], kind: 'ContractCall', entryPoint: 'settleBatch', state: 'settle1' },
+      { height: 8, tx: 'tx-final1', hash: 'tx-final1', ids: [], kind: 'ContractCall', entryPoint: 'finaliseDraw', state: 'final1' },
+      { height: 9, tx: 'tx-reveal2', hash: 'tx-reveal2', ids: [], kind: 'ContractCall', entryPoint: 'requestDraw', state: 'reveal2' },
+      { height: 10, tx: 'tx-void2', hash: 'tx-void2', ids: [], kind: 'ContractCall', entryPoint: 'voidDraw', state: 'void2' },
     ];
     const decoded: string[] = [];
     const ids = txIdsByDraw(acts, (s) => {
