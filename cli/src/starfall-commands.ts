@@ -8,6 +8,7 @@ import { webcrypto } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { encodeContractAddress } from '@midnight-ntwrk/compact-runtime';
+import { unshieldedToken } from '@midnight-ntwrk/midnight-js-protocol/ledger';
 import { MidnightBech32m } from '@midnight-ntwrk/wallet-sdk-address-format';
 import { quickPick, Starfall } from '@lunardraw/contract';
 import { buildStarfallFeed, DerivedSeeds, DrawOracle, every, isStaleDustProof, STARFALL_WEEKLY, StarfallKeeper, type StarfallView, StepTimes, writeFeed } from '@lunardraw/keeper';
@@ -15,6 +16,7 @@ import { declareFeesAtDustTime, type DustTimeWallet } from './dust-time.js';
 import { withFreshFees } from './fresh-fees.js';
 import { compilerInfo, localFingerprints, NETWORKS, type Session, walletAddress, walletBalances } from '@nightcast/deploy';
 import { openWallet } from './wallet-lock.js';
+import { statusWriter } from './status-file.js';
 import {
   fromHex,
   hex,
@@ -80,9 +82,9 @@ export const STARFALL_USAGE = `usage: ./lunardraw starfall <command>
   accept-key   --network <network> --oracle <file> --wallet <file>
   keeper       --network <network> --organiser <file> --settlement <file> --wallet <file> [--every <seconds>] [--feed <file>]
                [--proof-server-port <port>] [--prove-lead <secs>] [--restart-after <min>] [--stall-after <min>] [--dust-wait <min>]
-               [--silent-after <min>]
+               [--silent-after <min>] [--status <file>]
   oracle       --network <network> --oracle <file> --wallet <file> [--proof-server-port <port>] [--restart-after <min>] [--stall-after <min>]
-               [--dust-wait <min>] [--silent-after <min>]
+               [--dust-wait <min>] [--silent-after <min>] [--status <file>]
   buy          --network <network> --wallet <file> [--pay-to <address>] [--proof-server-port <port>]
                [--games <n> | --package <${Object.keys(Starfall.QUICK_PICK_PACKAGES).join('|')}>] [--sweep]
                | [--system <8-12> | --pick <5|6>] [--numbers "<n n n ...>"] [--moonball <1-20> | --sweep]
@@ -114,6 +116,8 @@ keep its file private, like the organiser's. Its public half goes into the contr
 stay offline. Starfall's commitments differ from v0's: a v0 deployment record's backupCommitment won't do. --operator is where the 0.2 tNIGHT fee per game goes (default:
 the deploying wallet).
 The keeper works out each draw's seed from the organiser secret, so there is no seeds file.
+--status <file> makes the keeper or the oracle rewrite a small health file there every minute (its
+wallet's balances, its last pass, failures in a row) for \`./lunardraw monitor\`, which emails alerts.
 buy buys tickets for the draw on sale, paid to --pay-to (default: your wallet), with refunds to your
 wallet if the draw is cancelled; it sends up to 18 tickets per transaction. A ticket is one entry:
   --games <n> / --package <name>   that many random standard games (QuickPick), one ticket each;
@@ -350,6 +354,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
       out: { type: 'string' },
       every: { type: 'string' },
       feed: { type: 'string' },
+      status: { type: 'string' },
       'proof-server-port': { type: 'string' },
       'restart-after': { type: 'string' },
       'stall-after': { type: 'string' },
@@ -547,10 +552,15 @@ export const starfall = async (argv: string[]): Promise<number> => {
           const watchdog = untilFailingFor(restartAfter(values['restart-after']), () => keeper.status().streak, session.logger);
           const sync = watchSync(wallet, { stallMinutes: stallAfter(values['stall-after']), logger: session.logger });
           const silence = untilSilentFor(silentAfter(values['silent-after']), () => keeper.status().lastTickAt, session.logger);
+          // health for `./lunardraw monitor` (its alerts)
+          const health = values.status
+            ? statusWriter(values.status, { service: 'keeper', wallet, pass: () => keeper.status(), nightToken: unshieldedToken().raw, logger: session.logger })
+            : undefined;
           const restart = await Promise.race([untilStopped().then(() => false), watchdog.done, sync.stalled, silence.done, stuck]);
           watchdog.cancel();
           sync.stop();
           silence.cancel();
+          health?.stop();
           if (restart) forceExit(RESTART);
           session.logger.info('Stopping the keeper...');
           await keeper.stop();
@@ -582,10 +592,14 @@ export const starfall = async (argv: string[]): Promise<number> => {
           const watchdog = untilFailingFor(restartAfter(values['restart-after']), () => oracle.status().streak, session.logger);
           const sync = watchSync(wallet, { stallMinutes: stallAfter(values['stall-after']), logger: session.logger });
           const silence = untilSilentFor(silentAfter(values['silent-after']), () => oracle.status().lastTickAt, session.logger);
+          const health = values.status
+            ? statusWriter(values.status, { service: 'oracle', wallet, pass: () => oracle.status(), nightToken: unshieldedToken().raw, logger: session.logger })
+            : undefined;
           const restart = await Promise.race([untilStopped().then(() => false), watchdog.done, sync.stalled, silence.done, stuck]);
           watchdog.cancel();
           sync.stop();
           silence.cancel();
+          health?.stop();
           if (restart) forceExit(RESTART);
           session.logger.info('Stopping the oracle...');
           await oracle.stop();

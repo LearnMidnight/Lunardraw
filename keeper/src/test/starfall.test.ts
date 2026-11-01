@@ -467,6 +467,8 @@ describe('the Starfall site feed', () => {
     expect(game.fee_star).toBe(200_000);
     expect(game.allocation_bp).toEqual([3350, 185, 230, 200, 150, 940, 730, 1550, 2665]);
     expect(game.open).toMatchObject({ num: 1, games_sold: 30 });
+    // the monitor warns before the reveal deadline
+    expect(game.open!.reveal_deadline).toBe(new Date(Number(draw(sim, 1n).revealDeadline) * 1000).toISOString());
     expect(game.draws).toEqual([]);
 
     passing(sim, draw(sim, 1n).salesClose);

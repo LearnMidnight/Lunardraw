@@ -1,0 +1,11 @@
+# Runs lunardraw-monitor.service every 5 minutes (and 2 minutes after boot).
+[Unit]
+Description=Run the Lunardraw monitor every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

@@ -12,7 +12,8 @@ Environment=HOME=/root
 ExecStart=/root/Lunardraw/lunardraw starfall oracle --network preprod \
   --oracle /root/lunardraw-secrets/oracle.secret \
   --wallet /root/nightcast-secrets/oracle-wallet.secret \
-  --proof-server-port 6300
+  --proof-server-port 6300 \
+  --status /root/lunardraw-status/oracle.json
 Restart=always
 RestartSec=15
 TimeoutStopSec=60

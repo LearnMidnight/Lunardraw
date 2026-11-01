@@ -16,7 +16,8 @@ ExecStart=/root/Lunardraw/lunardraw starfall keeper --network preprod \
   --settlement /root/lunardraw-secrets/settlement.secret \
   --wallet /root/nightcast-secrets/requester-wallet.secret \
   --every 3600 --proof-server-port 6300 \
-  --feed /root/lunardraw-feed/feed.json
+  --feed /root/lunardraw-feed/feed.json \
+  --status /root/lunardraw-status/keeper.json
 # Exit code 75 = "restart me" (the watchdog, after transactions kept failing).
 Restart=always
 RestartSec=15

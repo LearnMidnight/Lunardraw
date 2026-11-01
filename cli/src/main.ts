@@ -49,6 +49,7 @@ import {
 import { joinLunardraw, lunardrawProviders, MidnightLunardrawChain, readView, zkConfigPath } from './contract.js';
 import { PARAMS_VOLUME, ProofServer } from './proof-server.js';
 import { starfall } from './starfall-commands.js';
+import { monitor } from './monitor-command.js';
 import { watchSync } from './sync-watch.js';
 import {
   acceptOracleKey,
@@ -77,6 +78,7 @@ const USAGE = `usage:
   ./lunardraw verify       --network <network>
   ./lunardraw fingerprints
   ./lunardraw starfall ...   (the Starfall settlement contract: ./lunardraw starfall help)
+  ./lunardraw monitor ...    (email alerts for Starfall: ./lunardraw monitor --help)
 
 These commands run the v0 test contract. Defaults are a weekly Starfall: draws close on Thursdays at 20:00 Brisbane (10:00 UTC),
 1 tNIGHT a line, sales of 1 to 14 days, 1 hour to reveal, 2 hours for the oracle, 2 days
@@ -101,6 +103,7 @@ const STATUS = ['open', 'requested', 'fulfilled', 'drawn', 'settled', 'voided'];
 const main = async (argv: string[]): Promise<number> => {
   const [command, ...rest] = argv;
   if (command === 'starfall') return starfall(rest);
+  if (command === 'monitor') return monitor(rest);
   const { values, positionals } = parseArgs({
     args: rest,
     allowPositionals: true,
