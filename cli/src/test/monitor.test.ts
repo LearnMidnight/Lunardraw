@@ -25,9 +25,10 @@ const status = (service: string, over: Partial<ServiceStatus> = {}): ServiceStat
   ...over,
 });
 
-const services = (keeper: Partial<ServiceStatus> | undefined = {}, oracle: Partial<ServiceStatus> | undefined = {}) => [
-  { service: 'keeper', unit: 'lunardraw-starfall-keeper', path: '/s/keeper.json', status: keeper && status('keeper', keeper) },
-  { service: 'oracle', unit: 'lunardraw-starfall-oracle', path: '/s/oracle.json', status: oracle && status('oracle', oracle) },
+/** null: that service's status file is missing. */
+const services = (keeper: Partial<ServiceStatus> | null = {}, oracle: Partial<ServiceStatus> | null = {}) => [
+  { service: 'keeper', unit: 'lunardraw-starfall-keeper', path: '/s/keeper.json', status: keeper ? status('keeper', keeper) : undefined },
+  { service: 'oracle', unit: 'lunardraw-starfall-oracle', path: '/s/oracle.json', status: oracle ? status('oracle', oracle) : undefined },
 ];
 
 const draw = (num: number, over: Partial<StarfallFeedDraw>): StarfallFeedDraw => ({
@@ -66,7 +67,7 @@ describe('the monitor', () => {
   });
 
   it("reports a stopped service once, not again as a missing status", () => {
-    const inp = inputs({ units: [UNITS[0], UNITS[1], unit('lunardraw-starfall-oracle', 'failed')], services: services({}, undefined) });
+    const inp = inputs({ units: [UNITS[0], UNITS[1], unit('lunardraw-starfall-oracle', 'failed')], services: services({}, null) });
     const alerts = evaluate(inp, { ...emptyState(), lastVoid: 0 });
     expect(alerts.map((a) => a.key)).toEqual(['unit:lunardraw-starfall-oracle']);
     expect(alerts[0].title).toBe('lunardraw-starfall-oracle is not running (failed, dead)');
@@ -89,7 +90,7 @@ describe('the monitor', () => {
 
   it('notices a service that stopped reporting, got stuck, keeps failing, lost its sync or runs low', () => {
     expect(keys(inputs({ services: services({ at: iso(NOW - 12 * MIN) }) }))).toEqual(['status:keeper']);
-    expect(keys(inputs({ services: services(undefined) }))).toEqual(['status:keeper']);
+    expect(keys(inputs({ services: services(null) }))).toEqual(['status:keeper']);
     expect(keys(inputs({ services: services({}, { last_pass_at: iso(NOW - 20 * MIN) }) }))).toEqual(['pass:oracle']);
     expect(keys(inputs({ services: services({}, { failures: 5, failing_since: iso(NOW - 11 * MIN) }) }))).toEqual(['failing:oracle']);
     expect(keys(inputs({ services: services({}, { failures: 5, failing_since: iso(NOW - 4 * MIN) }) }))).toEqual([]); // not long enough
