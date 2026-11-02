@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { StarfallFeed, StarfallFeedDraw } from '@lunardraw/keeper';
 import { DEFAULT_CONFIG, decide, digest, emptyState, evaluate, type Inputs, noteRestarts, restartsInHour, type Unit } from '../monitor.js';
@@ -188,6 +189,13 @@ describe('the monitor', () => {
     expect(JSON.parse(String(sent!.init.body))).toEqual({ from: 'a@l.io', to: ['o@l.io'], subject: 's', text: 't' });
     const refused = (async () => new Response('{"message":"domain not verified"}', { status: 403 })) as unknown as typeof fetch;
     await expect(sendEmail({ subject: 's', text: 't' }, { key: 'k', from: 'a', to: ['b'] }, refused)).rejects.toThrow(/403.*not verified/);
+  });
+
+  it("loads nothing but Node's own modules (it runs every 5 minutes, apart from main.js)", () => {
+    const loads = (file: string) =>
+      [...readFileSync(new URL(`../${file}`, import.meta.url), 'utf8').matchAll(/^import (?!type )[^;]*? from '([^']+)'/gm)].map((m) => m[1]);
+    const files = ['monitor-main.ts', 'monitor-command.ts', 'monitor.ts', 'status-file.ts'];
+    for (const f of files) for (const m of loads(f)) expect(m.startsWith('node:') || files.includes(m.replace(/^\.\//, '').replace(/\.js$/, '.ts')), `${f} loads ${m}`).toBe(true);
   });
 
   it("writes the service's health from its wallet state and passes", () => {
