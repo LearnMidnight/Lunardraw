@@ -8,6 +8,11 @@ if [ ! -f "$DIR/cli/dist/main.js" ]; then
   echo "Lunardraw isn't built yet. Run: npm install && npm run compact:keys && npm run build" >&2
   exit 1
 fi
+# The monitor (every 5 minutes) needs none of Midnight's libraries or the patch below.
+if [ "${1:-}" = monitor ]; then
+  shift
+  exec node "$DIR/cli/dist/monitor-main.js" "$@"
+fi
 # Fix the dust wallet's endless fee loop in the installed library (see
 # nightcast/deploy/scripts/patch-dust-fee-loop.mjs). Quick, and does nothing once applied.
 node "$DIR/nightcast/deploy/scripts/patch-dust-fee-loop.mjs" --quiet --root "$DIR" || true
