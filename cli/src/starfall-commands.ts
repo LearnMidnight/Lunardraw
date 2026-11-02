@@ -17,6 +17,7 @@ import { withFreshFees } from './fresh-fees.js';
 import { compilerInfo, localFingerprints, NETWORKS, type Session, walletAddress, walletBalances } from '@nightcast/deploy';
 import { openWallet } from './wallet-lock.js';
 import { statusWriter } from './status-file.js';
+import { DEFAULT_PROVER, hostedProofProvider } from './hosted-prover.js';
 import {
   fromHex,
   hex,
@@ -85,12 +86,12 @@ export const STARFALL_USAGE = `usage: ./lunardraw starfall <command>
                [--silent-after <min>] [--status <file>]
   oracle       --network <network> --oracle <file> --wallet <file> [--proof-server-port <port>] [--restart-after <min>] [--stall-after <min>]
                [--dust-wait <min>] [--silent-after <min>] [--status <file>]
-  buy          --network <network> --wallet <file> [--pay-to <address>] [--proof-server-port <port>]
+  buy          --network <network> --wallet <file> [--pay-to <address>] [--proof-server-port <port> | --prover <url|hosted>]
                [--games <n> | --package <${Object.keys(Starfall.QUICK_PICK_PACKAGES).join('|')}>] [--sweep]
                | [--system <8-12> | --pick <5|6>] [--numbers "<n n n ...>"] [--moonball <1-20> | --sweep]
   agent        --network <network> --wallet <file> --name <name> [--style quickpick|lucky|moonhit|system|mix]
                [--games <n>] [--numbers "<7 numbers>" --moonball <1-20>] [--budget <tNIGHT a draw>] [--max-draws <n>]
-               [--state <file>] [--proof-server-port <port>] [--dust-wait <min>]
+               [--state <file>] [--proof-server-port <port> | --prover <url|hosted>] [--dust-wait <min>]
   status       --network <network>
   verify       --network <network>
   backfill-tx  --network <network> --feed <file>
@@ -118,6 +119,9 @@ the deploying wallet).
 The keeper works out each draw's seed from the organiser secret, so there is no seeds file.
 --status <file> makes the keeper or the oracle rewrite a small health file there every minute (its
 wallet's balances, its last pass, failures in a row) for \`./lunardraw monitor\`, which emails alerts.
+--prover hosted (or a prover's address) proves buy's and agent's purchases with Lunardraw's player prover
+instead of a proof server: no Docker and no proving keys needed. It sees the tickets being bought, never
+the draw.
 buy buys tickets for the draw on sale, paid to --pay-to (default: your wallet), with refunds to your
 wallet if the draw is cancelled; it sends up to 18 tickets per transaction. A ticket is one entry:
   --games <n> / --package <name>   that many random standard games (QuickPick), one ticket each;
@@ -338,6 +342,19 @@ export const buyEntries = (v: {
   return [entry];
 };
 
+/** `--prover <url>`, or `--prover hosted` for Lunardraw's player prover: buy without a proof server. */
+const proverArg = (v: string | undefined): string | undefined => (v === undefined ? undefined : v === 'hosted' ? DEFAULT_PROVER : v);
+
+/** A buyer's providers: proofs from the proof server, or from the remote prover when one is given. */
+const buyerProviders = (session: Session, wallet: Parameters<typeof starfallProviders>[1], prover: string | undefined) => {
+  const providers = starfallProviders(session, wallet);
+  if (!prover) return providers;
+  const proofProvider = hostedProofProvider(prover, {
+    onWait: (status, secs) => session.logger.info(`the prover is ${status === 429 ? 'limiting this address' : 'busy'}; trying again in ${secs} s`),
+  });
+  return { ...providers, proofProvider: proofProvider as unknown as typeof providers.proofProvider };
+};
+
 export const starfall = async (argv: string[]): Promise<number> => {
   const [command, ...rest] = argv;
   const { values, positionals } = parseArgs({
@@ -355,6 +372,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
       every: { type: 'string' },
       feed: { type: 'string' },
       status: { type: 'string' },
+      prover: { type: 'string' },
       'proof-server-port': { type: 'string' },
       'restart-after': { type: 'string' },
       'stall-after': { type: 'string' },
@@ -614,10 +632,11 @@ export const starfall = async (argv: string[]): Promise<number> => {
       const network = networkArg(values.network);
       const record = readStarfallRecord(network);
       const entries = buyEntries(values);
+      const prover = proverArg(values.prover);
       return withSession(network, async (session) => {
         const wallet = await openWallet(session, { seed: walletSeed(values.wallet) });
         try {
-          const providers = starfallProviders(session, wallet);
+          const providers = buyerProviders(session, wallet, prover);
           const view = await readStarfallView(providers.publicDataProvider, record.contractAddress);
           const now = BigInt(Math.floor(Date.now() / 1000));
           const selling = view.draws.find((d) => d.status === Starfall.DrawStatus.open && d.salesClose > now + 120n);
@@ -659,7 +678,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
         } finally {
           await wallet.stop().catch(() => undefined);
         }
-      }, proofServerPort(values['proof-server-port']));
+      }, proofServerPort(values['proof-server-port']), prover);
     }
 
     case 'agent': {
@@ -683,13 +702,14 @@ export const starfall = async (argv: string[]): Promise<number> => {
         if (!opts.numbers || opts.numbers.length !== 7 || !opts.moonball) throw new Error('--style lucky needs --numbers "<7 numbers>" and --moonball');
         Starfall.checkEntry({ numbers: opts.numbers, moonball: opts.moonball });
       }
+      const prover = proverArg(values.prover);
       const statePath = values.state ?? `${homedir()}/lunardraw-agents/${name}.state.json`;
       const dustMinutes = values['dust-wait'] === undefined ? 20 : Number(values['dust-wait']);
       return withSession(network, async (session) => {
         const wallet = await openServiceWallet(session, walletSeed(values.wallet), dustMinutes);
         if (!wallet) return RESTART;
         try {
-          const providers = starfallProviders(session, wallet);
+          const providers = buyerProviders(session, wallet, prover);
           const joined = await joinStarfall(providers, record.contractAddress, {});
           const state = loadAgentState(statePath);
           const mine = walletBytes(wallet);
@@ -822,7 +842,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
         } finally {
           await wallet.stop().catch(() => undefined);
         }
-      }, proofServerPort(values['proof-server-port']));
+      }, proofServerPort(values['proof-server-port']), prover);
     }
 
     case 'status': {
