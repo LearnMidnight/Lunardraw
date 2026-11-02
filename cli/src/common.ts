@@ -81,9 +81,14 @@ export const networkArg = (value: string | undefined): Network => {
   return value;
 };
 
-export const withSession = async <T>(network: Network, run: (s: Session) => Promise<T>, proofServerPort?: number): Promise<T> => {
+/**
+ * Connect, run, disconnect. The proof server is the one on `proofServerPort`,
+ * or a remote prover at `proverUrl` (Lunardraw's player prover for ticket
+ * purchases), or else one started in Docker.
+ */
+export const withSession = async <T>(network: Network, run: (s: Session) => Promise<T>, proofServerPort?: number, proverUrl?: string): Promise<T> => {
   const projectId = BLOCKFROST[network] ? blockfrostProjectId(network) : undefined;
-  const session = await connect(network, { projectId, proofServerPort });
+  const session = await connect(network, { projectId, proofServerPort, proofServerUrl: proverUrl });
   try {
     return await run(session);
   } finally {
