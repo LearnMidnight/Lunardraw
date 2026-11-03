@@ -17,7 +17,7 @@ import { withFreshFees } from './fresh-fees.js';
 import { compilerInfo, localFingerprints, NETWORKS, type Session, walletAddress, walletBalances } from '@nightcast/deploy';
 import { openWallet } from './wallet-lock.js';
 import { statusWriter } from './status-file.js';
-import { DEFAULT_PROVER, hostedProofProvider } from './hosted-prover.js';
+import { buyerProviders, buyWithRetry, proverArg } from './buyer.js';
 import {
   fromHex,
   hex,
@@ -91,7 +91,7 @@ export const STARFALL_USAGE = `usage: ./lunardraw starfall <command>
                | [--system <8-12> | --pick <5|6>] [--numbers "<n n n ...>"] [--moonball <1-20> | --sweep]
   agent        --network <network> --wallet <file> --name <name> [--style quickpick|lucky|moonhit|system|mix]
                [--games <n>] [--numbers "<7 numbers>" --moonball <1-20>] [--budget <tNIGHT a draw>] [--max-draws <n>]
-               [--state <file>] [--proof-server-port <port> | --prover <url|hosted>] [--dust-wait <min>]
+               [--daily-limit <tNIGHT a day>] [--state <file>] [--proof-server-port <port> | --prover <url|hosted>] [--dust-wait <min>]
   status       --network <network>
   verify       --network <network>
   backfill-tx  --network <network> --feed <file>
@@ -342,19 +342,6 @@ export const buyEntries = (v: {
   return [entry];
 };
 
-/** `--prover <url>`, or `--prover hosted` for Lunardraw's player prover: buy without a proof server. */
-const proverArg = (v: string | undefined): string | undefined => (v === undefined ? undefined : v === 'hosted' ? DEFAULT_PROVER : v);
-
-/** A buyer's providers: proofs from the proof server, or from the remote prover when one is given. */
-const buyerProviders = (session: Session, wallet: Parameters<typeof starfallProviders>[1], prover: string | undefined) => {
-  const providers = starfallProviders(session, wallet);
-  if (!prover) return providers;
-  const proofProvider = hostedProofProvider(prover, {
-    onWait: (status, secs) => session.logger.info(`the prover is ${status === 429 ? 'limiting this address' : 'busy'}; trying again in ${secs} s`),
-  });
-  return { ...providers, proofProvider: proofProvider as unknown as typeof providers.proofProvider };
-};
-
 export const starfall = async (argv: string[]): Promise<number> => {
   const [command, ...rest] = argv;
   const { values, positionals } = parseArgs({
@@ -399,6 +386,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
       name: { type: 'string' },
       style: { type: 'string' },
       budget: { type: 'string' },
+      'daily-limit': { type: 'string' },
       'max-draws': { type: 'string' },
       state: { type: 'string' },
     },
@@ -655,10 +643,9 @@ export const starfall = async (argv: string[]): Promise<number> => {
           );
           const listing = (n: number) => entries.slice(0, n).map((e, i) => `  ticket ${i + 1}: ${describeEntry(e)}`).join('\n');
           try {
-            await buyGames(joined, providers.privateStateProvider, record.contractAddress, tickets, mine, {
-              onEach: (done, of) => session.logger.info(`bought ${done} of ${of} ticket(s)`),
-              stopAt: Number(selling.salesClose) - 60,
-              onChain: onChainCheck(providers.publicDataProvider, record.contractAddress),
+            // a collision with another purchase (it took the same ticket number) is built again
+            await buyWithRetry(joined, providers, record.contractAddress, tickets, mine, selling.salesClose, {
+              log: (msg) => session.logger.info(msg),
             });
           } catch (err) {
             if (!(err instanceof BuyStopped)) throw err;
@@ -697,6 +684,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
         moonball: values.moonball !== undefined ? Number(values.moonball) : undefined,
         budget: values.budget !== undefined ? BigInt(Math.round(Number(values.budget) * 1e6)) : undefined,
         maxDraws: values['max-draws'] !== undefined ? Number(values['max-draws']) : 0,
+        dailyLimit: values['daily-limit'] !== undefined ? BigInt(Math.round(Number(values['daily-limit']) * 1e6)) : undefined,
       };
       if (style === 'lucky') {
         if (!opts.numbers || opts.numbers.length !== 7 || !opts.moonball) throw new Error('--style lucky needs --numbers "<7 numbers>" and --moonball');
