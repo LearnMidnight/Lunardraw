@@ -74,7 +74,7 @@ Everything lives in `~/.lunardraw-agent` (or `LUNARDRAW_AGENT_HOME`):
 
 | File | What it is |
 |---|---|
-| `config.json` | `network`, `prover` (`hosted`, a prover's address, or `local:<port>` for your own proof server), `limits` (`perDraw`, `perDay` in tNIGHT), optional `payTo` (where winnings go) |
+| `config.json` | `network`, `prover` (`hosted`, a prover's address, or `local:<port>` for your own proof server: that needs the contract's proving key, so run the kit from a [Lunardraw checkout](https://github.com/LearnMidnight/Lunardraw)), `limits` (`perDraw`, `perDay` in tNIGHT), optional `payTo` (where winnings go) |
 | `wallet.secret` | The wallet seed (mode 600). **Anyone with it can spend from the wallet.** Back it up. |
 | `blockfrost-preprod.secret` | The Blockfrost project id |
 | `state.json` | What the agent bought |

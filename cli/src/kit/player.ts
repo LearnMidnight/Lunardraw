@@ -2,12 +2,14 @@
  * What the agent kit does on the chain: read the draws (no wallet needed),
  * open the agent's wallet, and buy within the owner's limits.
  */
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { Starfall } from '@lunardraw/contract';
 import type { StarfallView } from '@lunardraw/keeper';
 import { type Session, walletAddress, walletBalances } from '@nightcast/deploy';
 import { buyerProviders, buyWithRetry, proverArg } from '../buyer.js';
 import { publicDataFor, withSession } from '../common.js';
-import { BuyStopped, joinStarfall, readStarfallRecord, readStarfallView } from '../starfall.js';
+import { BuyStopped, joinStarfall, readStarfallRecord, readStarfallView, starfallZkConfigPath } from '../starfall.js';
 import { type AgentState, describeResult, loadAgentState, type Result, saveAgentState, spentOnDraw, spentSince } from '../starfall-agent.js';
 import { describeEntry, parseUserAddress } from '../starfall-commands.js';
 import { openWallet } from '../wallet-lock.js';
@@ -129,6 +131,20 @@ export type BuyOutcome = { draw: number; bought: number; of: number; games: numb
 const localPort = (prover: string): number | undefined => (/^local:(\d+)$/.exec(prover) ? Number(/^local:(\d+)$/.exec(prover)![1]) : undefined);
 
 /**
+ * Proving on your own proof server needs buyTickets' proving key, which the
+ * npm package leaves out to stay small (the hosted prover holds it).
+ */
+export const requireLocalProvingKey = (dir = starfallZkConfigPath()): void => {
+  if (!existsSync(join(dir, 'keys', 'buyTickets.prover'))) {
+    throw new Error(
+      'prover "local:<port>" needs the Starfall contract\'s buyTickets proving key, which the npm package leaves out to stay small. ' +
+        'Set "prover": "hosted" in config.json, or run the kit from a Lunardraw checkout (npm run compact:starfall && npm run build), ' +
+        'or point LUNARDRAW_STARFALL_ZK_CONFIG_PATH at a compiled contract with its keys.',
+    );
+  }
+};
+
+/**
  * Open the agent's wallet (a few minutes from its saved state; a new wallet's
  * first sync takes hours on Preprod) and run `fn` with it. Buying checks the
  * owner's limits first and records each purchase in state.json.
@@ -137,6 +153,7 @@ export const withPlayer = async <T>(config: KitConfig, seed: string, fn: (p: Pla
   const record = readStarfallRecord(config.network);
   const statePath = kitPaths(home, config.network).state;
   const port = localPort(config.prover);
+  if (port !== undefined) requireLocalProvingKey();
   const prover = port === undefined ? proverArg(config.prover) : undefined;
   return withSession(
     config.network,

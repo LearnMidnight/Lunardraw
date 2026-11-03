@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -7,7 +7,7 @@ import type { StarfallView } from '@lunardraw/keeper';
 import { buyWithRetry, isCollision } from '../buyer.js';
 import { DEFAULT_CONFIG, ensureWallet, findDeployments, parseConfig, saveBlockfrost } from '../kit/home.js';
 import { BUY_SCHEMA, buyArgs, handle, type Tool } from '../kit/mcp.js';
-import { checkLimits, overviewOf, ticketsReport } from '../kit/player.js';
+import { checkLimits, overviewOf, requireLocalProvingKey, ticketsReport } from '../kit/player.js';
 import { type AgentState, planPurchase } from '../starfall-agent.js';
 import { buyEntries } from '../starfall-commands.js';
 
@@ -211,6 +211,16 @@ describe('the agent kit', () => {
     });
     expect(await handle({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'nope' } }, tools, notify)).toMatchObject({ error: { code: -32602 } });
     expect(await handle({ jsonrpc: '2.0', id: 6, method: 'resources/list' }, tools, notify)).toMatchObject({ error: { code: -32601 } });
+  });
+});
+
+describe('proving on your own proof server', () => {
+  it('needs buyTickets\' proving key, and says how to get it when the package left it out', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kit-keys-'));
+    mkdirSync(join(dir, 'keys'));
+    expect(() => requireLocalProvingKey(dir)).toThrow(/"prover": "hosted"/);
+    writeFileSync(join(dir, 'keys', 'buyTickets.prover'), 'key');
+    expect(() => requireLocalProvingKey(dir)).not.toThrow();
   });
 });
 

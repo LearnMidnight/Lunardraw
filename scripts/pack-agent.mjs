@@ -12,10 +12,10 @@
  * already-patched dependencies (bundleDependencies): installing it installs
  * exactly what was tested here.
  *
- * Meant for CI (it deletes big proving keys from contract/dist): the
- * contract's proving keys aren't needed, since purchases are proved by
- * Lunardraw's player prover; only buyTickets' is kept, for agents with their
- * own proof server.
+ * Meant for CI (it deletes the proving keys from contract/dist): they aren't
+ * needed, since purchases are proved by Lunardraw's player prover. An agent
+ * with its own proof server (prover "local:<port>") runs the kit from a
+ * checkout instead, which has buyTickets' key.
  */
 import { execFileSync } from 'node:child_process';
 import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -43,11 +43,11 @@ const sizeOf = (p) => {
   return readdirSync(p).reduce((a, f) => a + sizeOf(join(p, f)), 0);
 };
 
-// 1. the contract's proving keys: keep buyTickets' only
+// 1. the contract's proving keys: none (the hosted prover has them)
 for (const contract of ['settlement', 'lunardraw']) {
   const keys = join(root, 'contract', 'dist', 'managed', contract, 'keys');
   if (!existsSync(keys)) continue;
-  for (const f of readdirSync(keys)) if (f.endsWith('.prover') && f !== 'buyTickets.prover') rmSync(join(keys, f));
+  for (const f of readdirSync(keys)) if (f.endsWith('.prover')) rmSync(join(keys, f));
 }
 if (!existsSync(join(root, 'contract', 'dist', 'managed', 'settlement', 'keys', 'buyTickets.verifier'))) {
   fail('no compiled Starfall contract with keys in contract/dist: run `npm run compact:starfall && npm run build` first');
@@ -143,6 +143,34 @@ const trim = (dir) => {
   }
 };
 trim(join(stage, 'node_modules'));
+// @polkadot/types-support is chain metadata for polkadot-js's own tests; only
+// @polkadot/rpc-provider's mock (never loaded here) reads it. Drop the
+// metadata if that's still so.
+const support = join(stage, 'node_modules', '@polkadot', 'types-support');
+if (existsSync(support)) {
+  const readers = [];
+  const scan = (dir) => {
+    for (const f of readdirSync(dir)) {
+      const p = join(dir, f);
+      if (p === support) continue;
+      if (statSync(p).isDirectory()) scan(p);
+      else if (/\.[mc]?js$/.test(f) && readFileSync(p, 'utf8').includes('@polkadot/types-support')) readers.push(p.slice(stage.length + 1));
+    }
+  };
+  scan(join(stage, 'node_modules'));
+  const others = readers.filter((p) => !/@polkadot\/rpc-provider\/(cjs\/)?mock\//.test(p) && !/@polkadot\/types-support\//.test(p));
+  if (others.length) notice('agent package', `kept @polkadot/types-support's metadata: read by ${others.slice(0, 5).join(', ')}`);
+  else {
+    for (const d of ['metadata', join('cjs', 'metadata')]) {
+      const p = join(support, d);
+      if (existsSync(p)) {
+        trimmed += sizeOf(p);
+        rmSync(p, { recursive: true });
+      }
+    }
+    notice('agent package', `dropped @polkadot/types-support's metadata (only ${readers.length} mock file(s) read it)`);
+  }
+}
 notice('agent package', `node_modules ${mb(before)}, ${mb(before - trimmed)} after trimming maps, type declarations and changelogs; one ledger-v8 (8.1.0); dust wallet fix applied`);
 // what takes the room, for trimming
 const pkgs = [];

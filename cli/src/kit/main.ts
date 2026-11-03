@@ -178,6 +178,7 @@ export const kit = async (argv: string[]): Promise<number> => {
       const { starfall } = await import('../starfall-commands.js');
       const p = kitPaths(kitHome(), config.network);
       const local = /^local:(\d+)$/.exec(config.prover);
+      if (local) (await import('./player.js')).requireLocalProvingKey();
       const args = [
         'agent',
         '--network', config.network,
