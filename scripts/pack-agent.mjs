@@ -125,6 +125,19 @@ walk(join(stage, 'node_modules'), 0);
 const kinds = new Set(versions.values());
 if (versions.size !== 1 || !kinds.has('8.1.0')) fail(`expected one @midnight-ntwrk/ledger-v8 8.1.0, found ${[...versions].map(([p, v]) => `${v} at ${p}`).join(', ')}`);
 notice('agent package', `node_modules ${mb(sizeOf(join(stage, 'node_modules')))}; one ledger-v8 (8.1.0); dust wallet fix applied`);
+// what takes the room, for trimming
+const pkgs = [];
+const collect = (dir) => {
+  if (!existsSync(dir)) return;
+  for (const f of readdirSync(dir)) {
+    const p = join(dir, f);
+    if (f.startsWith('@')) collect(p);
+    else if (statSync(p).isDirectory()) pkgs.push([p.slice(stage.length + 1), sizeOf(p)]);
+  }
+};
+collect(join(stage, 'node_modules'));
+pkgs.sort((a, b) => b[1] - a[1]);
+notice('agent package biggest', pkgs.slice(0, 25).map(([p, n]) => `${p.replace(/^node_modules\//, '')} ${mb(n)}`).join(', '));
 
 // 5. pack: the bundled dependencies are named by version (the file: paths only served the install)
 const versionsOf = Object.fromEntries(packed.map((p) => [p.name, p.version]));
