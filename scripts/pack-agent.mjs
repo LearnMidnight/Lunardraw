@@ -124,7 +124,26 @@ const walk = (dir, depth) => {
 walk(join(stage, 'node_modules'), 0);
 const kinds = new Set(versions.values());
 if (versions.size !== 1 || !kinds.has('8.1.0')) fail(`expected one @midnight-ntwrk/ledger-v8 8.1.0, found ${[...versions].map(([p, v]) => `${v} at ${p}`).join(', ')}`);
-notice('agent package', `node_modules ${mb(sizeOf(join(stage, 'node_modules')))}; one ledger-v8 (8.1.0); dust wallet fix applied`);
+const before = sizeOf(join(stage, 'node_modules'));
+// trim what never runs: source maps, type declarations, docs, @types packages
+let trimmed = 0;
+const trim = (dir) => {
+  for (const f of readdirSync(dir)) {
+    const p = join(dir, f);
+    const s = statSync(p);
+    if (s.isDirectory()) {
+      if (f === '@types' && dir.endsWith('node_modules')) {
+        trimmed += sizeOf(p);
+        rmSync(p, { recursive: true });
+      } else trim(p);
+    } else if (/\.(js|mjs|cjs)\.map$|\.d\.[mc]?ts(\.map)?$|\.tsbuildinfo$/.test(f) || (/^(changelog|history)(\.md)?$/i.test(f))) {
+      trimmed += s.size;
+      rmSync(p);
+    }
+  }
+};
+trim(join(stage, 'node_modules'));
+notice('agent package', `node_modules ${mb(before)}, ${mb(before - trimmed)} after trimming maps, type declarations and changelogs; one ledger-v8 (8.1.0); dust wallet fix applied`);
 // what takes the room, for trimming
 const pkgs = [];
 const collect = (dir) => {
@@ -138,6 +157,36 @@ const collect = (dir) => {
 collect(join(stage, 'node_modules'));
 pkgs.sort((a, b) => b[1] - a[1]);
 notice('agent package biggest', pkgs.slice(0, 25).map(([p, n]) => `${p.replace(/^node_modules\//, '')} ${mb(n)}`).join(', '));
+// inside the two biggest, and who needs @polkadot/types-support
+const files = (dir) => {
+  const all = [];
+  const go = (d) => {
+    for (const f of readdirSync(d)) {
+      const p = join(d, f);
+      if (statSync(p).isDirectory()) go(p);
+      else all.push([p.slice(dir.length + 1), statSync(p).size]);
+    }
+  };
+  if (existsSync(dir)) go(dir);
+  return all.sort((a, b) => b[1] - a[1]);
+};
+for (const name of ['@polkadot/types-support', '@lunardraw/contract']) {
+  const dir = join(stage, 'node_modules', name);
+  const top = new Map();
+  for (const [p, n] of files(dir)) {
+    const k = p.split('/').slice(0, 3).join('/');
+    top.set(k, (top.get(k) ?? 0) + n);
+  }
+  notice(`inside ${name}`, [...top].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([k, n]) => `${k} ${mb(n)}`).join(', '));
+}
+const needs = [];
+for (const [p] of pkgs) {
+  try {
+    const j = JSON.parse(readFileSync(join(stage, p, 'package.json'), 'utf8'));
+    if ({ ...j.dependencies, ...j.peerDependencies }['@polkadot/types-support']) needs.push(p.replace(/^node_modules\//, ''));
+  } catch {}
+}
+notice('needs @polkadot/types-support', needs.join(', ') || 'nothing');
 
 // 5. pack: the bundled dependencies are named by version (the file: paths only served the install)
 const versionsOf = Object.fromEntries(packed.map((p) => [p.name, p.version]));
