@@ -124,6 +124,35 @@ const walk = (dir, depth) => {
 walk(join(stage, 'node_modules'), 0);
 const kinds = new Set(versions.values());
 if (versions.size !== 1 || !kinds.has('8.1.0')) fail(`expected one @midnight-ntwrk/ledger-v8 8.1.0, found ${[...versions].map(([p, v]) => `${v} at ${p}`).join(', ')}`);
+// Native add-ons that compile when installed would fail on a machine with no
+// C compiler, and bundled ones fail the whole install. cpu-features is
+// optional for ssh2 (it carries on without it), and the kit never uses ssh2.
+const noBuild = ['cpu-features'];
+const dropped = [];
+const unbuild = (dir, depth) => {
+  if (depth > 10 || !existsSync(dir)) return;
+  for (const f of readdirSync(dir)) {
+    const p = join(dir, f);
+    if (!statSync(p).isDirectory()) continue;
+    if (noBuild.includes(f) && dir.endsWith('node_modules')) {
+      rmSync(p, { recursive: true });
+      dropped.push(p.slice(stage.length + 1));
+      continue;
+    }
+    const pj = join(p, 'package.json');
+    if (dir.endsWith('node_modules') || dir.split('/').at(-2) === 'node_modules') {
+      if (existsSync(pj)) {
+        const j = JSON.parse(readFileSync(pj, 'utf8'));
+        let changed = false;
+        for (const n of noBuild) if (j.optionalDependencies?.[n]) (delete j.optionalDependencies[n], (changed = true));
+        if (changed) writeFileSync(pj, JSON.stringify(j, null, 2) + '\n');
+      }
+    }
+    unbuild(p, depth + 1);
+  }
+};
+unbuild(join(stage, 'node_modules'), 0);
+if (dropped.length) notice('agent package', `left out ${dropped.join(', ')} (compiles on install; optional)`);
 const before = sizeOf(join(stage, 'node_modules'));
 // trim what never runs: source maps, type declarations, docs, @types packages
 let trimmed = 0;
@@ -215,6 +244,15 @@ for (const [p] of pkgs) {
   } catch {}
 }
 notice('needs @polkadot/types-support', needs.join(', ') || 'nothing');
+const scripted = [];
+for (const [p] of pkgs) {
+  try {
+    const sc = JSON.parse(readFileSync(join(stage, p, 'package.json'), 'utf8')).scripts ?? {};
+    const cmd = sc.preinstall ?? sc.install ?? sc.postinstall;
+    if (cmd) scripted.push(`${p.replace(/^node_modules\//, '')} (${cmd.slice(0, 60)})`);
+  } catch {}
+}
+notice('install scripts', scripted.join('; ') || 'none');
 
 // 5. pack: the bundled dependencies are named by version (the file: paths only served the install)
 const versionsOf = Object.fromEntries(packed.map((p) => [p.name, p.version]));
