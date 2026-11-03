@@ -479,37 +479,4 @@ jobs:
 
       # As a player would (npm install -g), on a machine with no C compiler.
       - name: Install it globally, with no compiler, and run it
-        env:
-          LUNARDRAW_AGENT_HOME: ${{ runner.temp }}/agent-home
-          CC: /bin/false
-          CXX: /bin/false
-        run: |
-          app="$RUNNER_TEMP/someone-else"
-          mkdir -p "$app" && cd "$app"
-          npm install -g --prefix "$RUNNER_TEMP/global" --no-audit --no-fund "${{ steps.pack.outputs.tgz }}"
-          export PATH="$RUNNER_TEMP/global/bin:$PATH"
-          npx() { "$@"; }
-          npx lunardraw-agent help > help.txt && head -3 help.txt
-          npx lunardraw-agent init --blockfrost ciPlaceholderId123 | tee init.txt
-          grep -q 'mn_addr_preprod1' init.txt
-          test "$(stat -c %a "$LUNARDRAW_AGENT_HOME/wallet.secret")" = 600
-          npx lunardraw-agent limits
-          test "$(npx lunardraw-agent address)" = "$(grep -o 'mn_addr_preprod1[0-9a-z]*' init.txt)"
-          # MCP: initialize, then list the tools (stdout must be JSON-RPC only)
-          printf '%s\n' \
-            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}' \
-            '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
-            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
-            '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"lunardraw_how_to_play","arguments":{}}}' \
-            | npx lunardraw-agent mcp > mcp.out 2> mcp.err
-          node -e '
-            const lines = require("fs").readFileSync("mcp.out", "utf8").trim().split("\n");
-            const msgs = lines.map((l) => JSON.parse(l));
-            const byId = Object.fromEntries(msgs.map((m) => [m.id, m]));
-            const tools = byId[2].result.tools.map((t) => t.name);
-            const want = ["lunardraw_how_to_play", "lunardraw_draw_on_sale", "lunardraw_wallet", "lunardraw_buy_tickets", "lunardraw_my_tickets"];
-            if (byId[1].result.serverInfo.name !== "lunardraw" || want.some((w) => !tools.includes(w)) || !/1.2 tNIGHT a game/.test(byId[3].result.content[0].text)) {
-              console.log("::error title=mcp::" + JSON.stringify(msgs).slice(0, 1500)); process.exit(1);
-            }
-            console.log(`::notice title=mcp::${lines.length} JSON-RPC lines on stdout, tools: ${tools.join(", ")}`);
-          '
+        run: bash scripts/smoke-agent.sh "${{ steps.pack.outputs.tgz }}"
