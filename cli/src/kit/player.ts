@@ -5,7 +5,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { Starfall } from '@lunardraw/contract';
-import type { StarfallView } from '@lunardraw/keeper';
+import { isStaleDustProof, type StarfallView } from '@lunardraw/keeper';
 import { type Session, walletAddress, walletBalances } from '@nightcast/deploy';
 import { buyerProviders, buyWithRetry, proverArg } from '../buyer.js';
 import { publicDataFor, withSession } from '../common.js';
@@ -13,6 +13,9 @@ import { BuyStopped, joinStarfall, readStarfallRecord, readStarfallView, starfal
 import { type AgentState, describeResult, loadAgentState, type Result, saveAgentState, spentOnDraw, spentSince } from '../starfall-agent.js';
 import { describeEntry, parseUserAddress } from '../starfall-commands.js';
 import { openWallet } from '../wallet-lock.js';
+import { declareFeesAtDustTime, type DustTimeWallet } from '../dust-time.js';
+import { withFreshFees } from '../fresh-fees.js';
+import { waitForTip } from '../sync-watch.js';
 import { type KitConfig, kitPaths, star, tNight } from './home.js';
 
 const { DrawStatus } = Starfall;
@@ -159,8 +162,17 @@ export const withPlayer = async <T>(config: KitConfig, seed: string, fn: (p: Pla
     config.network,
     async (session) => {
       const wallet = await openWallet(session, { seed });
+      // The keeper's fee fixes, for the kit too: declare each fee at the time
+      // of the wallet's DUST view (dust-time.ts), wait for the wallet to reach
+      // the tip before paying it, and pay again from the same proof if the
+      // node calls the fee proof stale (1010 custom error 170, fresh-fees.ts).
+      declareFeesAtDustTime(wallet as unknown as DustTimeWallet, session.logger);
       try {
-        const providers = buyerProviders(session, wallet, prover);
+        const providers = withFreshFees(buyerProviders(session, wallet, prover), {
+          beforeBalance: () => waitForTip(wallet, { logger: session.logger, timeoutMs: 120_000 }),
+          isStale: isStaleDustProof,
+          logger: session.logger,
+        });
         const mine = Buffer.from((wallet as unknown as { unshieldedKeystore: { getAddress(): string } }).unshieldedKeystore.getAddress(), 'hex');
         const payTo = config.payTo ? parseUserAddress(config.payTo) : new Uint8Array(mine);
         let joined: Awaited<ReturnType<typeof joinStarfall>> | undefined;

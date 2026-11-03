@@ -254,6 +254,8 @@ describe('the node\'s connection chatter', () => {
     expect(isNodeNoise(['2026-11-03 06:36:29', 'API/INIT:', new Error('FATAL: Unable to initialize the API')])).toBe(true);
     expect(isNodeNoise(['not buying: over the limit'])).toBe(false);
     expect(isNodeNoise([new Error('a purchase didn\'t land')])).toBe(false);
+    // the node refusing a transaction is never hidden
+    expect(isNodeNoise(['2026-11-03 10:32:25', 'RPC-CORE:', 'submitAndWatchExtrinsic(extrinsic: Extrinsic): ExtrinsicStatus:: 1010: Invalid Transaction: Custom error: 170'])).toBe(false);
   });
 });
 

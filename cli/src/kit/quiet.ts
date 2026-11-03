@@ -5,8 +5,14 @@
  */
 const NOISE = /(^|\s)(API-WS|RPC-CORE|API\/INIT|API\/DECORATE|API\/SUBMIT|WS-PROVIDER):/;
 
-/** Whether a console call is polkadot-js's connection chatter. */
-export const isNodeNoise = (args: unknown[]): boolean => NOISE.test(args.map((a) => (a instanceof Error ? a.message : String(a))).join(' '));
+/** The node refusing something (a transaction, a call): never hidden. */
+const REFUSAL = /\b101\d\b|Invalid Transaction|custom error|Priority is too low|banned|Outdated/i;
+
+/** Whether a console call is polkadot-js's connection chatter (not a refusal by the node). */
+export const isNodeNoise = (args: unknown[]): boolean => {
+  const text = args.map((a) => (a instanceof Error ? a.message : String(a))).join(' ');
+  return NOISE.test(text) && !REFUSAL.test(text);
+};
 
 export const quietNodeNoise = (env: NodeJS.ProcessEnv = process.env, out: (s: string) => void = (s) => process.stderr.write(s)): void => {
   if (env.LUNARDRAW_AGENT_DEBUG === '1') return;
