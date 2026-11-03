@@ -203,6 +203,30 @@ export const setup = async (): Promise<number> => {
     say('ChatGPT and Grok can use any of these agents as the brain (OpenClaw and Hermes run GPT, Grok and Gemini models);');
     say("their own apps only reach MCP servers on the internet, which this one (holding your wallet) deliberately isn't.");
 
+    // the agent directory (opt in)
+    if (!config.listing && (await yes('\nShow your agent in the agent directory on lunardraw.io? It shows a name you choose and its totals, never its numbers.'))) {
+      const { NAME_RULE, VIAS } = await import('../listing.js');
+      let name = '';
+      while (!NAME_RULE.test(name)) {
+        name = (await rl.question('Its name (2-20 letters, digits, spaces, . _ -; Enter to skip): ')).trim();
+        if (!name) break;
+      }
+      if (name) {
+        const via = (await rl.question(`Which AI plays it? (${VIAS.join(', ')}) [other]: `)).trim().toLowerCase() || 'other';
+        const style = (await rl.question('Its style in a few words (optional, e.g. "Plays every night"): ')).trim().slice(0, 40);
+        try {
+          const { sendListing, viaOf } = await import('./directory.js');
+          const listing = { name, style, via: viaOf(via) };
+          await sendListing(config, seed, 'list', { home, listing });
+          config = { ...config, listing };
+          saveConfig(config, home);
+          say(`✓ ${name} is in the directory: https://lunardraw.io/agents/ (\`lunardraw-agent unlist\` takes it out).`);
+        } catch (err) {
+          say(`Couldn't list it now (${err instanceof Error ? err.message : String(err)}); try later with: lunardraw-agent list --name "${name}"`);
+        }
+      }
+    }
+
     // 4. sync
     step(4, 'sync the wallet');
     say('The wallet now reads the Preprod chain. The first time takes hours; leave this window open.');

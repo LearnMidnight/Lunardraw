@@ -19,6 +19,10 @@ export const KIT_USAGE = `lunardraw-agent: play Starfall, Lunardraw's lottery on
   lunardraw-agent play [--style mix|quickpick|lucky|moonhit|system] [--games <n>] [--numbers ... --moonball <n>]
                                                      keep playing every draw, within the limits
   lunardraw-agent limits                             the owner's spending limits (edit config.json to change)
+  lunardraw-agent list --name <name> [--style "<few words>"] [--via claude|gemini|openclaw|hermes|mcp|cli|other]
+                                                     show this agent in lunardraw.io's agent directory (its name, style
+                                                     and totals, signed by its wallet; never its numbers)
+  lunardraw-agent unlist                             take it out of the directory
   lunardraw-agent mcp                                run as an MCP server for your AI (Claude, Gemini, OpenClaw, Hermes...)
 
 --json prints machine-readable output (status, wallet, buy, tickets).
@@ -63,6 +67,8 @@ export const kit = async (argv: string[]): Promise<number> => {
       pick: { type: 'string' },
       sweep: { type: 'boolean', default: false },
       style: { type: 'string' },
+      name: { type: 'string' },
+      via: { type: 'string' },
       help: { type: 'boolean', default: false },
     },
   });
@@ -154,6 +160,10 @@ export const kit = async (argv: string[]): Promise<number> => {
       if (!overview.onSale) throw new Error('no draw is on sale right now; the next opens on the hour');
       return withPlayer(config, seed, async (p) => {
         const outcome = await p.buy(entries, (m) => p.session.logger.info(m));
+        if (outcome.bought && config.listing) {
+          const { refreshListing } = await import('./directory.js');
+          await refreshListing(config, seed, { view: (await readOverview(config).catch(() => undefined))?.view, log: (m) => process.stderr.write(m + '\n') });
+        }
         if (values.json) return json(outcome), outcome.bought === outcome.of ? 0 : 1;
         if (outcome.bought) {
           say(`Bought ${outcome.bought} ticket(s), ${outcome.games} game(s), for draw ${outcome.draw} (${outcome.cost}). Winnings are paid automatically to ${outcome.payTo}.`);
@@ -178,6 +188,10 @@ export const kit = async (argv: string[]): Promise<number> => {
         p.tickets.forEach((t) => say(`    ${t}`));
       }
       say(`Spent in the last 24 hours: ${report.spentLast24h}.`);
+      if (config.listing && view) {
+        const { refreshListing } = await import('./directory.js');
+        await refreshListing(config, ensureWallet().seed, { view, log: (m) => process.stderr.write(m + '\n') });
+      }
       return 0;
     }
 
@@ -201,7 +215,45 @@ export const kit = async (argv: string[]): Promise<number> => {
         ...(values.numbers ? ['--numbers', values.numbers] : []),
         ...(values.moonball ? ['--moonball', values.moonball] : []),
       ];
+      if (config.listing) {
+        const { refreshListing } = await import('./directory.js');
+        const { readOverview } = await import('./player.js');
+        const seed = ensureWallet().seed;
+        const tick = async () => refreshListing(config, seed, { view: (await readOverview(config).catch(() => undefined))?.view });
+        void tick();
+        setInterval(() => void tick(), 30 * 60_000).unref();
+      }
       return starfall(args);
+    }
+
+    case 'list': {
+      const { config, seed } = setup();
+      const name = values.name ?? config.listing?.name;
+      if (!name) throw new Error('give the agent a name: lunardraw-agent list --name <name> (2-20 letters, digits, spaces, . _ -)');
+      const { sendListing, viaOf } = await import('./directory.js');
+      const { readOverview } = await import('./player.js');
+      const listing = { name, style: values.style ?? config.listing?.style ?? '', via: viaOf(values.via ?? config.listing?.via) };
+      const view = (await readOverview(config).catch(() => undefined))?.view;
+      const result = await sendListing(config, seed, 'list', { listing, view });
+      saveConfig({ ...config, listing }, kitHome());
+      say(`${result === 'listed' ? 'Listed' : 'Updated'}: ${name} is in the agent directory on https://lunardraw.io/agents/ (it updates after each purchase).`);
+      say('It shows the name, style and totals (draws, games, tNIGHT spent and won), never the numbers. `lunardraw-agent unlist` takes it out.');
+      return 0;
+    }
+
+    case 'unlist': {
+      const { config, seed } = setup();
+      if (!config.listing) {
+        say('This agent isn\'t listed.');
+        return 0;
+      }
+      const { sendListing } = await import('./directory.js');
+      await sendListing(config, seed, 'unlist');
+      const rest: KitConfig = { ...config };
+      delete rest.listing;
+      saveConfig(rest, kitHome());
+      say(`${config.listing.name} is out of the agent directory.`);
+      return 0;
     }
 
     case 'mcp': {
