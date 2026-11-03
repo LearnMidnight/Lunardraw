@@ -423,3 +423,89 @@ jobs:
             tail=$(docker logs --tail 25 "$c" 2>&1 | tail -c 2500 | sed 's/%/%25/g' | awk 'BEGIN{ORS="%0A"} {print}')
             echo "::warning title=logs $c::$tail"
           done
+
+  # The agent kit as an npm package (@lunardraw/agent, scripts/pack-agent.mjs):
+  # compiled with Starfall's keys, its verifier keys checked against the live
+  # Preprod deployment's, packed with its own pinned and patched
+  # dependencies, then installed into an empty folder the way an agent's
+  # owner would, and run: init, limits, and an MCP handshake.
+  agent-package:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          submodules: true
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+
+      - name: Install Compact toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf https://github.com/midnightntwrk/compact/releases/latest/download/compact-installer.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Select compiler ${{ env.COMPACT_TOOLCHAIN }}
+        run: compact update "$COMPACT_TOOLCHAIN"
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Compile with proving keys
+        run: npm run compact:starfall > keys.log 2>&1 || { tail -c 2000 keys.log; exit 1; }
+
+      - name: Build
+        run: npm run build
+
+      # The kit joins the live contract: its verifier keys must be the deployed ones.
+      - name: Verifier keys match the Preprod deployment
+        run: |
+          node cli/dist/main.js starfall fingerprints > fp.json
+          node -e '
+            const local = require("./fp.json").verifierKeys;
+            const live = require("./deployments/starfall-preprod.json").verifierKeys;
+            const bad = Object.keys(live).filter((c) => local[c] !== live[c]);
+            if (bad.length) { console.log(`::error title=verifier keys::differ from the Preprod deployment for ${bad.join(", ")}`); process.exit(1); }
+            console.log(`::notice title=verifier keys::all ${Object.keys(live).length} match the Preprod deployment`);
+          '
+
+      - name: Pack @lunardraw/agent
+        id: pack
+        run: |
+          tgz=$(node scripts/pack-agent.mjs "$RUNNER_TEMP/agent-stage" "$RUNNER_TEMP/agent-out" | tail -1)
+          echo "tgz=$tgz" >> "$GITHUB_OUTPUT"
+
+      - name: Install it into an empty folder and run it
+        env:
+          LUNARDRAW_AGENT_HOME: ${{ runner.temp }}/agent-home
+        run: |
+          app="$RUNNER_TEMP/someone-else"
+          mkdir -p "$app" && cd "$app"
+          npm init -y > /dev/null
+          npm install --no-audit --no-fund "${{ steps.pack.outputs.tgz }}"
+          npx lunardraw-agent help > help.txt && head -3 help.txt
+          npx lunardraw-agent init --blockfrost ciPlaceholderId123 | tee init.txt
+          grep -q 'mn_addr_preprod1' init.txt
+          test "$(stat -c %a "$LUNARDRAW_AGENT_HOME/wallet.secret")" = 600
+          npx lunardraw-agent limits
+          test "$(npx lunardraw-agent address)" = "$(grep -o 'mn_addr_preprod1[0-9a-z]*' init.txt)"
+          # MCP: initialize, then list the tools (stdout must be JSON-RPC only)
+          printf '%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}' \
+            '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+            '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"lunardraw_how_to_play","arguments":{}}}' \
+            | npx lunardraw-agent mcp > mcp.out 2> mcp.err
+          node -e '
+            const lines = require("fs").readFileSync("mcp.out", "utf8").trim().split("\n");
+            const msgs = lines.map((l) => JSON.parse(l));
+            const byId = Object.fromEntries(msgs.map((m) => [m.id, m]));
+            const tools = byId[2].result.tools.map((t) => t.name);
+            const want = ["lunardraw_how_to_play", "lunardraw_draw_on_sale", "lunardraw_wallet", "lunardraw_buy_tickets", "lunardraw_my_tickets"];
+            if (byId[1].result.serverInfo.name !== "lunardraw" || want.some((w) => !tools.includes(w)) || !/1.2 tNIGHT a game/.test(byId[3].result.content[0].text)) {
+              console.log("::error title=mcp::" + JSON.stringify(msgs).slice(0, 1500)); process.exit(1);
+            }
+            console.log(`::notice title=mcp::${lines.length} JSON-RPC lines on stdout, tools: ${tools.join(", ")}`);
+          '
