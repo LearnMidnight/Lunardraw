@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { Starfall } from '@lunardraw/contract';
 import type { StarfallView } from '@lunardraw/keeper';
-import { buyWithRetry, isCollision, timedMethod } from '../buyer.js';
+import { buyWithRetry, isCollision, isNotSent, timedMethod } from '../buyer.js';
 import { DEFAULT_CONFIG, ensureWallet, findDeployments, parseConfig, saveBlockfrost } from '../kit/home.js';
 import { BUY_SCHEMA, buyArgs, handle, type Tool } from '../kit/mcp.js';
 import { checkLimits, overviewOf, requireLocalProvingKey, ticketsReport } from '../kit/player.js';
@@ -211,6 +211,15 @@ describe('the agent kit', () => {
     });
     expect(await handle({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'nope' } }, tools, notify)).toMatchObject({ error: { code: -32602 } });
     expect(await handle({ jsonrpc: '2.0', id: 6, method: 'resources/list' }, tools, notify)).toMatchObject({ error: { code: -32601 } });
+  });
+});
+
+describe('a purchase the node never took', () => {
+  it('is built again; one that was sent but not seen in time is not', () => {
+    expect(isNotSent('Transaction submission error: no answer from the node within 75 s')).toBe(true);
+    expect(isNotSent('disconnected from wss://rpc.midnight-preprod.blockfrost.io: 1006:: Abnormal Closure')).toBe(true);
+    expect(isNotSent("a purchase didn't land within 8 minutes (the wallet's connection may have dropped)")).toBe(false);
+    expect(isNotSent('custom error: 104')).toBe(false);
   });
 });
 

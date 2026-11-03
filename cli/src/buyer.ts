@@ -65,6 +65,14 @@ export const buyerProviders = (session: Session, wallet: Parameters<typeof starf
 /** A refusal worth building again: the contract refused the purchase (another one took its ticket index), nothing more. */
 export const isCollision = (message: string): boolean => /FailFallible|SegmentFail|custom error: 104\b/i.test(message);
 
+/**
+ * The node never took the purchase (every try to send it failed on the
+ * connection), so the wallet gave its coins back and it can be built again.
+ * Not a purchase that was sent and then not seen in time: that one may still land.
+ */
+export const isNotSent = (message: string): boolean =>
+  !/didn't land within/.test(message) && /no answer from the node|disconnected from|Abnormal Closure|WebSocket is not connected|ConnectionError/i.test(message);
+
 export type RetryOptions = {
   /** Most attempts in all (default 3). */
   attempts?: number;
@@ -72,6 +80,8 @@ export type RetryOptions = {
   closeMarginSecs?: number;
   /** Pause before a retry (ms), random up to this (default 45 s, at least 10 s). */
   pauseMs?: number;
+  /** How long one purchase may take, proof to landing (ms; buyGames' default, 5 minutes, if left out). */
+  timeoutMs?: number;
   log?: (msg: string) => void;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
@@ -102,6 +112,7 @@ export const buyWithRetry = async (
       txs += await buyGames(contract, providers.privateStateProvider, contractAddress, tickets.slice(bought), refundTo, {
         onEach: (done, of) => o.log?.(`bought ${bought + done} of ${bought + of} ticket(s)`),
         stopAt,
+        ...(o.timeoutMs ? { timeoutMs: o.timeoutMs } : {}),
         onChain: onChainCheck(providers.publicDataProvider, contractAddress),
       });
       return { bought: tickets.length, txs, attempts: attempt };
@@ -110,9 +121,11 @@ export const buyWithRetry = async (
       txs += Math.ceil(err.bought / Number(Starfall.pureCircuits.maxTickets()));
       bought += err.bought;
       const timeLeft = stopAt - now() / 1000 > 120;
-      if (attempt >= attempts || !isCollision(err.message) || !timeLeft) throw new BuyStopped(bought, tickets.length, err.message);
+      const collision = isCollision(err.message);
+      if (attempt >= attempts || !(collision || isNotSent(err.message)) || !timeLeft) throw new BuyStopped(bought, tickets.length, err.message);
       const pause = Math.max(10_000, Math.floor(Math.random() * (o.pauseMs ?? 45_000)));
-      o.log?.(`another purchase took that ticket number first; building the rest again in ${Math.round(pause / 1000)} s (attempt ${attempt + 1} of ${attempts})`);
+      const why = collision ? 'another purchase took that ticket number first' : "the node couldn't be reached to send it";
+      o.log?.(`${why}; building the rest again in ${Math.round(pause / 1000)} s (attempt ${attempt + 1} of ${attempts})`);
       await sleep(pause);
     }
   }

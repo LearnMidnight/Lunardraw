@@ -188,7 +188,7 @@ export const withPlayer = async <T>(config: KitConfig, seed: string, fn: (p: Pla
             let message: string | undefined;
             let txs = 0;
             try {
-              ({ txs } = await buyWithRetry(joined, providers, record.contractAddress, tickets, new Uint8Array(mine), selling.salesClose, { log }));
+              ({ txs } = await buyWithRetry(joined, providers, record.contractAddress, tickets, new Uint8Array(mine), selling.salesClose, { log, timeoutMs: 8 * 60_000 }));
             } catch (err) {
               if (!(err instanceof BuyStopped)) throw err;
               bought = err.bought;
