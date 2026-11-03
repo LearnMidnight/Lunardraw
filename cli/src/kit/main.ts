@@ -8,7 +8,8 @@ import { DEFAULT_CONFIG, ensureWallet, hasBlockfrost, type KitConfig, kitHome, k
 
 export const KIT_USAGE = `lunardraw-agent: play Starfall, Lunardraw's lottery on the Midnight Preprod test network, from your own wallet.
 
-  lunardraw-agent init [--blockfrost <project id>]   set up: a new wallet, a config with spending limits
+  lunardraw-agent setup                              the guided setup: start here
+  lunardraw-agent init [--blockfrost <project id>]   the same without questions: a wallet and a config
   lunardraw-agent address                            the wallet's address (to fund it from the faucet)
   lunardraw-agent status                             the draw on sale, the jackpot, recent results
   lunardraw-agent wallet                             tNIGHT and DUST (opens the wallet: see below)
@@ -92,6 +93,11 @@ export const kit = async (argv: string[]): Promise<number> => {
       say(`  ${n++}. Run \`lunardraw-agent wallet\`: the first sync reads the whole chain (hours on Preprod), then the wallet registers its tNIGHT for DUST, the fee token.`);
       say(`  ${n++}. Buy: \`lunardraw-agent buy --games 1\`, or let an AI assistant play: \`lunardraw-agent mcp\` (see the README).`);
       return 0;
+    }
+
+    case 'setup': {
+      const { setup } = await import('./setup.js');
+      return setup();
     }
 
     case 'address': {

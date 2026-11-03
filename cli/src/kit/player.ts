@@ -206,3 +206,43 @@ export const withPlayer = async <T>(config: KitConfig, seed: string, fn: (p: Pla
     prover,
   );
 };
+
+/**
+ * Open the wallet and wait until it's ready to buy: synced, holding tNIGHT,
+ * with DUST for fees. For `setup`: reports the sync as a fraction (0 to 1)
+ * and when it starts waiting for funds or DUST. Then closes it.
+ */
+export const syncWallet = async (
+  config: KitConfig,
+  seed: string,
+  on: { onProgress?: (fraction: number) => void; onPhase?: (phase: 'no-funds' | 'dust') => void } = {},
+): Promise<{ address: string; night: bigint; dust: bigint }> => {
+  const { syncFraction } = await import('./setup.js');
+  const port = localPort(config.prover);
+  const prover = port === undefined ? proverArg(config.prover) : undefined;
+  return withSession(
+    config.network,
+    async (session) => {
+      let sub: { unsubscribe(): void } | undefined;
+      const wallet = await openWallet(session, {
+        seed,
+        onWallet: (w) => {
+          sub = w.wallet.state().subscribe((s) => on.onProgress?.(syncFraction(s)));
+        },
+        onNoFunds: () => on.onPhase?.('no-funds'),
+        onWaitingForDust: () => on.onPhase?.('dust'),
+      });
+      try {
+        sub?.unsubscribe();
+        on.onProgress?.(1);
+        const { night, dust } = await walletBalances(wallet);
+        return { address: walletAddress(wallet), night, dust };
+      } finally {
+        sub?.unsubscribe();
+        await wallet.stop().catch(() => undefined);
+      }
+    },
+    port,
+    prover,
+  );
+};

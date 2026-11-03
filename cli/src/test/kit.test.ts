@@ -213,3 +213,40 @@ describe('the agent kit', () => {
     expect(await handle({ jsonrpc: '2.0', id: 6, method: 'resources/list' }, tools, notify)).toMatchObject({ error: { code: -32601 } });
   });
 });
+
+describe('the guided setup', () => {
+  it('measures the sync by its slower part, and says how long is left', async () => {
+    const { bar, eta, syncFraction } = await import('../kit/setup.js');
+    const part = (applied: bigint, target: bigint) => ({ state: { progress: { appliedIndex: applied, highestIndex: target } } });
+    expect(syncFraction({ shielded: part(90n, 100n), dust: part(400_000n, 1_600_000n) })).toBe(0.25);
+    expect(syncFraction({ isSynced: true })).toBe(1);
+    expect(syncFraction({ shielded: { state: { progress: { isStrictlyComplete: () => true } } }, dust: part(5n, 10n) })).toBe(0.5);
+    expect(syncFraction({})).toBe(0);
+    expect(bar(0.4, 10)).toBe('[####------]  40%');
+    expect(eta({ at: 0, f: 0.1 }, { at: 30_000, f: 0.2 })).toBe('working out how long');
+    expect(eta({ at: 0, f: 0.1 }, { at: 10 * 60_000, f: 0.2 })).toBe('about 1 h 20 min left');
+    expect(eta({ at: 0, f: 0.5 }, { at: 10 * 60_000, f: 0.9 })).toBe('about 3 min left');
+  });
+
+  it("adds Lunardraw to Claude Desktop's settings, keeping what's there", async () => {
+    const { claudeDesktopConfig, mcpEntry, withLunardraw } = await import('../kit/setup.js');
+    expect(claudeDesktopConfig('darwin', {}, '/Users/ann')).toBe('/Users/ann/Library/Application Support/Claude/claude_desktop_config.json');
+    expect(claudeDesktopConfig('linux', {}, '/home/ann')).toBe('/home/ann/.config/Claude/claude_desktop_config.json');
+    expect(claudeDesktopConfig('win32', { APPDATA: 'C:\\Users\\ann\\AppData\\Roaming' }, 'C:\\Users\\ann')).toMatch(/Roaming.Claude.claude_desktop_config\.json$/);
+    const entry = mcpEntry('/usr/bin/node', '/opt/kit/bin/lunardraw-agent.js', {});
+    expect(entry).toEqual({ command: '/usr/bin/node', args: ['/opt/kit/bin/lunardraw-agent.js', 'mcp'] });
+    expect(mcpEntry('n', 's', { LUNARDRAW_AGENT_HOME: '/h' }).env).toEqual({ LUNARDRAW_AGENT_HOME: '/h' });
+    const merged = JSON.parse(withLunardraw('{"theme":"dark","mcpServers":{"files":{"command":"x"}}}', entry));
+    expect(merged).toEqual({ theme: 'dark', mcpServers: { files: { command: 'x' }, lunardraw: entry } });
+    expect(JSON.parse(withLunardraw(undefined, entry))).toEqual({ mcpServers: { lunardraw: entry } });
+    expect(() => withLunardraw('[1]', entry)).toThrow(/isn't a JSON object/);
+  });
+
+  it('checks a Blockfrost key before keeping it', async () => {
+    const { checkBlockfrost } = await import('../kit/setup.js');
+    const answer = (status: number) => (async () => new Response('{}', { status })) as unknown as typeof fetch;
+    expect(await checkBlockfrost('good', 'preprod', answer(200))).toEqual({ ok: true });
+    expect((await checkBlockfrost('bad', 'preprod', answer(403))).why).toMatch(/doesn't accept that key/);
+    expect((await checkBlockfrost('x', 'preprod', (async () => { throw new Error('offline'); }) as unknown as typeof fetch)).why).toMatch(/couldn't reach Blockfrost \(offline\)/);
+  });
+});

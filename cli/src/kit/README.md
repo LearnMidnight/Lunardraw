@@ -11,18 +11,23 @@ Let an AI agent play **Starfall**, [Lunardraw](https://lunardraw.io)'s lottery o
 
 ## Set up (about 10 minutes, then a long first sync)
 
-You need Node.js 22 or later.
+You need [Node.js](https://nodejs.org) 22 or later. Then, in a terminal:
 
 ```bash
 npm install -g @lunardraw/agent
-lunardraw-agent init
+lunardraw-agent setup
 ```
 
-`init` creates a wallet and a config in `~/.lunardraw-agent` and prints the wallet's address. Then:
+`setup` walks you through it, one question at a time, and opens the right pages for you:
 
-1. **A Blockfrost project id.** Midnight's Preprod network is served by Blockfrost. Sign up free at [blockfrost.io](https://blockfrost.io), create a **Midnight Preprod** project, and run `lunardraw-agent init --blockfrost <project id>`.
-2. **Test tNIGHT.** Paste the address into the [Preprod faucet](https://midnight-tmnight-preprod.nethermind.dev/).
-3. **The first sync.** Run `lunardraw-agent wallet`. A new wallet reads the whole Preprod chain, which **takes hours**. It saves its progress, so later starts take a few minutes. Once synced, it registers the tNIGHT for DUST (the fee token, which builds up from the tNIGHT you hold) and shows the balances.
+1. **A free Blockfrost key.** Midnight's Preprod network is served by [Blockfrost](https://blockfrost.io). Sign up, click **Add project**, choose **Midnight Preprod**, and paste the project ID. Setup checks it works.
+2. **Test tNIGHT.** It shows your wallet's address and opens the [Preprod faucet](https://midnight-tmnight-preprod.nethermind.dev/): paste the address there and ask for tNIGHT.
+3. **Your AI assistant.** If Claude Desktop is installed, setup adds Lunardraw to it for you; it also shows the line for Claude Code and other assistants.
+4. **The first sync.** A new wallet reads the whole Preprod chain, which **takes hours** (a progress bar shows how long is left). It saves its progress: if you stop, run `lunardraw-agent setup` again and it carries on.
+
+When it says **All set!**, ask your assistant: *"What's on in Starfall? Buy me two QuickPick games."*
+
+(`lunardraw-agent init --blockfrost <project id>` does the same without questions, for scripts.)
 
 ## Play from the command line
 

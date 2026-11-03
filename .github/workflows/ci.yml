@@ -474,8 +474,8 @@ jobs:
       - name: Pack @lunardraw/agent
         id: pack
         run: |
-          tgz=$(node scripts/pack-agent.mjs "$RUNNER_TEMP/agent-stage" "$RUNNER_TEMP/agent-out" | tail -1)
-          echo "tgz=$tgz" >> "$GITHUB_OUTPUT"
+          node scripts/pack-agent.mjs "$RUNNER_TEMP/agent-stage" "$RUNNER_TEMP/agent-out" | tee pack.log
+          echo "tgz=$(tail -1 pack.log)" >> "$GITHUB_OUTPUT"
 
       - name: Install it into an empty folder and run it
         env:
