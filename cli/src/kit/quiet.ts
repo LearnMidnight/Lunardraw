@@ -14,8 +14,13 @@ export const isNodeNoise = (args: unknown[]): boolean => {
   return NOISE.test(text) && !REFUSAL.test(text);
 };
 
-export const quietNodeNoise = (env: NodeJS.ProcessEnv = process.env, out: (s: string) => void = (s) => process.stderr.write(s)): void => {
-  if (env.LUNARDRAW_AGENT_DEBUG === '1') return;
+export const quietNodeNoise = (
+  env: NodeJS.ProcessEnv = process.env,
+  out: (s: string) => void = (s) => process.stderr.write(s),
+  // only for a person at a terminal: a log file (the MCP server's stderr) keeps every detail
+  tty: boolean = process.stderr.isTTY === true,
+): void => {
+  if (env.LUNARDRAW_AGENT_DEBUG === '1' || !tty) return;
   let told = 0;
   for (const level of ['error', 'warn', 'log'] as const) {
     const original = console[level].bind(console);
