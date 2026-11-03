@@ -28,6 +28,13 @@ A new wallet's first sync reads the whole Preprod chain, which takes hours; afte
 opens in a few minutes. Prizes and refunds are paid to the wallet automatically: there is nothing to claim.`;
 
 const say = (s = '') => process.stdout.write(s + '\n');
+/** "14587.198418 tNIGHT" as "14,587 tNIGHT", for people. */
+export const whole = (amount: string): string => {
+  const n = Number.parseFloat(amount);
+  return Number.isFinite(n) ? `${Math.round(n).toLocaleString('en')} tNIGHT` : amount;
+};
+/** An ISO time as this machine's local clock time, e.g. "3:00 pm". */
+export const clock = (iso: string): string => new Date(iso).toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit' });
 
 const setup = (): { config: KitConfig; seed: string } => {
   const config = loadConfig();
@@ -120,8 +127,9 @@ export const kit = async (argv: string[]): Promise<number> => {
       const { overview } = await readOverview(config);
       if (values.json) return json(overview), 0;
       const s = overview.onSale;
-      say(s ? `Draw ${s.draw} is on sale: closes ${s.salesClose} (${s.minutesLeft} min), ${s.tickets} ticket(s) so far, jackpot about ${s.jackpotEstimate}.` : 'No draw is on sale right now; the next opens on the hour.');
-      say(`A game costs ${overview.gamePrice}. Rollover into the next Division 1: ${overview.rollover}.`);
+      const left = s ? (s.minutesLeft < 1 ? 'closing now' : `in ${s.minutesLeft} min`) : '';
+      say(s ? `Draw ${s.draw} is on sale: closes at ${clock(s.salesClose)} (${left}), ${s.tickets} ticket(s) so far, jackpot about ${whole(s.jackpotEstimate)}.` : 'No draw is on sale right now; the next opens on the hour.');
+      say(`A game costs ${overview.gamePrice}. Rollover into the next Division 1: ${whole(overview.rollover)}.`);
       for (const r of overview.recent) say(r.status === 'void' ? `  draw ${r.draw}: cancelled, refunded` : `  draw ${r.draw}: ${r.numbers!.join(' ')} + ${r.moonball}, ${r.winningGames} winning game(s) of ${r.games}`);
       return 0;
     }

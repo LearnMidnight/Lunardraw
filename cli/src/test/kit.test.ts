@@ -214,6 +214,15 @@ describe('the agent kit', () => {
   });
 });
 
+describe('status for people', () => {
+  it('rounds amounts to whole tNIGHT and shows local clock times', async () => {
+    const { whole, clock } = await import('../kit/main.js');
+    expect(whole('14587.198418 tNIGHT')).toBe('14,587 tNIGHT');
+    expect(whole('1.2 tNIGHT')).toBe('1 tNIGHT');
+    expect(clock('2026-11-03T05:00:00.000Z')).toMatch(/^\d{1,2}:00\s?(am|pm)$/i);
+  });
+});
+
 describe('proving on your own proof server', () => {
   it('needs buyTickets\' proving key, and says how to get it when the package left it out', () => {
     const dir = mkdtempSync(join(tmpdir(), 'kit-keys-'));
