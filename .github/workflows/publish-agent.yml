@@ -1,0 +1,129 @@
+name: Publish the agent kit to npm
+
+# Publishes @lunardraw/agent (the `lunardraw-agent` command and MCP server)
+# from main, built, packed and install-tested here, with npm provenance (the
+# version on npmjs.com links back to this run and commit). Run it by hand:
+# Actions → Publish the agent kit to npm → Run workflow, with "Dry run" ticked
+# first. The version is cli/package.json's. See docs/PUBLISHING.md.
+#
+# Normally no token: npm trusts this workflow directly (trusted publishing,
+# set on the package's settings page on npmjs.com) and only to *stage* a
+# release, which goes live when an owner approves it with 2FA. The very first
+# release can't do that (the package must exist first), so it publishes with
+# the NPM_TOKEN secret, a granular token for @lunardraw deleted straight after.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run: build, test and pack, publish nothing'
+        type: boolean
+        default: true
+      first_release:
+        description: 'First release only: publish with the NPM_TOKEN secret instead of staging'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write # trusted publishing and provenance
+
+env:
+  COMPACT_TOOLCHAIN: 0.31.1
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Only from main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Publish from main only (this is ${{ github.ref }})."
+          exit 1
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          submodules: true
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing and `npm stage` need npm 11.15.0 or later (Node 22 comes with npm 10).
+      - name: npm 11
+        run: |
+          npm install -g npm@11
+          node -e 'const [a,b]=process.argv[1].split(".").map(Number); if (a < 11 || (a === 11 && b < 15)) { console.log(`::error::npm ${process.argv[1]} is too old for npm stage (11.15.0+)`); process.exit(1) }' "$(npm --version)"
+          echo "::notice title=npm::$(npm --version)"
+
+      - name: Install Compact toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf https://github.com/midnightntwrk/compact/releases/latest/download/compact-installer.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Select compiler ${{ env.COMPACT_TOOLCHAIN }}
+        run: compact update "$COMPACT_TOOLCHAIN"
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Compile with proving keys
+        run: npm run compact:starfall > keys.log 2>&1 || { tail -c 2000 keys.log; exit 1; }
+
+      - name: Build
+        run: npm run build
+
+      - name: Test the command line
+        run: npm test -w @lunardraw/cli
+
+      # The kit joins the live contract: its verifier keys must be the deployed ones.
+      - name: Verifier keys match the Preprod deployment
+        run: |
+          node cli/dist/main.js starfall fingerprints > fp.json
+          node -e '
+            const local = require("./fp.json").verifierKeys;
+            const live = require("./deployments/starfall-preprod.json").verifierKeys;
+            const bad = Object.keys(live).filter((c) => local[c] !== live[c]);
+            if (bad.length) { console.log(`::error title=verifier keys::differ from the Preprod deployment for ${bad.join(", ")}`); process.exit(1); }
+            console.log(`::notice title=verifier keys::all ${Object.keys(live).length} match the Preprod deployment`);
+          '
+
+      - name: Pack @lunardraw/agent
+        id: pack
+        run: |
+          node scripts/pack-agent.mjs "$RUNNER_TEMP/agent-stage" "$RUNNER_TEMP/agent-out" | tee pack.log
+          echo "tgz=$(tail -1 pack.log)" >> "$GITHUB_OUTPUT"
+
+      - name: Install it globally, with no compiler, and run it
+        run: bash scripts/smoke-agent.sh "${{ steps.pack.outputs.tgz }}"
+
+      - name: Version not on npm yet
+        run: |
+          version=$(node -p "require('./cli/package.json').version")
+          if npm view "@lunardraw/agent@$version" version > /dev/null 2>&1; then
+            echo "::error title=@lunardraw/agent::$version is already on npm: raise the version in cli/package.json first"
+            exit 1
+          fi
+          echo "::notice title=@lunardraw/agent::will publish $version"
+
+      - name: Publish ${{ inputs.dry_run && '(dry run)' || '' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ inputs.first_release && secrets.NPM_TOKEN || '' }}
+        run: |
+          flags="--access public --provenance"
+          if [ "${{ inputs.dry_run }}" = "true" ]; then flags="$flags --dry-run"; fi
+          if [ "${{ inputs.first_release }}" = "true" ]; then
+            if [ -z "$NODE_AUTH_TOKEN" ] && [ "${{ inputs.dry_run }}" != "true" ]; then
+              echo "::error::first_release needs the NPM_TOKEN secret (a granular token for @lunardraw)"; exit 1
+            fi
+            npm publish "${{ steps.pack.outputs.tgz }}" $flags
+            if [ "${{ inputs.dry_run }}" != "true" ]; then
+              echo "::notice title=Published::Now set up trusted publishing on npmjs.com and delete the token (docs/PUBLISHING.md)"
+            fi
+          else
+            npm stage publish "${{ steps.pack.outputs.tgz }}" $flags | tee stage.txt
+            if [ "${{ inputs.dry_run }}" != "true" ]; then
+              echo "::notice title=Staged::Approve on npmjs.com → Staged Packages, or: npm stage approve <id>"
+            fi
+          fi

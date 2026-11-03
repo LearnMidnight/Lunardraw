@@ -103,7 +103,7 @@ jobs:
       - name: Test the CLI (offline)
         if: ${{ !cancelled() }}
         working-directory: cli
-        run: npx vitest run src/test/offline.test.ts src/test/starfall-offline.test.ts src/test/dust-wait.test.ts src/test/sync-watch.test.ts src/test/starfall-agent.test.ts src/test/silence-watchdog.test.ts src/test/wait-for-tip.test.ts src/test/fresh-fees.test.ts src/test/dust-time.test.ts src/test/tx-backfill.test.ts src/test/wallet-lock.test.ts src/test/monitor.test.ts src/test/hosted-prover.test.ts --reporter=default --reporter=github-actions --reporter=json --outputFile.json=../reports/cli.json
+        run: npx vitest run src/test/offline.test.ts src/test/starfall-offline.test.ts src/test/dust-wait.test.ts src/test/sync-watch.test.ts src/test/starfall-agent.test.ts src/test/silence-watchdog.test.ts src/test/wait-for-tip.test.ts src/test/fresh-fees.test.ts src/test/dust-time.test.ts src/test/tx-backfill.test.ts src/test/wallet-lock.test.ts src/test/monitor.test.ts src/test/hosted-prover.test.ts src/test/kit.test.ts --reporter=default --reporter=github-actions --reporter=json --outputFile.json=../reports/cli.json
 
       - name: Summarise tests
         if: always()
@@ -423,3 +423,60 @@ jobs:
             tail=$(docker logs --tail 25 "$c" 2>&1 | tail -c 2500 | sed 's/%/%25/g' | awk 'BEGIN{ORS="%0A"} {print}')
             echo "::warning title=logs $c::$tail"
           done
+
+  # The agent kit as an npm package (@lunardraw/agent, scripts/pack-agent.mjs):
+  # compiled with Starfall's keys, its verifier keys checked against the live
+  # Preprod deployment's, packed with its own pinned and patched
+  # dependencies, then installed into an empty folder the way an agent's
+  # owner would, and run: init, limits, and an MCP handshake.
+  agent-package:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          submodules: true
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+
+      - name: Install Compact toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf https://github.com/midnightntwrk/compact/releases/latest/download/compact-installer.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Select compiler ${{ env.COMPACT_TOOLCHAIN }}
+        run: compact update "$COMPACT_TOOLCHAIN"
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Compile with proving keys
+        run: npm run compact:starfall > keys.log 2>&1 || { tail -c 2000 keys.log; exit 1; }
+
+      - name: Build
+        run: npm run build
+
+      # The kit joins the live contract: its verifier keys must be the deployed ones.
+      - name: Verifier keys match the Preprod deployment
+        run: |
+          node cli/dist/main.js starfall fingerprints > fp.json
+          node -e '
+            const local = require("./fp.json").verifierKeys;
+            const live = require("./deployments/starfall-preprod.json").verifierKeys;
+            const bad = Object.keys(live).filter((c) => local[c] !== live[c]);
+            if (bad.length) { console.log(`::error title=verifier keys::differ from the Preprod deployment for ${bad.join(", ")}`); process.exit(1); }
+            console.log(`::notice title=verifier keys::all ${Object.keys(live).length} match the Preprod deployment`);
+          '
+
+      - name: Pack @lunardraw/agent
+        id: pack
+        run: |
+          node scripts/pack-agent.mjs "$RUNNER_TEMP/agent-stage" "$RUNNER_TEMP/agent-out" | tee pack.log
+          echo "tgz=$(tail -1 pack.log)" >> "$GITHUB_OUTPUT"
+
+      # As a player would (npm install -g), on a machine with no C compiler.
+      - name: Install it globally, with no compiler, and run it
+        run: bash scripts/smoke-agent.sh "${{ steps.pack.outputs.tgz }}"

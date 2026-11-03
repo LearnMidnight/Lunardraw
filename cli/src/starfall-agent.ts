@@ -37,6 +37,8 @@ export type AgentOptions = {
   marginSecs?: number;
   /** Play at most this many draws, then stop (0 = forever). */
   maxDraws?: number;
+  /** Most to spend in any 24 hours, in STAR (none by default). */
+  dailyLimit?: bigint;
 };
 
 export type AgentPurchase = {
@@ -116,6 +118,14 @@ export const composeEntries = (o: AgentOptions, pick: (n: number) => number = ra
 
 export type Plan = { draw: bigint; salesClose: bigint; entries: Starfall.PlainEntry[]; games: number; cost: bigint };
 
+/** What the purchases in `state` cost since `sinceMs` (STAR). */
+export const spentSince = (state: AgentState, sinceMs: number): bigint =>
+  state.purchases.filter((p) => Date.parse(p.at) >= sinceMs).reduce((a, p) => a + BigInt(p.cost), 0n);
+
+/** What the purchases in `state` for one draw cost (STAR). */
+export const spentOnDraw = (state: AgentState, draw: bigint): bigint =>
+  state.purchases.filter((p) => p.draw === draw.toString()).reduce((a, p) => a + BigInt(p.cost), 0n);
+
 /**
  * What to buy now, or null: nothing on sale, sales closing too soon, already
  * bought into this draw, the budget or the limit of draws reached. `entries`
@@ -138,6 +148,12 @@ export const planPurchase = (
   const cost = view.ticketPrice * BigInt(games);
   const budget = o.budget ?? 60_000_000n;
   if (cost > budget) return { skipped: `${games} game(s) would cost ${Number(cost) / 1e6} tNIGHT, over the budget of ${Number(budget) / 1e6}` };
+  if (o.dailyLimit !== undefined) {
+    const spent = spentSince(state, nowSecs * 1000 - 24 * 3600_000);
+    if (spent + cost > o.dailyLimit) {
+      return { skipped: `${Number(cost) / 1e6} tNIGHT more would pass the daily limit of ${Number(o.dailyLimit) / 1e6} (${Number(spent) / 1e6} spent in the last 24 hours)` };
+    }
+  }
   return { draw: selling.id, salesClose: selling.salesClose, entries, games, cost };
 };
 
