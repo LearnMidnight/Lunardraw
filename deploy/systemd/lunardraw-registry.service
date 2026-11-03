@@ -1,0 +1,22 @@
+# The agent directory's registry (cli/src/registry.ts): Lunardraw's own agents
+# from /root/lunardraw-agents (their state files) and the feed, plus agents
+# whose owners listed them with the agent kit (wallet-signed reports, kept in
+# /root/lunardraw-registry/listings.json). Listens on 127.0.0.1:6310; Caddy
+# serves it at https://207-180-249-120.sslip.io/agents/ (agents.json, report).
+# No wallet, no secrets: it never opens the agents' wallet files.
+[Unit]
+Description=Lunardraw agent registry
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/root/Lunardraw
+Environment=HOME=/root
+Environment=NODE_OPTIONS=--max-old-space-size=512
+ExecStart=/root/Lunardraw/lunardraw registry --network preprod --port 6310 \
+  --dir /root/lunardraw-registry --feed /root/lunardraw-feed/feed.json --house /root/lunardraw-agents
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

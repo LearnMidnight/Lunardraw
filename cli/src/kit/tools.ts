@@ -7,6 +7,7 @@ import { loadAgentState } from '../starfall-agent.js';
 import { buyEntries } from '../starfall-commands.js';
 import { ensureWallet, hasBlockfrost, kitHome, kitPaths, loadConfig, useHome } from './home.js';
 import { BUY_SCHEMA, buyArgs, type Tool } from './mcp.js';
+import { refreshListing } from './directory.js';
 import { type Player, readOverview, ticketsReport, withPlayer } from './player.js';
 
 const DIVISIONS = ['7 + Moonball', '7', '6 + Moonball', '6', '5 + Moonball', '4 + Moonball', '5', '3 + Moonball', '2 + Moonball'];
@@ -46,6 +47,18 @@ export const mcpTools = (): Tool[] => {
   // LUNARDRAW_AGENT_LAZY=1 waits for the first call instead.
   if (process.env.LUNARDRAW_AGENT_LAZY !== '1' && hasBlockfrost(kitHome(), config.network)) {
     setTimeout(() => void openPlayer(() => undefined).catch(() => undefined), 0).unref?.();
+  }
+
+  // If the owner listed the agent in lunardraw.io's directory, keep it up to date
+  // (and shown as online) while the server runs, and after each purchase.
+  const listingTick = async () => {
+    if (!config.listing || !hasBlockfrost(kitHome(), config.network)) return;
+    const view = (await readOverview(config).catch(() => undefined))?.view;
+    await refreshListing(config, ensureWallet().seed, { view, log: (m) => process.stderr.write(m + '\n') });
+  };
+  if (config.listing) {
+    setTimeout(() => void listingTick(), 5_000).unref?.();
+    setInterval(() => void listingTick(), 30 * 60_000).unref?.();
   }
 
   // keep the client informed during long calls
@@ -114,6 +127,7 @@ export const mcpTools = (): Tool[] => {
         const entries = buyEntries(buyArgs(args));
         const p = await ticking(progress, 'opening the wallet', openPlayer(progress));
         const outcome = await ticking(progress, 'buying', p.buy(entries, progress));
+        if (outcome.bought) void listingTick();
         return { text: JSON.stringify(outcome, null, 2), isError: outcome.bought < outcome.of };
       },
     },

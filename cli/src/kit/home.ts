@@ -26,7 +26,14 @@ export type KitConfig = {
   limits: { perDraw: number; perDay: number };
   /** Where winnings go (mn_addr_... or 64 hex); this wallet by default. */
   payTo?: string;
+  /** Listed in lunardraw.io's agent directory (the owner opted in with `lunardraw-agent list`). */
+  listing?: { name: string; style: string; via: string };
+  /** The directory's registry (default: Lunardraw's). */
+  registry?: string;
 };
+
+/** Lunardraw's agent registry (the agent directory on lunardraw.io reads it). */
+export const DEFAULT_REGISTRY = 'https://207-180-249-120.sslip.io/agents';
 
 export const DEFAULT_CONFIG: KitConfig = { network: 'preprod', prover: 'hosted', limits: { perDraw: 25, perDay: 100 } };
 
@@ -61,7 +68,9 @@ export const parseConfig = (raw: unknown): KitConfig => {
   if (typeof prover !== 'string' || !(prover === 'hosted' || /^https?:\/\/\S+$/.test(prover) || /^local:\d+$/.test(prover))) {
     throw new Error('config.json: prover must be "hosted", a prover\'s https:// address, or "local:<port>"');
   }
-  return { network, prover, limits, ...(c.payTo ? { payTo: String(c.payTo) } : {}) };
+  const listing = c.listing && typeof c.listing === 'object' ? { name: String(c.listing.name ?? ''), style: String(c.listing.style ?? ''), via: String(c.listing.via ?? 'other') } : undefined;
+  if (c.registry !== undefined && (typeof c.registry !== 'string' || !/^https?:\/\/\S+$/.test(c.registry))) throw new Error('config.json: registry must be an https:// address');
+  return { network, prover, limits, ...(c.payTo ? { payTo: String(c.payTo) } : {}), ...(listing ? { listing } : {}), ...(c.registry ? { registry: c.registry } : {}) };
 };
 
 export const loadConfig = (home = kitHome()): KitConfig => {

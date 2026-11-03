@@ -1,0 +1,121 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { agentStats, agentWins, type DrawOutcome, periodStart, signedListing, walletSigner } from '../listing.js';
+import { createRegistry, ledgerVerifier } from '../registry.js';
+import type { AgentState } from '../starfall-agent.js';
+
+const SEED_A = '11'.repeat(32);
+const SEED_B = '22'.repeat(32);
+
+const state: AgentState = {
+  purchases: [
+    // draw 10: one game, 5 numbers + Moonball (division 5)
+    { draw: '10', at: '2026-11-01T01:05:00.000Z', entries: [{ numbers: [1, 2, 3, 4, 5, 30, 31], moonball: 7 }], games: 1, cost: '1200000', txs: 1 },
+    // draw 11: two games, nothing
+    { draw: '11', at: '2026-11-01T02:05:00.000Z', entries: [{ numbers: [1, 2, 3, 4, 5, 6, 7], moonball: 1 }, { numbers: [8, 9, 10, 11, 12, 13, 14], moonball: 2 }], games: 2, cost: '2400000', txs: 1 },
+    // draw 12: void (refunded): not counted
+    { draw: '12', at: '2026-11-01T03:05:00.000Z', entries: [{ numbers: [1, 2, 3, 4, 5, 6, 7], moonball: 1 }], games: 1, cost: '1200000', txs: 1 },
+  ],
+  reported: [],
+};
+const prizes = [0, 0, 0, 0, 50_000_000, 0, 0, 0, 0];
+const draws: DrawOutcome[] = [
+  { num: 10, status: 'settled', numbers: [1, 2, 3, 4, 5, 20, 21], moonball: 7, prizes_star: prizes },
+  { num: 11, status: 'settled', numbers: [20, 21, 22, 23, 24, 25, 26], moonball: 9, prizes_star: prizes },
+  { num: 12, status: 'void' },
+];
+
+describe('an agent\'s totals', () => {
+  it('counts draws, games, spending and prizes from its own record; void draws are refunds', () => {
+    expect(agentStats(state, draws)).toEqual({
+      draws: 2,
+      games: 3,
+      spent_star: 3_600_000,
+      winning_games: 1,
+      won_star: 50_000_000,
+      last_draw: 11,
+      first_played: '2026-11-01T01:05:00.000Z',
+      last_played: '2026-11-01T02:05:00.000Z',
+    });
+    // a drawn draw whose prizes aren't fixed yet: the win counts, the amount waits
+    const drawn = draws.map((d) => (d.num === 10 ? { ...d, status: 'drawn', prizes_star: undefined } : d));
+    expect(agentStats(state, drawn)).toMatchObject({ winning_games: 1, won_star: 0 });
+    // from a date on (the leaderboard's week and month)
+    expect(agentStats(state, draws, '2026-11-01T02:00:00.000Z')).toMatchObject({ draws: 1, games: 2, won_star: 0 });
+    expect(agentWins(state, draws)).toEqual([{ draw: 10, division: 5, games: 1, won_star: 50_000_000 }]);
+  });
+
+  it('counts weeks from Monday and months from the 1st, Brisbane time', () => {
+    const wed = Date.parse('2026-11-04T02:00:00.000Z'); // Wednesday 4 Nov, 12:00 in Brisbane
+    expect(periodStart('week', wed)).toBe('2026-11-01T14:00:00.000Z'); // Monday 2 Nov, 00:00
+    expect(periodStart('month', wed)).toBe('2026-10-31T14:00:00.000Z'); // 1 Nov, 00:00
+    expect(periodStart('week', Date.parse('2026-11-01T14:30:00.000Z'))).toBe('2026-11-01T14:00:00.000Z'); // Monday 00:30
+    expect(periodStart('week', Date.parse('2026-11-01T13:30:00.000Z'))).toBe('2026-10-25T14:00:00.000Z'); // Sunday 23:30
+  });
+});
+
+describe('the agent registry', () => {
+  const setup = () => {
+    const dir = mkdtempSync(join(tmpdir(), 'registry-'));
+    const house = join(dir, 'agents');
+    mkdirSync(house);
+    writeFileSync(join(house, 'nova.env'), 'AGENT_ARGS=--style mix --budget 30\n');
+    writeFileSync(join(house, 'nova.state.json'), JSON.stringify(state));
+    const feed = join(dir, 'feed.json');
+    writeFileSync(feed, JSON.stringify({ games: { starfall: { draws } } }));
+    return { dir, house, feed };
+  };
+
+  it("lists Lunardraw's own agents from their records, and a signed listing from anyone; refuses forgeries, stale reports and taken names", async () => {
+    const { dir, house, feed } = setup();
+    let t = Date.parse('2026-11-04T02:00:00.000Z');
+    const verifier = await ledgerVerifier('preprod');
+    const reg = createRegistry({ network: 'preprod', dir: join(dir, 'store'), feedPath: feed, houseDir: house, verifier, isActive: async (u) => u === 'lunardraw-agent@nova', now: () => t });
+
+    let d = await reg.directory();
+    expect(d.agents).toHaveLength(1);
+    expect(d.agents[0]).toMatchObject({ id: 'nova', name: 'NOVA', via: 'lunardraw', house: true, status: 'online', style: 'A bit of everything' });
+    expect(d.agents[0]!.stats).toMatchObject({ draws: 2, games: 3, won_star: 50_000_000 });
+    expect(d.events[0]).toMatchObject({ agent: 'NOVA', text: 'bought 1 game in draw 12' });
+    expect(d.wins).toEqual([{ agent: 'NOVA', draw: 10, division: 5, games: 1, won_star: 50_000_000 }]);
+
+    // a friend's agent lists itself, signed by its wallet
+    const a = await walletSigner(SEED_A, 'preprod');
+    expect(a.address).toMatch(/^mn_addr_preprod1/);
+    const stats = { draws: 1, games: 2, spent_star: 2_400_000, winning_games: 0, won_star: 0, last_draw: 12 };
+    const listing = { network: 'preprod', action: 'list' as const, name: 'NightOwl', style: 'Plays every night', via: 'openclaw' as const, stats };
+    expect(await reg.report(signedListing(a, listing, new Date(t)))).toBe('listed');
+    d = await reg.directory();
+    expect(d.agents.map((x) => x.name)).toEqual(['NOVA', 'NightOwl']);
+    expect(d.agents[1]).toMatchObject({ via: 'openclaw', house: false, status: 'online', address: a.address, style: 'Plays every night' });
+    expect(d.events[0]).toMatchObject({ agent: 'NightOwl', text: 'joined the directory' });
+
+    // someone else can't sign for that wallet, or take its name, or a house agent's
+    const b = await walletSigner(SEED_B, 'preprod');
+    const forged = signedListing({ ...b, key: a.key }, { ...listing, name: 'Mallory' }, new Date(t));
+    await expect(reg.report(forged)).rejects.toThrow("the signature doesn't match");
+    await expect(reg.report(signedListing(b, { ...listing, name: 'nightowl' }, new Date(t)))).rejects.toThrow('is taken');
+    t += 31_000;
+    await expect(reg.report(signedListing(b, { ...listing, name: 'Nova' }, new Date(t)))).rejects.toThrow('is taken');
+    // a payload changed after signing
+    const signed = signedListing(a, listing, new Date(t));
+    await expect(reg.report({ ...signed, payload: signed.payload.replace('NightOwl', 'NightOwl2') })).rejects.toThrow("the signature doesn't match");
+    // an old report (replayed)
+    await expect(reg.report(signedListing(a, listing, new Date(t - 11 * 60_000)))).rejects.toThrow('more than 10 minutes');
+
+    // an update: new games become an event; too soon after the last is refused
+    t += 31_000;
+    expect(await reg.report(signedListing(a, { ...listing, stats: { ...stats, games: 5, last_draw: 13 } }, new Date(t)))).toBe('updated');
+    await expect(reg.report(signedListing(a, listing, new Date(t)))).rejects.toThrow('one every 30 seconds');
+    d = await reg.directory();
+    expect(d.events[0]).toMatchObject({ agent: 'NightOwl', text: 'bought 3 games in draw 13' });
+
+    // two days quiet: offline; then the owner unlists it
+    t += 49 * 3_600_000;
+    expect((await reg.directory()).agents.find((x) => x.name === 'NightOwl')!.status).toBe('offline');
+    expect(await reg.report(signedListing(a, { ...listing, action: 'unlist' }, new Date(t)))).toBe('unlisted');
+    expect((await reg.directory()).agents.map((x) => x.name)).toEqual(['NOVA']);
+  });
+});

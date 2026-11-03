@@ -1,6 +1,6 @@
 {
   "name": "@lunardraw/cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Run Lunardraw on Midnight: deploy the Starfall contract locked, activate the oracle key, run the keeper and the draw oracle, and check a deployment.",
   "license": "MIT",
   "private": true,
@@ -14,9 +14,9 @@
     "dist"
   ],
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.build.json && chmod +x dist/main.js dist/monitor-main.js dist/kit-main.js",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && chmod +x dist/main.js dist/monitor-main.js dist/kit-main.js dist/registry-main.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run src/test/offline.test.ts src/test/starfall-offline.test.ts src/test/dust-wait.test.ts src/test/sync-watch.test.ts src/test/starfall-agent.test.ts src/test/silence-watchdog.test.ts src/test/wait-for-tip.test.ts src/test/fresh-fees.test.ts src/test/dust-time.test.ts src/test/tx-backfill.test.ts src/test/wallet-lock.test.ts src/test/monitor.test.ts src/test/hosted-prover.test.ts src/test/kit.test.ts",
+    "test": "vitest run src/test/offline.test.ts src/test/starfall-offline.test.ts src/test/dust-wait.test.ts src/test/sync-watch.test.ts src/test/starfall-agent.test.ts src/test/silence-watchdog.test.ts src/test/wait-for-tip.test.ts src/test/fresh-fees.test.ts src/test/dust-time.test.ts src/test/tx-backfill.test.ts src/test/wallet-lock.test.ts src/test/monitor.test.ts src/test/hosted-prover.test.ts src/test/kit.test.ts src/test/registry.test.ts",
     "test:e2e": "LUNARDRAW_E2E=1 vitest run src/test/e2e.test.ts src/test/starfall-e2e.test.ts"
   },
   "dependencies": {

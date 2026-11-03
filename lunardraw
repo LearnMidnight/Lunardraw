@@ -13,6 +13,11 @@ if [ "${1:-}" = monitor ]; then
   shift
   exec node "$DIR/cli/dist/monitor-main.js" "$@"
 fi
+# The agent directory's registry: no wallet, so none of the patch below.
+if [ "${1:-}" = registry ]; then
+  shift
+  exec node "$DIR/cli/dist/registry-main.js" "$@"
+fi
 # Fix the dust wallet's endless fee loop in the installed library (see
 # nightcast/deploy/scripts/patch-dust-fee-loop.mjs). Quick, and does nothing once applied.
 node "$DIR/nightcast/deploy/scripts/patch-dust-fee-loop.mjs" --quiet --root "$DIR" || true
