@@ -237,6 +237,17 @@ describe('timing a purchase\'s steps', () => {
   });
 });
 
+describe('the node\'s connection chatter', () => {
+  it('is recognised (polkadot-js prints it as date, source, message), and nothing else is', async () => {
+    const { isNodeNoise } = await import('../kit/quiet.js');
+    expect(isNodeNoise(['2026-11-03 06:36:29', '       API-WS:', 'disconnected from wss://rpc: 1006:: Abnormal Closure'])).toBe(true);
+    expect(isNodeNoise(['2026-11-03 06:36:29        RPC-CORE: getBlockHash(): disconnected'])).toBe(true);
+    expect(isNodeNoise(['2026-11-03 06:36:29', 'API/INIT:', new Error('FATAL: Unable to initialize the API')])).toBe(true);
+    expect(isNodeNoise(['not buying: over the limit'])).toBe(false);
+    expect(isNodeNoise([new Error('a purchase didn\'t land')])).toBe(false);
+  });
+});
+
 describe('status for people', () => {
   it('rounds amounts to whole tNIGHT and shows local clock times', async () => {
     const { whole, clock } = await import('../kit/main.js');

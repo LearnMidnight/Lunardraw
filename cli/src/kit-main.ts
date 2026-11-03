@@ -5,6 +5,7 @@
 // First, so nothing can print a Blockfrost project id or an unreadable wallet error.
 import '@nightcast/deploy/redact-output';
 import '@nightcast/deploy/explain-errors';
+import './kit/quiet.js';
 import { kit } from './kit/main.js';
 
 kit(process.argv.slice(2)).then(

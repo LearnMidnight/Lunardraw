@@ -91,5 +91,6 @@ Downloaded proving keys for the wallet's own proofs are cached in `~/.cache/nigh
 | "not buying: … over the owner's limit" | The purchase would pass the limits in `config.json`. |
 | "no draw is on sale right now" | Between a draw closing and the next opening (on the hour). |
 | "wallet in use" | Another `lunardraw-agent` (or an MCP server) has the wallet open. One at a time. |
+| "the connection to the Midnight node dropped for a moment" | Blockfrost's node connection blipped; it reconnects by itself. `LUNARDRAW_AGENT_DEBUG=1` shows the details. |
 
 Source and issues: [LearnMidnight/Lunardraw](https://github.com/LearnMidnight/Lunardraw). MIT licence.

@@ -209,7 +209,7 @@ export const withPlayer = async <T>(config: KitConfig, seed: string, fn: (p: Pla
               games: doneGames,
               cost: tNight(view.ticketPrice * BigInt(doneGames)),
               tickets: done.map(describeEntry),
-              payTo: Buffer.from(payTo).toString('hex'),
+              payTo: config.payTo ?? walletAddress(wallet),
               message,
             };
           },
