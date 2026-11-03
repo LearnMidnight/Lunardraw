@@ -22,6 +22,7 @@ export type DrawOutcome = {
   moonball?: number;
   /** Each division's prize per game in STAR (division 1 first), once the draw is settled. */
   prizes_star?: number[];
+  drawn_at?: string;
 };
 
 export type AgentStats = {
@@ -40,12 +41,30 @@ export type AgentStats = {
 
 export const emptyStats = (): AgentStats => ({ draws: 0, games: 0, spent_star: 0, winning_games: 0, won_star: 0 });
 
-/** An agent's totals from its own purchase record and the draws' outcomes. */
-export const agentStats = (state: AgentState, draws: DrawOutcome[]): AgentStats => {
+/**
+ * The start of this week (Monday 00:00) or month (the 1st) on Brisbane time,
+ * UTC+10 all year: the leaderboard's periods.
+ */
+export const periodStart = (period: 'week' | 'month', nowMs: number): string => {
+  const OFFSET = 10 * 3_600_000;
+  const local = new Date(nowMs + OFFSET);
+  const y = local.getUTCFullYear();
+  const m = local.getUTCMonth();
+  const d = local.getUTCDate();
+  const startLocal = period === 'month' ? Date.UTC(y, m, 1) : Date.UTC(y, m, d) - ((local.getUTCDay() + 6) % 7) * 86_400_000;
+  return new Date(startLocal - OFFSET).toISOString();
+};
+
+/** A win, for the biggest-wins list: one draw, the best division won, and the total won in it. */
+export type AgentWin = { draw: number; division: number; games: number; won_star: number };
+
+/** An agent's totals from its own purchase record and the draws' outcomes (purchases from `since` on, if given). */
+export const agentStats = (state: AgentState, draws: DrawOutcome[], since?: string): AgentStats => {
   const byNum = new Map(draws.map((d) => [d.num, d]));
   const s = emptyStats();
   const played = new Set<number>();
   for (const p of state.purchases) {
+    if (since && p.at < since) continue;
     const num = Number(p.draw);
     const d = byNum.get(num);
     if (d?.status === 'void') continue; // refunded
@@ -69,6 +88,42 @@ export const agentStats = (state: AgentState, draws: DrawOutcome[]): AgentStats 
   return s;
 };
 
+/** Every draw the agent won something in (settled draws), newest first. */
+export const agentWins = (state: AgentState, draws: DrawOutcome[]): AgentWin[] => {
+  const byNum = new Map(draws.map((d) => [d.num, d]));
+  const perDraw = new Map<number, AgentWin>();
+  for (const p of state.purchases) {
+    const num = Number(p.draw);
+    const d = byNum.get(num);
+    if (!d?.numbers || d.moonball === undefined || !d.prizes_star || d.status === 'void') continue;
+    for (const e of p.entries) {
+      Starfall.gamesByDivisionFor(e, d.numbers, d.moonball).forEach((g, i) => {
+        if (!g) return;
+        const w = perDraw.get(num) ?? { draw: num, division: i + 1, games: 0, won_star: 0 };
+        w.division = Math.min(w.division, i + 1);
+        w.games += Number(g);
+        w.won_star += Number(g) * (d.prizes_star![i] ?? 0);
+        perDraw.set(num, w);
+      });
+    }
+  }
+  return [...perDraw.values()].sort((a, b) => b.draw - a.draw);
+};
+
+/** What an agent reports: all-time totals, this week's and month's, and its recent wins. */
+export type AgentReport = { stats: AgentStats; week: AgentStats & { since: string }; month: AgentStats & { since: string }; wins: AgentWin[] };
+
+export const agentReport = (state: AgentState, draws: DrawOutcome[], nowMs: number): AgentReport => {
+  const week = periodStart('week', nowMs);
+  const month = periodStart('month', nowMs);
+  return {
+    stats: agentStats(state, draws),
+    week: { ...agentStats(state, draws, week), since: week },
+    month: { ...agentStats(state, draws, month), since: month },
+    wins: agentWins(state, draws).slice(0, 20),
+  };
+};
+
 // ------------------------------------------------------------------ the signed listing
 
 export const LISTING_PREFIX = 'lunardraw-agent-listing\n';
@@ -87,6 +142,9 @@ export type ListingPayload = {
   style: string;
   via: Via;
   stats: AgentStats;
+  week?: AgentStats & { since: string };
+  month?: AgentStats & { since: string };
+  wins?: AgentWin[];
   /** When it was signed (ISO); a report more than 10 minutes off is refused. */
   at: string;
 };
@@ -110,7 +168,20 @@ export type Signer = { key: string; address: string; sign(data: Uint8Array): str
 export const signedListing = (signer: Signer, p: Omit<ListingPayload, 'v' | 'key' | 'at'>, now: Date = new Date()): { payload: string; signature: string } => {
   const problem = listingProblem(p);
   if (problem) throw new Error(problem);
-  const payload = JSON.stringify({ v: 1, network: p.network, key: signer.key, action: p.action, name: p.name, style: p.style, via: p.via, stats: p.stats, at: now.toISOString() } satisfies ListingPayload);
+  const payload = JSON.stringify({
+    v: 1,
+    network: p.network,
+    key: signer.key,
+    action: p.action,
+    name: p.name,
+    style: p.style,
+    via: p.via,
+    stats: p.stats,
+    ...(p.week ? { week: p.week } : {}),
+    ...(p.month ? { month: p.month } : {}),
+    ...(p.wins ? { wins: p.wins } : {}),
+    at: now.toISOString(),
+  } satisfies ListingPayload);
   return { payload, signature: signer.sign(listingMessage(payload)) };
 };
 

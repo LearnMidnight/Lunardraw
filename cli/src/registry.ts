@@ -17,7 +17,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync,
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { type AgentStats, agentStats, type DrawOutcome, emptyStats, LISTING_PREFIX, type ListingPayload, listingProblem, type Via } from './listing.js';
+import { type AgentStats, agentReport, type AgentWin, type DrawOutcome, emptyStats, LISTING_PREFIX, type ListingPayload, listingProblem, periodStart, type Via } from './listing.js';
 import { loadAgentState } from './starfall-agent.js';
 
 export type DirectoryAgent = {
@@ -29,6 +29,9 @@ export type DirectoryAgent = {
   status: 'online' | 'idle' | 'offline';
   style: string;
   stats: AgentStats;
+  /** This week's and this month's totals (Brisbane time; empty if it hasn't reported since they began). */
+  week: AgentStats;
+  month: AgentStats;
   /** First purchase or first listing (ISO). */
   joined?: string;
   last_seen?: string;
@@ -38,12 +41,17 @@ export type DirectoryAgent = {
 
 export type DirectoryEvent = { at: string; agent: string; text: string };
 
+/** A win by a named agent, for the biggest-wins list. */
+export type DirectoryWin = AgentWin & { agent: string; drawn_at?: string };
+
 export type Directory = {
   schema: 'lunardraw-agents/1';
   network: string;
   generated_at: string;
   agents: DirectoryAgent[];
   events: DirectoryEvent[];
+  /** The biggest wins, largest first. */
+  wins: DirectoryWin[];
 };
 
 type Listed = {
@@ -53,6 +61,9 @@ type Listed = {
   style: string;
   via: Via;
   stats: AgentStats;
+  week?: AgentStats & { since: string };
+  month?: AgentStats & { since: string };
+  wins?: AgentWin[];
   joined: string;
   last_seen: string;
 };
@@ -136,20 +147,22 @@ export const createRegistry = (o: RegistryOptions) => {
     }
   };
 
-  const house = async (outcomes: DrawOutcome[]): Promise<{ agents: DirectoryAgent[]; events: DirectoryEvent[] }> => {
-    if (!existsSync(o.houseDir)) return { agents: [], events: [] };
+  const house = async (outcomes: DrawOutcome[]): Promise<{ agents: DirectoryAgent[]; events: DirectoryEvent[]; wins: DirectoryWin[] }> => {
+    if (!existsSync(o.houseDir)) return { agents: [], events: [], wins: [] };
     const names = readdirSync(o.houseDir)
       .filter((f) => f.endsWith('.env'))
       .map((f) => f.slice(0, -4))
       .filter((n) => /^[a-z0-9-]+$/.test(n));
     const agents: DirectoryAgent[] = [];
     const events: DirectoryEvent[] = [];
+    const wins: DirectoryWin[] = [];
     for (const n of names) {
       const statePath = join(o.houseDir, `${n}.state.json`);
       const state = loadAgentState(statePath);
       const env = readFileSync(join(o.houseDir, `${n}.env`), 'utf8');
       const style = /--style\s+(\w+)/.exec(env)?.[1] ?? 'mix';
-      const stats = agentStats(state, outcomes);
+      const r = agentReport(state, outcomes, now());
+      const stats = r.stats;
       const active = await isActive(`lunardraw-agent@${n}`);
       const seen = existsSync(statePath) ? statSync(statePath).mtimeMs : undefined;
       const name = n.toUpperCase();
@@ -161,14 +174,17 @@ export const createRegistry = (o: RegistryOptions) => {
         status: active ? 'online' : statusOf(seen, now()) === 'online' ? 'idle' : 'offline',
         style: STYLES[style] ?? style,
         stats,
+        week: strip(r.week),
+        month: strip(r.month),
         joined: stats.first_played,
         last_seen: seen ? new Date(seen).toISOString() : undefined,
       });
       for (const p of state.purchases.slice(-10)) {
         events.push({ at: p.at, agent: name, text: `bought ${p.games} game${p.games === 1 ? '' : 's'} in draw ${p.draw}` });
       }
+      for (const w of r.wins) wins.push({ ...w, agent: name });
     }
-    return { agents, events };
+    return { agents, events, wins };
   };
 
   /** The directory: house agents first in ties, then by tNIGHT won, winning games, games. */
@@ -177,6 +193,8 @@ export const createRegistry = (o: RegistryOptions) => {
     const h = await house(outcomes);
     const s = load();
     const t = now();
+    const weekStart = periodStart('week', t);
+    const monthStart = periodStart('month', t);
     const listed: DirectoryAgent[] = Object.values(s.listed)
       .filter((l) => !s.hidden.includes(l.address) && !s.hidden.includes(slug(l.name)))
       .map((l) => ({
@@ -187,6 +205,8 @@ export const createRegistry = (o: RegistryOptions) => {
         status: statusOf(Date.parse(l.last_seen), t),
         style: l.style,
         stats: l.stats,
+        week: l.week?.since === weekStart ? strip(l.week) : emptyStats(),
+        month: l.month?.since === monthStart ? strip(l.month) : emptyStats(),
         joined: l.joined,
         last_seen: l.last_seen,
         address: l.address,
@@ -196,13 +216,22 @@ export const createRegistry = (o: RegistryOptions) => {
     );
     const shown = new Set(listed.map((a) => a.name));
     const events = [...h.events, ...s.events.filter((e) => shown.has(e.agent))].sort((a, b) => (a.at < b.at ? 1 : -1)).slice(0, 30);
-    return { schema: 'lunardraw-agents/1', network: o.network, generated_at: new Date(t).toISOString(), agents, events };
+    const drawnAt = new Map(outcomes.map((d) => [d.num, d.drawn_at]));
+    const listedWins = Object.values(s.listed)
+      .filter((l) => shown.has(l.name))
+      .flatMap((l) => (l.wins ?? []).map((w) => ({ ...w, agent: l.name })));
+    const wins = [...h.wins, ...listedWins]
+      .filter((w) => w.won_star > 0)
+      .map((w) => ({ ...w, drawn_at: drawnAt.get(w.draw) }))
+      .sort((a, b) => b.won_star - a.won_star || b.draw - a.draw)
+      .slice(0, 20);
+    return { schema: 'lunardraw-agents/1', network: o.network, generated_at: new Date(t).toISOString(), agents, events, wins };
   };
 
   /** Check and apply a signed report; returns a message, or throws with the reason it was refused. */
   const report = async (body: unknown): Promise<string> => {
     const b = body as { payload?: unknown; signature?: unknown };
-    if (typeof b?.payload !== 'string' || typeof b.signature !== 'string' || b.payload.length > 4000) throw new Refused('expected { payload, signature }');
+    if (typeof b?.payload !== 'string' || typeof b.signature !== 'string' || b.payload.length > 12_000) throw new Refused('expected { payload, signature }');
     let p: ListingPayload;
     try {
       p = JSON.parse(b.payload) as ListingPayload;
@@ -229,13 +258,18 @@ export const createRegistry = (o: RegistryOptions) => {
     const problem = listingProblem(p);
     if (problem) throw new Refused(problem);
     const stats = cleanStats(p.stats);
+    const period = (x: unknown) => {
+      const since = (x as { since?: unknown })?.since;
+      return typeof since === 'string' && Number.isFinite(Date.parse(since)) ? { ...cleanStats(x), since: new Date(since).toISOString() } : undefined;
+    };
+    const wins = Array.isArray(p.wins) ? p.wins.slice(0, 20).map(cleanWin).filter((w): w is AgentWin => w !== undefined) : [];
     const houseNames = existsSync(o.houseDir) ? readdirSync(o.houseDir).filter((f) => f.endsWith('.env')).map((f) => slug(f.slice(0, -4))) : [];
     const taken = Object.values(s.listed).find((l) => slug(l.name) === slug(p.name) && l.address !== address);
     if (taken || houseNames.includes(slug(p.name))) throw new Refused(`the name ${p.name} is taken: choose another`);
     const before = s.listed[address];
     if (!before && Object.keys(s.listed).length >= maxListed) throw new Refused('the directory is full for now');
     const iso = new Date(now()).toISOString();
-    s.listed[address] = { address, key: p.key, name: p.name, style: p.style, via: p.via, stats, joined: before?.joined ?? iso, last_seen: iso };
+    s.listed[address] = { address, key: p.key, name: p.name, style: p.style, via: p.via, stats, week: period(p.week), month: period(p.month), wins, joined: before?.joined ?? iso, last_seen: iso };
     // what changed, for the activity panel
     if (!before) s.events.push({ at: iso, agent: p.name, text: 'joined the directory' });
     else {
@@ -251,6 +285,21 @@ export const createRegistry = (o: RegistryOptions) => {
 };
 
 export class Refused extends Error {}
+
+const strip = (x: AgentStats & { since?: string }): AgentStats => {
+  const { since: _since, ...rest } = x;
+  return rest;
+};
+
+const cleanWin = (x: unknown): AgentWin | undefined => {
+  const w = (x ?? {}) as Record<string, unknown>;
+  const int = (v: unknown, lo: number, hi: number) => (typeof v === 'number' && Number.isInteger(v) && v >= lo && v <= hi ? v : undefined);
+  const draw = int(w.draw, 1, 1e9);
+  const division = int(w.division, 1, 9);
+  const games = int(w.games, 1, 1e6);
+  const won = int(w.won_star, 0, 1e15);
+  return draw && division && games && won !== undefined ? { draw, division, games, won_star: won } : undefined;
+};
 
 const cleanStats = (x: unknown): AgentStats => {
   const s = (x ?? {}) as Record<string, unknown>;
@@ -313,7 +362,7 @@ export const serveRegistry = (registry: ReturnType<typeof createRegistry>, port:
         let size = 0;
         for await (const c of req) {
           size += (c as Buffer).length;
-          if (size > 8192) return send(res, 413, '{"error":"too large"}');
+          if (size > 16_384) return send(res, 413, '{"error":"too large"}');
           chunks.push(c as Buffer);
         }
         let body: unknown;

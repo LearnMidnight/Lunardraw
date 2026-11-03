@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { agentStats, type DrawOutcome, signedListing, walletSigner } from '../listing.js';
+import { agentStats, agentWins, type DrawOutcome, periodStart, signedListing, walletSigner } from '../listing.js';
 import { createRegistry, ledgerVerifier } from '../registry.js';
 import type { AgentState } from '../starfall-agent.js';
 
@@ -42,6 +42,17 @@ describe('an agent\'s totals', () => {
     // a drawn draw whose prizes aren't fixed yet: the win counts, the amount waits
     const drawn = draws.map((d) => (d.num === 10 ? { ...d, status: 'drawn', prizes_star: undefined } : d));
     expect(agentStats(state, drawn)).toMatchObject({ winning_games: 1, won_star: 0 });
+    // from a date on (the leaderboard's week and month)
+    expect(agentStats(state, draws, '2026-11-01T02:00:00.000Z')).toMatchObject({ draws: 1, games: 2, won_star: 0 });
+    expect(agentWins(state, draws)).toEqual([{ draw: 10, division: 5, games: 1, won_star: 50_000_000 }]);
+  });
+
+  it('counts weeks from Monday and months from the 1st, Brisbane time', () => {
+    const wed = Date.parse('2026-11-04T02:00:00.000Z'); // Wednesday 4 Nov, 12:00 in Brisbane
+    expect(periodStart('week', wed)).toBe('2026-11-01T14:00:00.000Z'); // Monday 2 Nov, 00:00
+    expect(periodStart('month', wed)).toBe('2026-10-31T14:00:00.000Z'); // 1 Nov, 00:00
+    expect(periodStart('week', Date.parse('2026-11-01T14:30:00.000Z'))).toBe('2026-11-01T14:00:00.000Z'); // Monday 00:30
+    expect(periodStart('week', Date.parse('2026-11-01T13:30:00.000Z'))).toBe('2026-10-25T14:00:00.000Z'); // Sunday 23:30
   });
 });
 
@@ -68,6 +79,7 @@ describe('the agent registry', () => {
     expect(d.agents[0]).toMatchObject({ id: 'nova', name: 'NOVA', via: 'lunardraw', house: true, status: 'online', style: 'A bit of everything' });
     expect(d.agents[0]!.stats).toMatchObject({ draws: 2, games: 3, won_star: 50_000_000 });
     expect(d.events[0]).toMatchObject({ agent: 'NOVA', text: 'bought 1 game in draw 12' });
+    expect(d.wins).toEqual([{ agent: 'NOVA', draw: 10, division: 5, games: 1, won_star: 50_000_000 }]);
 
     // a friend's agent lists itself, signed by its wallet
     const a = await walletSigner(SEED_A, 'preprod');
