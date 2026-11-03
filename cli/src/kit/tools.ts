@@ -1,6 +1,6 @@
 /**
- * The MCP server's tools. The wallet is opened once, on first use, and kept
- * open while the server runs (opening takes a few minutes; a purchase 2-3).
+ * The MCP server's tools. The wallet is opened once, when the server starts,
+ * and kept open while it runs (opening takes a few minutes; a purchase 2-3).
  */
 import { Starfall } from '@lunardraw/contract';
 import { loadAgentState } from '../starfall-agent.js';
@@ -40,6 +40,13 @@ export const mcpTools = (): Tool[] => {
     return player;
   };
   process.once('exit', () => release());
+  // Start opening the wallet as soon as the server starts (an AI app starts it when
+  // the app opens), so the first purchase doesn't wait 5 minutes for it on top of
+  // the purchase itself; many agents give up on a tool call long before that.
+  // LUNARDRAW_AGENT_LAZY=1 waits for the first call instead.
+  if (process.env.LUNARDRAW_AGENT_LAZY !== '1' && hasBlockfrost(kitHome(), config.network)) {
+    setTimeout(() => void openPlayer(() => undefined).catch(() => undefined), 0).unref?.();
+  }
 
   // keep the client informed during long calls
   const ticking = async <T>(progress: (m: string) => void, what: string, work: Promise<T>): Promise<T> => {

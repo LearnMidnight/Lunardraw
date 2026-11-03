@@ -19,7 +19,7 @@ export const KIT_USAGE = `lunardraw-agent: play Starfall, Lunardraw's lottery on
   lunardraw-agent play [--style mix|quickpick|lucky|moonhit|system] [--games <n>] [--numbers ... --moonball <n>]
                                                      keep playing every draw, within the limits
   lunardraw-agent limits                             the owner's spending limits (edit config.json to change)
-  lunardraw-agent mcp                                run as an MCP server for Claude and other AI assistants
+  lunardraw-agent mcp                                run as an MCP server for your AI (Claude, Gemini, OpenClaw, Hermes...)
 
 --json prints machine-readable output (status, wallet, buy, tickets).
 

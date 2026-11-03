@@ -1,7 +1,7 @@
 /**
  * `lunardraw-agent setup`: the guided first run. One question at a time:
  * a Blockfrost key (checked before going on), test tNIGHT from the faucet,
- * connecting an AI assistant (Claude Desktop's settings are written for
+ * connecting an AI (Claude Desktop's settings are written for
  * them), then the wallet's first sync with a progress bar. Run it again any
  * time: done steps are skipped, and the sync carries on where it stopped.
  */
@@ -178,7 +178,7 @@ export const setup = async (): Promise<number> => {
     await rl.question('Press Enter once you\'ve asked the faucet (the tokens arrive while the wallet syncs). ');
 
     // 3. the AI assistant
-    step(3, 'connect your AI assistant');
+    step(3, 'connect your AI');
     const entry = mcpEntry();
     const desktop = claudeDesktopConfig();
     if (existsSync(dirname(desktop))) {
@@ -192,9 +192,16 @@ export const setup = async (): Promise<number> => {
     } else {
       say('Claude Desktop isn\'t installed here (that\'s fine).');
     }
-    say('\nFor other assistants:');
-    say(`  Claude Code:  claude mcp add lunardraw -- "${entry.command}" "${entry.args[0]}" mcp`);
-    say(`  Any MCP app:  command "${entry.command}", arguments "${entry.args[0]}" "mcp"`);
+    say('\nOther AI apps and agents (any that can run a local MCP server; pick the one you use):');
+    say(`  Claude Code:   claude mcp add lunardraw -- "${entry.command}" "${entry.args[0]}" mcp`);
+    say(`  Gemini CLI:    gemini mcp add lunardraw "${entry.command}" "${entry.args[0]}" mcp`);
+    say(`  OpenClaw:      openclaw mcp add lunardraw --command "${entry.command}" --arg "${entry.args[0]}" --arg mcp`);
+    say(`  Hermes Agent:  in ~/.hermes/config.yaml, under mcp_servers:`);
+    say(`                   lunardraw: { command: "${entry.command}", args: ["${entry.args[0]}", "mcp"], timeout: 900 }`);
+    say(`  Anything else: command "${entry.command}", arguments "${entry.args[0]}" "mcp"`);
+    say('  (Allow tool calls up to 15 minutes: the first purchase opens the wallet, then buys.)');
+    say('ChatGPT and Grok can use any of these agents as the brain (OpenClaw and Hermes run GPT, Grok and Gemini models);');
+    say("their own apps only reach MCP servers on the internet, which this one (holding your wallet) deliberately isn't.");
 
     // 4. sync
     step(4, 'sync the wallet');

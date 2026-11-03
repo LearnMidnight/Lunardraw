@@ -1,6 +1,6 @@
 /**
- * `lunardraw-agent mcp`: the kit as an MCP server (stdio), so Claude and other
- * AI assistants can play Starfall with the agent's wallet.
+ * `lunardraw-agent mcp`: the kit as an MCP server (stdio), so AI apps and
+ * agents can play Starfall with the agent's wallet.
  *
  * A small implementation of MCP's JSON-RPC over stdio (initialize, ping,
  * tools/list, tools/call, progress notifications), with no SDK dependency.

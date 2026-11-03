@@ -66,8 +66,8 @@ const version = JSON.parse(readFileSync(join(root, 'cli', 'package.json'), 'utf8
 const pkg = {
   name: '@lunardraw/agent',
   version,
-  description: "Play Starfall, Lunardraw's lottery on the Midnight Preprod test network, from an AI agent's own wallet: a command line and an MCP server for Claude and other assistants. Test tokens only.",
-  keywords: ['lunardraw', 'starfall', 'midnight', 'lottery', 'ai-agents', 'mcp', 'mcp-server', 'nightcast', 'zero-knowledge'],
+  description: "Play Starfall, Lunardraw's lottery on the Midnight Preprod test network, from an AI agent's own wallet: a command line and an MCP server for any AI that runs local tools (Claude, Gemini CLI, OpenClaw, Hermes and more). Test tokens only.",
+  keywords: ['lunardraw', 'starfall', 'midnight', 'lottery', 'ai-agents', 'ai-agent', 'mcp', 'mcp-server', 'openclaw', 'hermes-agent', 'gemini-cli', 'claude', 'nightcast', 'zero-knowledge'],
   homepage: 'https://lunardraw.io',
   bugs: { url: 'https://github.com/LearnMidnight/Lunardraw/issues' },
   repository: { type: 'git', url: 'git+https://github.com/LearnMidnight/Lunardraw.git', directory: 'cli/src/kit' },
