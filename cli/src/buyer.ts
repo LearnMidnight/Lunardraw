@@ -16,14 +16,50 @@ import { BuyStopped, buyGames, onChainCheck, type StarfallCalls, starfallProvide
 /** `--prover <url>`, or `hosted` for Lunardraw's player prover: buy without a proof server. */
 export const proverArg = (v: string | undefined): string | undefined => (v === undefined ? undefined : v === 'hosted' ? DEFAULT_PROVER : v);
 
+/**
+ * `target` with `method` timed: `say(seconds)` once it finishes. Every other
+ * property passes through (methods bound to the original, so class instances
+ * with private fields still work).
+ */
+export const timedMethod = <T extends object>(target: T, method: string, say: (secs: string, failed: boolean) => void, now: () => number = Date.now): T =>
+  new Proxy(target, {
+    get(t, prop) {
+      const v = Reflect.get(t, prop, t) as unknown;
+      if (typeof v !== 'function') return v;
+      if (prop !== method) return v.bind(t);
+      return async (...args: unknown[]) => {
+        const start = now();
+        const secs = () => ((now() - start) / 1000).toFixed(0);
+        try {
+          const r = await (v as (...a: unknown[]) => Promise<unknown>).apply(t, args);
+          say(secs(), false);
+          return r;
+        } catch (err) {
+          say(secs(), true);
+          throw err;
+        }
+      };
+    },
+  });
+
+/** Each step of a purchase, timed, so a slow one shows which part was slow. */
+export const timedSteps = <P extends { proofProvider: object; walletProvider: object; midnightProvider: object; publicDataProvider: object }>(providers: P, log: (m: string) => void): P => ({
+  ...providers,
+  proofProvider: timedMethod(providers.proofProvider, 'proveTx', (s, f) => log(`the ticket's proof ${f ? 'failed after' : 'took'} ${s} s`)),
+  walletProvider: timedMethod(providers.walletProvider, 'balanceTx', (s, f) => log(`the wallet's fees ${f ? 'failed after' : 'took'} ${s} s`)),
+  midnightProvider: timedMethod(providers.midnightProvider, 'submitTx', (s, f) => log(f ? `submitting failed after ${s} s` : `submitted in ${s} s; waiting for it on the chain`)),
+  publicDataProvider: timedMethod(providers.publicDataProvider, 'watchForTxData', (s, f) => log(`${f ? 'watching for it failed after' : 'on the chain after'} ${s} s`)),
+});
+
 /** A buyer's providers: proofs from the proof server, or from the remote prover when one is given. */
 export const buyerProviders = (session: Session, wallet: Parameters<typeof starfallProviders>[1], prover: string | undefined) => {
   const providers = starfallProviders(session, wallet);
-  if (!prover) return providers;
+  const log = (m: string) => session.logger.info(m);
+  if (!prover) return timedSteps(providers, log);
   const proofProvider = hostedProofProvider(prover, {
     onWait: (status, secs) => session.logger.info(`the prover is ${status === 429 ? 'limiting this address' : 'busy'}; trying again in ${secs} s`),
   });
-  return { ...providers, proofProvider: proofProvider as unknown as typeof providers.proofProvider };
+  return timedSteps({ ...providers, proofProvider: proofProvider as unknown as typeof providers.proofProvider }, log);
 };
 
 /** A refusal worth building again: the contract refused the purchase (another one took its ticket index), nothing more. */

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { Starfall } from '@lunardraw/contract';
 import type { StarfallView } from '@lunardraw/keeper';
-import { buyWithRetry, isCollision } from '../buyer.js';
+import { buyWithRetry, isCollision, timedMethod } from '../buyer.js';
 import { DEFAULT_CONFIG, ensureWallet, findDeployments, parseConfig, saveBlockfrost } from '../kit/home.js';
 import { BUY_SCHEMA, buyArgs, handle, type Tool } from '../kit/mcp.js';
 import { checkLimits, overviewOf, requireLocalProvingKey, ticketsReport } from '../kit/player.js';
@@ -211,6 +211,29 @@ describe('the agent kit', () => {
     });
     expect(await handle({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'nope' } }, tools, notify)).toMatchObject({ error: { code: -32602 } });
     expect(await handle({ jsonrpc: '2.0', id: 6, method: 'resources/list' }, tools, notify)).toMatchObject({ error: { code: -32601 } });
+  });
+});
+
+describe('timing a purchase\'s steps', () => {
+  it('times one method and passes the rest through, bound to the original', async () => {
+    class Wallet {
+      #fee = 7;
+      async balanceTx(x: number) {
+        return x + this.#fee;
+      }
+      address() {
+        return `addr-${this.#fee}`;
+      }
+    }
+    const said: string[] = [];
+    let t = 0;
+    const w = timedMethod(new Wallet(), 'balanceTx', (s, f) => said.push(`${s}${f ? '!' : ''}`), () => (t += 2500));
+    expect(await w.balanceTx(1)).toBe(8);
+    expect(w.address()).toBe('addr-7');
+    expect(said).toEqual(['3']);
+    const bad = timedMethod({ async balanceTx() { throw new Error('no'); } }, 'balanceTx', (s, f) => said.push(`${s}${f ? '!' : ''}`), () => (t += 1000));
+    await expect(bad.balanceTx()).rejects.toThrow('no');
+    expect(said.at(-1)).toBe('1!');
   });
 });
 
