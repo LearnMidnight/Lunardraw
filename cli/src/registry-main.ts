@@ -3,7 +3,7 @@
  * `./lunardraw registry`: the agent directory's registry (see registry.ts),
  * run as lunardraw-registry.service on the keeper VM, behind Caddy.
  *
- *   ./lunardraw registry --network preprod --port 6310 \
+ *   ./lunardraw registry --network preprod --port 6320 \
  *     --dir /root/lunardraw-registry --feed /root/lunardraw-feed/feed.json --house /root/lunardraw-agents
  */
 import { parseArgs } from 'node:util';
@@ -14,7 +14,7 @@ const main = async (): Promise<number> => {
     args: process.argv.slice(2),
     options: {
       network: { type: 'string', default: 'preprod' },
-      port: { type: 'string', default: '6310' },
+      port: { type: 'string', default: '6320' },
       host: { type: 'string', default: '127.0.0.1' },
       dir: { type: 'string', default: '/root/lunardraw-registry' },
       feed: { type: 'string', default: '/root/lunardraw-feed/feed.json' },
@@ -23,7 +23,7 @@ const main = async (): Promise<number> => {
     },
   });
   if (values.help) {
-    process.stdout.write('./lunardraw registry [--network preprod] [--port 6310] [--dir <listings>] [--feed <feed.json>] [--house <agents folder>]\n');
+    process.stdout.write('./lunardraw registry [--network preprod] [--port 6320] [--dir <listings>] [--feed <feed.json>] [--house <agents folder>]\n');
     return 0;
   }
   const log = (m: string) => process.stdout.write(`${new Date().toISOString()} ${m}\n`);
