@@ -11,7 +11,7 @@ import { encodeContractAddress } from '@midnight-ntwrk/compact-runtime';
 import { unshieldedToken } from '@midnight-ntwrk/midnight-js-protocol/ledger';
 import { MidnightBech32m } from '@midnight-ntwrk/wallet-sdk-address-format';
 import { quickPick, Starfall } from '@lunardraw/contract';
-import { buildStarfallFeed, DerivedSeeds, DrawOracle, every, isStaleDustProof, STARFALL_WEEKLY, StarfallKeeper, type StarfallView, StepTimes, writeFeed } from '@lunardraw/keeper';
+import { buildStarfallFeed, DerivedSeeds, DrawOracle, every, isStaleDustProof, PurchaseLog, STARFALL_WEEKLY, StarfallKeeper, type StarfallView, StepTimes, writeFeed } from '@lunardraw/keeper';
 import { declareFeesAtDustTime, type DustTimeWallet } from './dust-time.js';
 import { withFreshFees } from './fresh-fees.js';
 import { compilerInfo, localFingerprints, NETWORKS, type Session, walletAddress, walletBalances } from '@nightcast/deploy';
@@ -526,10 +526,13 @@ export const starfall = async (argv: string[]): Promise<number> => {
           // When each draw's steps happened, as seen from here (kept beside the feed across restarts).
           // (with the transaction ids of older draws, read back from the chain by `starfall backfill-tx`)
           const stepTimes = feedPath ? new StepTimes(`${feedPath}.steps.json`, 60, `${feedPath}.backfill.json`) : undefined;
+          // Purchases (draw, games, time; never who or which numbers), for the site's live feed.
+          const purchases = feedPath ? new PurchaseLog(`${feedPath}.purchases.json`) : undefined;
           const onView = feedPath
             ? (view: StarfallView, nowSecs: number) => {
                 stepTimes!.observe(view, nowSecs);
-                writeFeed(feedPath, buildStarfallFeed(view, { network, contract: record.contractAddress, nowSecs, steps: stepTimes!.lookup() }));
+                purchases!.observe(view, nowSecs);
+                writeFeed(feedPath, buildStarfallFeed(view, { network, contract: record.contractAddress, nowSecs, steps: stepTimes!.lookup(), purchases: purchases!.recent(20) }));
               }
             : undefined;
           // The numbers and the settlement batches are the big proofs (about
