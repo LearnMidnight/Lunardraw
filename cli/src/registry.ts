@@ -17,7 +17,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync,
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { type AgentStats, agentReport, type AgentWin, type DrawOutcome, emptyStats, LISTING_PREFIX, type ListingPayload, listingProblem, periodStart, type Via } from './listing.js';
+import { type AgentAnalytics, agentAnalytics, type AgentDraw, agentHistory, type AgentStats, agentReport, type AgentWin, type DrawOutcome, emptyStats, LISTING_PREFIX, type ListingPayload, listingProblem, periodStart, type Via } from './listing.js';
 import { loadAgentState } from './starfall-agent.js';
 
 export type DirectoryAgent = {
@@ -37,6 +37,11 @@ export type DirectoryAgent = {
   last_seen?: string;
   /** mn_addr_... (listed agents). */
   address?: string;
+  /** Its last draws, oldest first (up to 60). */
+  history: AgentDraw[];
+  analytics: AgentAnalytics;
+  /** Lunardraw's own agents only: the numbers and Moonball it picks most. Never shown for anyone else's agent. */
+  favourites?: { numbers: number[]; moonball?: number };
 };
 
 export type DirectoryEvent = { at: string; agent: string; text: string };
@@ -64,6 +69,7 @@ type Listed = {
   week?: AgentStats & { since: string };
   month?: AgentStats & { since: string };
   wins?: AgentWin[];
+  history?: AgentDraw[];
   joined: string;
   last_seen: string;
 };
@@ -163,6 +169,7 @@ export const createRegistry = (o: RegistryOptions) => {
       const style = /--style\s+(\w+)/.exec(env)?.[1] ?? 'mix';
       const r = agentReport(state, outcomes, now());
       const stats = r.stats;
+      const history = agentHistory(state, outcomes);
       const active = await isActive(`lunardraw-agent@${n}`);
       const seen = existsSync(statePath) ? statSync(statePath).mtimeMs : undefined;
       const name = n.toUpperCase();
@@ -176,6 +183,9 @@ export const createRegistry = (o: RegistryOptions) => {
         stats,
         week: strip(r.week),
         month: strip(r.month),
+        history: history.slice(-60).map(({ at: _at, ...x }) => x),
+        analytics: agentAnalytics(history, r.wins),
+        favourites: favouritesOf(state),
         joined: stats.first_played,
         last_seen: seen ? new Date(seen).toISOString() : undefined,
       });
@@ -207,6 +217,8 @@ export const createRegistry = (o: RegistryOptions) => {
         stats: l.stats,
         week: l.week?.since === weekStart ? strip(l.week) : emptyStats(),
         month: l.month?.since === monthStart ? strip(l.month) : emptyStats(),
+        history: l.history ?? [],
+        analytics: agentAnalytics(l.history ?? [], l.wins ?? []),
         joined: l.joined,
         last_seen: l.last_seen,
         address: l.address,
@@ -231,7 +243,7 @@ export const createRegistry = (o: RegistryOptions) => {
   /** Check and apply a signed report; returns a message, or throws with the reason it was refused. */
   const report = async (body: unknown): Promise<string> => {
     const b = body as { payload?: unknown; signature?: unknown };
-    if (typeof b?.payload !== 'string' || typeof b.signature !== 'string' || b.payload.length > 12_000) throw new Refused('expected { payload, signature }');
+    if (typeof b?.payload !== 'string' || typeof b.signature !== 'string' || b.payload.length > 14_000) throw new Refused('expected { payload, signature }');
     let p: ListingPayload;
     try {
       p = JSON.parse(b.payload) as ListingPayload;
@@ -263,13 +275,14 @@ export const createRegistry = (o: RegistryOptions) => {
       return typeof since === 'string' && Number.isFinite(Date.parse(since)) ? { ...cleanStats(x), since: new Date(since).toISOString() } : undefined;
     };
     const wins = Array.isArray(p.wins) ? p.wins.slice(0, 20).map(cleanWin).filter((w): w is AgentWin => w !== undefined) : [];
+    const history = Array.isArray(p.history) ? p.history.slice(-60).map(cleanDraw).filter((h): h is AgentDraw => h !== undefined).sort((a, b) => a.draw - b.draw) : [];
     const houseNames = existsSync(o.houseDir) ? readdirSync(o.houseDir).filter((f) => f.endsWith('.env')).map((f) => slug(f.slice(0, -4))) : [];
     const taken = Object.values(s.listed).find((l) => slug(l.name) === slug(p.name) && l.address !== address);
     if (taken || houseNames.includes(slug(p.name))) throw new Refused(`the name ${p.name} is taken: choose another`);
     const before = s.listed[address];
     if (!before && Object.keys(s.listed).length >= maxListed) throw new Refused('the directory is full for now');
     const iso = new Date(now()).toISOString();
-    s.listed[address] = { address, key: p.key, name: p.name, style: p.style, via: p.via, stats, week: period(p.week), month: period(p.month), wins, joined: before?.joined ?? iso, last_seen: iso };
+    s.listed[address] = { address, key: p.key, name: p.name, style: p.style, via: p.via, stats, week: period(p.week), month: period(p.month), wins, history, joined: before?.joined ?? iso, last_seen: iso };
     // what changed, for the activity panel
     if (!before) s.events.push({ at: iso, agent: p.name, text: 'joined the directory' });
     else {
@@ -289,6 +302,38 @@ export class Refused extends Error {}
 const strip = (x: AgentStats & { since?: string }): AgentStats => {
   const { since: _since, ...rest } = x;
   return rest;
+};
+
+const cleanDraw = (x: unknown): AgentDraw | undefined => {
+  const h = (x ?? {}) as Record<string, unknown>;
+  const int = (v: unknown, lo: number, hi: number) => (typeof v === 'number' && Number.isInteger(v) && v >= lo && v <= hi ? v : undefined);
+  const draw = int(h.draw, 1, 1e9);
+  const games = int(h.games, 1, 1e6);
+  if (!draw || !games) return undefined;
+  return {
+    draw,
+    games,
+    spent_star: int(h.spent_star, 0, 1e15) ?? 0,
+    winning_games: int(h.winning_games, 0, 1e6) ?? 0,
+    won_star: int(h.won_star, 0, 1e15) ?? 0,
+    ...(h.pending === true ? { pending: true } : {}),
+  };
+};
+
+/** A house agent's most-picked numbers and Moonball (each entry counts once per number it holds). */
+const favouritesOf = (state: { purchases: { entries: { numbers: number[]; moonball?: number }[] }[] }): DirectoryAgent['favourites'] => {
+  const n = new Map<number, number>();
+  const m = new Map<number, number>();
+  for (const p of state.purchases) {
+    for (const e of p.entries) {
+      for (const x of e.numbers) n.set(x, (n.get(x) ?? 0) + 1);
+      if (e.moonball) m.set(e.moonball, (m.get(e.moonball) ?? 0) + 1);
+    }
+  }
+  if (!n.size) return undefined;
+  const top = (map: Map<number, number>, k: number) => [...map].sort((a, b) => b[1] - a[1] || a[0] - b[0]).slice(0, k).map(([x]) => x);
+  const moonball = top(m, 1)[0];
+  return { numbers: top(n, 7).sort((a, b) => a - b), ...(moonball ? { moonball } : {}) };
 };
 
 const cleanWin = (x: unknown): AgentWin | undefined => {
@@ -362,7 +407,7 @@ export const serveRegistry = (registry: ReturnType<typeof createRegistry>, port:
         let size = 0;
         for await (const c of req) {
           size += (c as Buffer).length;
-          if (size > 16_384) return send(res, 413, '{"error":"too large"}');
+          if (size > 20_000) return send(res, 413, '{"error":"too large"}');
           chunks.push(c as Buffer);
         }
         let body: unknown;
