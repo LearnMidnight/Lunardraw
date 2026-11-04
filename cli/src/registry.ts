@@ -153,6 +153,26 @@ export const createRegistry = (o: RegistryOptions) => {
     }
   };
 
+  /** The draw on sale now (or the one after the newest in the feed), for "idle". */
+  const currentDraw = (outcomes: DrawOutcome[]): number => {
+    try {
+      const feed = JSON.parse(readFileSync(o.feedPath, 'utf8')) as { games?: { starfall?: { open?: { num?: number } } } };
+      const open = Number(feed.games?.starfall?.open?.num);
+      if (open > 0) return open;
+    } catch {
+      /* no feed: from the draws */
+    }
+    return outcomes.reduce((m, d) => Math.max(m, d.num), 0) + 1;
+  };
+
+  /**
+   * An agent that's running but hasn't bought in any of the last 3 draws is
+   * "idle", not "online": it may be stuck (waiting for DUST, out of tNIGHT) or
+   * sitting out by its own rules. An agent that hasn't played yet stays as it is.
+   */
+  const playing = (status: DirectoryAgent['status'], lastDraw: number | undefined, outcomes: DrawOutcome[]): DirectoryAgent['status'] =>
+    status === 'online' && lastDraw !== undefined && lastDraw > 0 && lastDraw < currentDraw(outcomes) - 3 ? 'idle' : status;
+
   const house = async (outcomes: DrawOutcome[]): Promise<{ agents: DirectoryAgent[]; events: DirectoryEvent[]; wins: DirectoryWin[] }> => {
     if (!existsSync(o.houseDir)) return { agents: [], events: [], wins: [] };
     const names = readdirSync(o.houseDir)
@@ -178,7 +198,7 @@ export const createRegistry = (o: RegistryOptions) => {
         name,
         via: 'lunardraw',
         house: true,
-        status: active ? 'online' : statusOf(seen, now()) === 'online' ? 'idle' : 'offline',
+        status: playing(active ? 'online' : statusOf(seen, now()) === 'online' ? 'idle' : 'offline', stats.last_draw, outcomes),
         style: STYLES[style] ?? style,
         stats,
         week: strip(r.week),
@@ -212,7 +232,7 @@ export const createRegistry = (o: RegistryOptions) => {
         name: l.name,
         via: l.via,
         house: false,
-        status: statusOf(Date.parse(l.last_seen), t),
+        status: playing(statusOf(Date.parse(l.last_seen), t), l.stats.last_draw, outcomes),
         style: l.style,
         stats: l.stats,
         week: l.week?.since === weekStart ? strip(l.week) : emptyStats(),
