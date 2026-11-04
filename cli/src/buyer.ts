@@ -83,6 +83,8 @@ export type RetryOptions = {
   /** How long one purchase may take, proof to landing (ms; buyGames' default, 5 minutes, if left out). */
   timeoutMs?: number;
   log?: (msg: string) => void;
+  /** Hand the wallet back the coins of a purchase the chain confirms didn't land (starfall.ts BuyOptions.onNotLanded). */
+  onNotLanded?: () => Promise<void>;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
 };
@@ -114,6 +116,7 @@ export const buyWithRetry = async (
         stopAt,
         ...(o.timeoutMs ? { timeoutMs: o.timeoutMs } : {}),
         onChain: onChainCheck(providers.publicDataProvider, contractAddress),
+        ...(o.onNotLanded ? { onNotLanded: o.onNotLanded } : {}),
       });
       return { bought: tickets.length, txs, attempts: attempt };
     } catch (err) {

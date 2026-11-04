@@ -9,7 +9,7 @@ import { isStaleDustProof, type StarfallView } from '@lunardraw/keeper';
 import { type Session, walletAddress, walletBalances } from '@nightcast/deploy';
 import { buyerProviders, buyWithRetry, proverArg } from '../buyer.js';
 import { publicDataFor, withSession } from '../common.js';
-import { BuyStopped, joinStarfall, readStarfallRecord, readStarfallView, starfallZkConfigPath } from '../starfall.js';
+import { BuyStopped, joinStarfall, pendingReverter, readStarfallRecord, readStarfallView, type RevertableWallet, starfallZkConfigPath } from '../starfall.js';
 import { type AgentState, describeResult, loadAgentState, type Result, saveAgentState, spentOnDraw, spentSince } from '../starfall-agent.js';
 import { describeEntry, parseUserAddress } from '../starfall-commands.js';
 import { openWallet } from '../wallet-lock.js';
@@ -200,7 +200,11 @@ export const withPlayer = async <T>(config: KitConfig, seed: string, fn: (p: Pla
             let message: string | undefined;
             let txs = 0;
             try {
-              ({ txs } = await buyWithRetry(joined, providers, record.contractAddress, tickets, new Uint8Array(mine), selling.salesClose, { log, timeoutMs: 8 * 60_000 }));
+              ({ txs } = await buyWithRetry(joined, providers, record.contractAddress, tickets, new Uint8Array(mine), selling.salesClose, {
+                log,
+                timeoutMs: 8 * 60_000,
+                onNotLanded: pendingReverter(wallet.wallet as unknown as RevertableWallet, log),
+              }));
             } catch (err) {
               if (!(err instanceof BuyStopped)) throw err;
               bought = err.bought;

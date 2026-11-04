@@ -237,7 +237,53 @@ export type BuyOptions = {
    * again). See {@link onChainCheck}.
    */
   onChain?: (games: readonly TicketPreimage[]) => Promise<boolean[]>;
+  /**
+   * Called when the chain confirms a purchase didn't go in (it failed or timed
+   * out), before giving up on it: hand the wallet its coins back. The wallet
+   * marks the DUST it spent on the fee as spent when it builds the
+   * transaction; if the transaction never lands and nothing reverts it, that
+   * DUST stays out of reach until the network's grace period (hours) has
+   * passed, and the wallet saves that view, so restarting doesn't help. See
+   * {@link pendingReverter}.
+   */
+  onNotLanded?: () => Promise<void>;
 };
+
+/** The wallet facade's part that {@link pendingReverter} needs. */
+export type RevertableWallet = {
+  state(): { subscribe(next: (s: { pending?: { all?: ReadonlyArray<{ tx: unknown }> } }) => void): { unsubscribe(): void } };
+  revert(tx: unknown): Promise<void>;
+};
+
+/**
+ * For {@link BuyOptions.onNotLanded}: revert every transaction the wallet
+ * still holds as pending (their coins, the DUST for fees above all, come back
+ * at once). Safe when nothing else of this wallet is in flight, as for one
+ * agent buying one transaction at a time.
+ */
+export const pendingReverter =
+  (facade: RevertableWallet, log?: (msg: string) => void) =>
+  async (): Promise<void> => {
+    const pending = await new Promise<ReadonlyArray<{ tx: unknown }>>((resolve) => {
+      let done = false;
+      const sub = facade.state().subscribe((s) => {
+        if (done) return;
+        done = true;
+        resolve(s.pending?.all ?? []);
+        queueMicrotask(() => sub.unsubscribe());
+      });
+    });
+    let reverted = 0;
+    for (const item of pending) {
+      try {
+        await facade.revert(item.tx);
+        reverted += 1;
+      } catch {
+        /* one that can't be reverted (already gone) is fine */
+      }
+    }
+    if (reverted) log?.(`gave the wallet back the coins of ${reverted} transaction(s) that didn't land, so its DUST can pay the next fee`);
+  };
 
 /** For {@link BuyOptions.onChain}: looks the games' ticket commitments up in the contract. */
 export const onChainCheck =
@@ -298,6 +344,7 @@ export const buyGames = async (
         // in that state risks more of the same, so stop here.
         throw new BuyStopped(i + part.length, games.length, `${reason}, but the chain shows that purchase did go in (the wallet lost track of it)`);
       }
+      await o.onNotLanded?.().catch(() => undefined);
       throw new BuyStopped(i, games.length, `${reason}; the chain confirms that purchase didn't go in`);
     } finally {
       clearTimeout(timer);
