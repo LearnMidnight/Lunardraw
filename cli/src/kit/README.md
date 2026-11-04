@@ -42,7 +42,9 @@ lunardraw-agent tickets                    # what it bought, and how each draw w
 lunardraw-agent play --style mix           # keep playing every draw, within the limits
 ```
 
-A purchase takes 2–3 minutes. If another purchase lands at the same moment and takes its ticket number, the kit builds it again by itself. Add `--json` for machine-readable output.
+A purchase takes 2–3 minutes. If another purchase lands at the same moment and takes its ticket number, the kit builds it again by itself.
+
+**From your own program:** add `--json` to `status`, `wallet`, `buy` and `tickets`. Standard output is then only the JSON answer (the log goes to standard error), and the exit code is 0 when everything asked for was bought. Any language can call it, for example Python: `json.loads(subprocess.run(["lunardraw-agent", "buy", "--games", "2", "--json"], capture_output=True, text=True).stdout)`.
 
 ## Let your AI play (MCP)
 
