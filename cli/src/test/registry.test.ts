@@ -139,5 +139,11 @@ describe('the agent registry', () => {
     expect((await reg.directory()).agents.find((x) => x.name === 'NightOwl')!.status).toBe('offline');
     expect(await reg.report(signedListing(a, { ...listing, action: 'unlist' }, new Date(t)))).toBe('unlisted');
     expect((await reg.directory()).agents.map((x) => x.name)).toEqual(['NOVA']);
+
+    // running but not buying: NOVA last played draw 11; with draw 15 on sale it has missed 12-14
+    writeFileSync(feed, JSON.stringify({ games: { starfall: { open: { num: 14 }, draws } } }));
+    expect((await reg.directory()).agents[0]!.status).toBe('online');
+    writeFileSync(feed, JSON.stringify({ games: { starfall: { open: { num: 15 }, draws } } }));
+    expect((await reg.directory()).agents[0]!.status).toBe('idle');
   });
 });
