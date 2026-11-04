@@ -110,8 +110,88 @@ export const agentWins = (state: AgentState, draws: DrawOutcome[]): AgentWin[] =
   return [...perDraw.values()].sort((a, b) => b.draw - a.draw);
 };
 
-/** What an agent reports: all-time totals, this week's and month's, and its recent wins. */
-export type AgentReport = { stats: AgentStats; week: AgentStats & { since: string }; month: AgentStats & { since: string }; wins: AgentWin[] };
+/** One draw an agent played: what it spent and, once the numbers are out, what it won. */
+export type AgentDraw = { draw: number; games: number; spent_star: number; winning_games: number; won_star: number; at?: string; pending?: boolean };
+
+/** The agent's draws, oldest first (void draws left out: they were refunded). */
+export const agentHistory = (state: AgentState, draws: DrawOutcome[]): AgentDraw[] => {
+  const byNum = new Map(draws.map((d) => [d.num, d]));
+  const rows = new Map<number, AgentDraw>();
+  for (const p of state.purchases) {
+    const num = Number(p.draw);
+    const d = byNum.get(num);
+    if (d?.status === 'void') continue;
+    const r = rows.get(num) ?? { draw: num, games: 0, spent_star: 0, winning_games: 0, won_star: 0, at: p.at };
+    r.games += p.games;
+    r.spent_star += Number(p.cost);
+    if (d?.numbers && d.moonball !== undefined && d.numbers.some((n) => n > 0)) {
+      for (const e of p.entries) {
+        Starfall.gamesByDivisionFor(e, d.numbers, d.moonball).forEach((g, i) => {
+          if (!g) return;
+          r.winning_games += Number(g);
+          r.won_star += Number(g) * (d.prizes_star?.[i] ?? 0);
+        });
+      }
+      if (!d.prizes_star) r.pending = true; // drawn, prizes not fixed yet
+    } else r.pending = true;
+    rows.set(num, r);
+  }
+  return [...rows.values()].sort((a, b) => a.draw - b.draw);
+};
+
+const choose = (n: number, k: number): number => {
+  if (k < 0 || k > n) return 0;
+  let r = 1;
+  for (let i = 1; i <= k; i++) r = (r * (n - k + i)) / i;
+  return r;
+};
+
+/**
+ * The chance one game wins any prize: Starfall's divisions are 7, 6 and 5
+ * numbers (with or without the Moonball), and 4, 3 or 2 numbers with it.
+ * 7 numbers from 1-35, a Moonball from 1-20.
+ */
+export const prizeChance = (pick = 7, pool = 35, moonballs = 20): number => {
+  const all = choose(pool, pick);
+  const match = (k: number) => (choose(pick, k) * choose(pool - pick, pick - k)) / all;
+  const mb = 1 / moonballs;
+  return match(7) + match(6) + match(5) + (match(4) + match(3) + match(2)) * mb;
+};
+
+/** The analytics shown on an agent's profile. */
+export type AgentAnalytics = {
+  /** Winning games the odds say it should have had by now. */
+  expected_winning_games: number;
+  /** Actual winning games ÷ expected (1 = exactly as the odds say); undefined with no settled games. */
+  luck?: number;
+  /** tNIGHT won ÷ tNIGHT spent, settled draws only (0.29 = 29%). */
+  return_ratio?: number;
+  /** Draws played since its last winning draw. */
+  dry_spell: number;
+  best_win?: AgentWin;
+};
+
+export const agentAnalytics = (history: AgentDraw[], wins: AgentWin[]): AgentAnalytics => {
+  const settled = history.filter((h) => !h.pending);
+  const games = settled.reduce((a, h) => a + h.games, 0);
+  const winning = settled.reduce((a, h) => a + h.winning_games, 0);
+  const spent = settled.reduce((a, h) => a + h.spent_star, 0);
+  const won = settled.reduce((a, h) => a + h.won_star, 0);
+  const expected = games * prizeChance();
+  let dry = 0;
+  for (let i = settled.length - 1; i >= 0 && settled[i]!.winning_games === 0; i--) dry++;
+  const best = [...wins].sort((a, b) => b.won_star - a.won_star || b.draw - a.draw)[0];
+  return {
+    expected_winning_games: Math.round(expected * 100) / 100,
+    ...(expected > 0 ? { luck: Math.round((winning / expected) * 100) / 100 } : {}),
+    ...(spent > 0 ? { return_ratio: Math.round((won / spent) * 1000) / 1000 } : {}),
+    dry_spell: dry,
+    ...(best && best.won_star > 0 ? { best_win: best } : {}),
+  };
+};
+
+/** What an agent reports: all-time totals, this week's and month's, its recent wins and its last draws. */
+export type AgentReport = { stats: AgentStats; week: AgentStats & { since: string }; month: AgentStats & { since: string }; wins: AgentWin[]; history: AgentDraw[] };
 
 export const agentReport = (state: AgentState, draws: DrawOutcome[], nowMs: number): AgentReport => {
   const week = periodStart('week', nowMs);
@@ -121,6 +201,7 @@ export const agentReport = (state: AgentState, draws: DrawOutcome[], nowMs: numb
     week: { ...agentStats(state, draws, week), since: week },
     month: { ...agentStats(state, draws, month), since: month },
     wins: agentWins(state, draws).slice(0, 20),
+    history: agentHistory(state, draws).slice(-60).map(({ at: _at, ...r }) => r),
   };
 };
 
@@ -145,6 +226,7 @@ export type ListingPayload = {
   week?: AgentStats & { since: string };
   month?: AgentStats & { since: string };
   wins?: AgentWin[];
+  history?: AgentDraw[];
   /** When it was signed (ISO); a report more than 10 minutes off is refused. */
   at: string;
 };
@@ -180,6 +262,7 @@ export const signedListing = (signer: Signer, p: Omit<ListingPayload, 'v' | 'key
     ...(p.week ? { week: p.week } : {}),
     ...(p.month ? { month: p.month } : {}),
     ...(p.wins ? { wins: p.wins } : {}),
+    ...(p.history ? { history: p.history } : {}),
     at: now.toISOString(),
   } satisfies ListingPayload);
   return { payload, signature: signer.sign(listingMessage(payload)) };

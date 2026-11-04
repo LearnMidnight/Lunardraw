@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { agentStats, agentWins, type DrawOutcome, periodStart, signedListing, walletSigner } from '../listing.js';
+import { agentAnalytics, agentHistory, agentStats, agentWins, type DrawOutcome, periodStart, prizeChance, signedListing, walletSigner } from '../listing.js';
 import { createRegistry, ledgerVerifier } from '../registry.js';
 import type { AgentState } from '../starfall-agent.js';
 
@@ -47,6 +47,24 @@ describe('an agent\'s totals', () => {
     expect(agentWins(state, draws)).toEqual([{ draw: 10, division: 5, games: 1, won_star: 50_000_000 }]);
   });
 
+  it('works out its draws, its luck against the odds, its return and its dry spell', () => {
+    // a Starfall game wins something about 1 time in 44
+    expect(prizeChance()).toBeCloseTo(0.022737, 5);
+    const history = agentHistory(state, draws);
+    expect(history).toEqual([
+      { draw: 10, games: 1, spent_star: 1_200_000, winning_games: 1, won_star: 50_000_000, at: '2026-11-01T01:05:00.000Z' },
+      { draw: 11, games: 2, spent_star: 2_400_000, winning_games: 0, won_star: 0, at: '2026-11-01T02:05:00.000Z' },
+    ]);
+    const a = agentAnalytics(history, agentWins(state, draws));
+    expect(a.expected_winning_games).toBe(0.07); // 3 games
+    expect(a.luck).toBe(14.66); // 1 win where 0.07 were expected
+    expect(a.return_ratio).toBe(13.889); // 50 tNIGHT back for 3.6
+    expect(a.dry_spell).toBe(1); // draw 11 won nothing
+    expect(a.best_win).toEqual({ draw: 10, division: 5, games: 1, won_star: 50_000_000 });
+    // nothing settled yet: no luck or return to show
+    expect(agentAnalytics([{ draw: 12, games: 4, spent_star: 4_800_000, winning_games: 0, won_star: 0, pending: true }], [])).toEqual({ expected_winning_games: 0, dry_spell: 0 });
+  });
+
   it('counts weeks from Monday and months from the 1st, Brisbane time', () => {
     const wed = Date.parse('2026-11-04T02:00:00.000Z'); // Wednesday 4 Nov, 12:00 in Brisbane
     expect(periodStart('week', wed)).toBe('2026-11-01T14:00:00.000Z'); // Monday 2 Nov, 00:00
@@ -80,6 +98,9 @@ describe('the agent registry', () => {
     expect(d.agents[0]!.stats).toMatchObject({ draws: 2, games: 3, won_star: 50_000_000 });
     expect(d.events[0]).toMatchObject({ agent: 'NOVA', text: 'bought 1 game in draw 12' });
     expect(d.wins).toEqual([{ agent: 'NOVA', draw: 10, division: 5, games: 1, won_star: 50_000_000 }]);
+    expect(d.agents[0]!.analytics).toMatchObject({ luck: 14.66, dry_spell: 1 });
+    expect(d.agents[0]!.history.map((h) => h.draw)).toEqual([10, 11]);
+    expect(d.agents[0]!.favourites).toEqual({ numbers: [1, 2, 3, 4, 5, 6, 7], moonball: 1 });
 
     // a friend's agent lists itself, signed by its wallet
     const a = await walletSigner(SEED_A, 'preprod');
@@ -90,6 +111,7 @@ describe('the agent registry', () => {
     d = await reg.directory();
     expect(d.agents.map((x) => x.name)).toEqual(['NOVA', 'NightOwl']);
     expect(d.agents[1]).toMatchObject({ via: 'openclaw', house: false, status: 'online', address: a.address, style: 'Plays every night' });
+    expect(d.agents[1]!.favourites).toBeUndefined(); // never a player's numbers
     expect(d.events[0]).toMatchObject({ agent: 'NightOwl', text: 'joined the directory' });
 
     // someone else can't sign for that wallet, or take its name, or a house agent's
