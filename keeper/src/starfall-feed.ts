@@ -8,6 +8,7 @@
 import { Starfall } from '@lunardraw/contract';
 import type { FeedDraw } from './feed.js';
 import type { StarfallDrawView, StarfallView } from './starfall.js';
+import type { Purchase } from './purchase-log.js';
 import type { StepRecord } from './step-times.js';
 
 const { DrawStatus } = Starfall;
@@ -50,6 +51,8 @@ export type StarfallFeed = {
       allocation_bp: number[];
       carry_star: number;
       open?: { num: number; sales_close: string; reveal_deadline?: string; seed_commitment: string; games_sold: number; tickets: number };
+      /** Recent purchases, newest first, as the keeper saw them (PurchaseLog): draw, games and tickets only. */
+      purchases?: Purchase[];
       draws: StarfallFeedDraw[];
     };
   };
@@ -81,7 +84,7 @@ export const starfallFeedStatus = (d: StarfallDrawView, nowSecs: number): Starfa
 /** Build the feed from a view of the Starfall contract at chain time `nowSecs`. */
 export const buildStarfallFeed = (
   view: StarfallView,
-  opts: { network: string; contract: string; nowSecs: number; generatedAt?: Date; steps?: (id: bigint) => StepRecord | undefined },
+  opts: { network: string; contract: string; nowSecs: number; generatedAt?: Date; steps?: (id: bigint) => StepRecord | undefined; purchases?: Purchase[] },
 ): StarfallFeed => {
   const batch = Starfall.pureCircuits.batchSize();
   const draws = [...view.draws].sort((a, b) => (a.id > b.id ? -1 : a.id < b.id ? 1 : 0));
@@ -157,6 +160,7 @@ export const buildStarfallFeed = (
               tickets: Number(selling.tickets),
             }
           : undefined,
+        ...(opts.purchases ? { purchases: opts.purchases } : {}),
         draws: draws.filter((d) => d !== selling).map(toFeed),
       },
     },
