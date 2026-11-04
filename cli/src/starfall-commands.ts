@@ -71,6 +71,8 @@ import {
   verifyStarfall,
   writeStarfallRecord,
   onChainCheck,
+  pendingReverter,
+  type RevertableWallet,
 } from './starfall.js';
 import { waitForTip, watchSync } from './sync-watch.js';
 import { backfillJson, contractActions, heightOfTx, indexerGql, indexerSubscribe, named, namingLike, txIdsByDraw } from './tx-backfill.js';
@@ -649,6 +651,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
             // a collision with another purchase (it took the same ticket number) is built again
             await buyWithRetry(joined, providers, record.contractAddress, tickets, mine, selling.salesClose, {
               log: (msg) => session.logger.info(msg),
+              onNotLanded: pendingReverter(wallet.wallet as unknown as RevertableWallet, (msg) => session.logger.info(msg)),
             });
           } catch (err) {
             if (!(err instanceof BuyStopped)) throw err;
@@ -790,6 +793,8 @@ export const starfall = async (argv: string[]): Promise<number> => {
                       stopAt: Number(plan.salesClose) - 60,
                       // a purchase that timed out but did land counts (and isn't bought again)
                       onChain: onChainCheck(providers.publicDataProvider, record.contractAddress),
+                      // and one that didn't gives the wallet its DUST back at once
+                      onNotLanded: pendingReverter(wallet.wallet as unknown as RevertableWallet, log),
                     });
                   } catch (err) {
                     if (!(err instanceof BuyStopped)) throw err;

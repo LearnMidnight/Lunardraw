@@ -12,6 +12,7 @@ import {
   BuyStopped,
   MidnightStarfallChain,
   onChainCheck,
+  pendingReverter,
   STARFALL_PRIVATE_STATE_ID,
   type StarfallCalls,
   type StarfallDeploymentRecord,
@@ -262,6 +263,14 @@ describe('buyGames', () => {
     const lost = await buyGames(hangs, store, 'addr', games, OPERATOR, { timeoutMs: 50, onChain: async (p) => p.map(() => false) }).catch((e: unknown) => e);
     expect((lost as BuyStopped).bought).toBe(18);
     expect((lost as BuyStopped).message).toMatch(/didn't go in/);
+    // one that didn't land gives the wallet its coins back; one that did, doesn't
+    let reverts = 0;
+    n = 0;
+    await buyGames(hangs, store, 'addr', games, OPERATOR, { timeoutMs: 50, onChain: async (p) => p.map(() => false), onNotLanded: async () => void reverts++ }).catch(() => undefined);
+    expect(reverts).toBe(1);
+    n = 0;
+    await buyGames(hangs, store, 'addr', games, OPERATOR, { timeoutMs: 50, onChain: async (p) => p.map(() => true), onNotLanded: async () => void reverts++ }).catch(() => undefined);
+    expect(reverts).toBe(1);
     n = 0;
     const unknown = await buyGames(hangs, store, 'addr', games, OPERATOR, {
       timeoutMs: 50,
@@ -271,6 +280,29 @@ describe('buyGames', () => {
     }).catch((e: unknown) => e);
     expect((unknown as BuyStopped).bought).toBe(18);
     expect((unknown as BuyStopped).message).toMatch(/couldn't be checked/);
+  });
+
+  it("reverts the wallet's pending transactions, so the DUST a lost purchase held comes back", async () => {
+    const reverted: unknown[] = [];
+    const facade = {
+      state: () => ({
+        subscribe: (next: (s: { pending: { all: { tx: unknown }[] } }) => void) => {
+          next({ pending: { all: [{ tx: 'tx-a' }, { tx: 'tx-b' }] } });
+          return { unsubscribe: () => undefined };
+        },
+      }),
+      revert: async (tx: unknown) => {
+        if (tx === 'tx-b') throw new Error('already gone');
+        reverted.push(tx);
+      },
+    };
+    const said: string[] = [];
+    await pendingReverter(facade, (m) => said.push(m))();
+    expect(reverted).toEqual(['tx-a']);
+    expect(said[0]).toMatch(/coins of 1 transaction/);
+    // nothing pending: nothing to say
+    await pendingReverter({ ...facade, state: () => ({ subscribe: (next: (s: object) => void) => (next({}), { unsubscribe: () => undefined }) }) }, (m) => said.push(m))();
+    expect(said).toHaveLength(1);
   });
 
   it('finds bought games on the chain by their ticket commitments', async () => {
