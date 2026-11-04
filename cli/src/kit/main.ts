@@ -76,6 +76,8 @@ export const kit = async (argv: string[]): Promise<number> => {
     say(KIT_USAGE);
     return command ? 0 : 1;
   }
+  // With --json, stdout carries only the JSON answer (for programs calling the kit); the log goes to stderr.
+  if (values.json) process.env.NIGHTCAST_LOG_FD = '2';
   const json = (o: unknown) => say(JSON.stringify(o, (_k, v) => (typeof v === 'bigint' ? v.toString() : v), 2));
 
   switch (command) {

@@ -25,7 +25,7 @@ export type Tool = {
   run(args: Record<string, unknown>, progress: (message: string) => void): Promise<ToolText>;
 };
 
-export const SERVER_INFO = { name: 'lunardraw', title: 'Lunardraw', version: '0.1.1' };
+export const SERVER_INFO = { name: 'lunardraw', title: 'Lunardraw', version: '0.1.2' };
 const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 
 export const INSTRUCTIONS =
