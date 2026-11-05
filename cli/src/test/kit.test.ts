@@ -299,9 +299,13 @@ describe('the guided setup', () => {
     expect(claudeDesktopConfig('win32', { APPDATA: 'C:\\Users\\ann\\AppData\\Roaming' }, 'C:\\Users\\ann')).toMatch(/Roaming.Claude.claude_desktop_config\.json$/);
     // the Microsoft Store install keeps its settings in its own package folder
     const { claudeDesktopConfigs } = await import('../kit/setup.js');
-    const found = claudeDesktopConfigs('win32', { APPDATA: 'C:\\a\\Roaming', LOCALAPPDATA: 'C:\\a\\Local' }, 'C:\\a', () => ['Microsoft.Photos_8wekyb', 'Claude_pzs8sxrjxfjjc']);
-    expect(found).toHaveLength(2);
-    expect(found[1]).toMatch(/Claude_pzs8sxrjxfjjc.LocalCache.Roaming.Claude.claude_desktop_config\.json$/);
+    const listing = (dir: string) => (/Claude-Data$/.test(dir) ? ['claude_pzs8sxrjxfjjc'] : /Packages$/.test(dir) ? ['Microsoft.Photos_8wekyb', 'Claude_pzs8sxrjxfjjc'] : []);
+    const found = claudeDesktopConfigs('win32', { APPDATA: 'C:\\a\\Roaming', LOCALAPPDATA: 'C:\\a\\Local' }, 'C:\\a', listing);
+    expect(found).toHaveLength(3);
+    // where the Store install keeps them now comes first
+    expect(found[0]).toMatch(/Claude-Data.claude_pzs8sxrjxfjjc.claude_desktop_config\.json$/);
+    expect(found[1]).toMatch(/Roaming.Claude.claude_desktop_config\.json$/);
+    expect(found[2]).toMatch(/Claude_pzs8sxrjxfjjc.LocalCache.Roaming.Claude.claude_desktop_config\.json$/);
     expect(claudeDesktopConfigs('darwin', {}, '/Users/ann', () => ['Claude'])).toHaveLength(1);
     const entry = mcpEntry('/usr/bin/node', '/opt/kit/bin/lunardraw-agent.js', {});
     expect(entry).toEqual({ command: '/usr/bin/node', args: ['/opt/kit/bin/lunardraw-agent.js', 'mcp'] });

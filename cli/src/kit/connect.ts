@@ -48,7 +48,9 @@ export const findApps = (o: { home?: string; hasCommand?: (cmd: string) => boole
   const exists = o.exists ?? existsSync;
   const has = o.hasCommand ?? onPath;
   const out: FoundApp[] = [];
-  const desktop = claudeDesktopConfigs(process.platform, process.env, home).find((f) => exists(dirname(f)));
+  // the file Claude reads is the one that's there; failing that, the first folder that is
+  const where = claudeDesktopConfigs(process.platform, process.env, home);
+  const desktop = where.find((f) => exists(f)) ?? where.find((f) => exists(dirname(f)));
   if (desktop) out.push({ id: 'claude-desktop', name: 'Claude (desktop app)', file: desktop });
   if (has('claude')) out.push({ id: 'claude-code', name: 'Claude Code' });
   if (exists(join(home, '.gemini')) || has('gemini')) out.push({ id: 'gemini-cli', name: 'Gemini CLI', file: geminiSettings(home) });

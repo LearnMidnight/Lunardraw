@@ -63,10 +63,10 @@ export const claudeDesktopConfig = (platform: NodeJS.Platform = process.platform
       : join(env.XDG_CONFIG_HOME ?? join(home, '.config'), 'Claude', 'claude_desktop_config.json');
 
 /**
- * Every place Claude Desktop may keep its settings: the usual one above and,
- * on Windows, the Microsoft Store install's own folder
- * (%LOCALAPPDATA%\\Packages\\<Claude package>\\LocalCache\\Roaming\\Claude), which
- * the usual check misses.
+ * Every place Claude Desktop may keep its settings, likeliest first: on
+ * Windows the Microsoft Store install's %LOCALAPPDATA%\\Claude-Data\\<package id>
+ * (where it keeps them now), the usual %APPDATA%\\Claude, then the Store
+ * package's own LocalCache folder (older versions).
  */
 export const claudeDesktopConfigs = (
   platform: NodeJS.Platform = process.platform,
@@ -80,14 +80,21 @@ export const claudeDesktopConfigs = (
     }
   },
 ): string[] => {
-  const out = [claudeDesktopConfig(platform, env, home)];
+  const out: string[] = [];
   if (platform === 'win32') {
-    const packages = join(env.LOCALAPPDATA ?? join(home, 'AppData', 'Local'), 'Packages');
+    const local = env.LOCALAPPDATA ?? join(home, 'AppData', 'Local');
+    // the Store install's current home: %LOCALAPPDATA%\Claude-Data\<package id>\ (seen 5 Nov 2026, app 4.16336)
+    const data = join(local, 'Claude-Data');
+    for (const name of list(data).filter((n) => /claude/i.test(n))) out.push(join(data, name, 'claude_desktop_config.json'));
+    out.push(claudeDesktopConfig(platform, env, home));
+    // and its older one, inside the package
+    const packages = join(local, 'Packages');
     for (const name of list(packages).filter((n) => /claude/i.test(n))) {
       out.push(join(packages, name, 'LocalCache', 'Roaming', 'Claude', 'claude_desktop_config.json'));
     }
+    return out;
   }
-  return out;
+  return [claudeDesktopConfig(platform, env, home)];
 };
 
 export type McpEntry = { command: string; args: string[]; env?: Record<string, string> };
