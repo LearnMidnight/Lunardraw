@@ -14,7 +14,7 @@ import { DEFAULT_CONFIG, ensureWallet, hasBlockfrost, type KitConfig, kitHome, k
 
 const BLOCKFROST_SIGNUP = 'https://blockfrost.io/';
 const BLOCKFROST_INDEXER: Record<string, string> = { preprod: 'https://midnight-preprod.blockfrost.io/api/v0' };
-const FAUCET: Record<string, string> = {
+export const FAUCET: Record<string, string> = {
   preprod: 'https://midnight-tmnight-preprod.nethermind.dev/',
   preview: 'https://midnight-tmnight-preview.nethermind.dev/',
 };

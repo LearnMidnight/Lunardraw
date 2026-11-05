@@ -43,6 +43,15 @@ export type FoundApp = {
   name: string;
   /** The settings file, for the apps set up by file. */
   file?: string;
+  /** Claude only: the Lunardraw extension is installed there already (so nothing to add). */
+  extension?: string;
+};
+
+/** The Lunardraw Claude extension's folder, if Claude has it installed (next to its settings file). */
+export const claudeExtension = (configFile: string, list: (dir: string) => string[] = safeList): string | undefined => {
+  const dir = join(dirname(configFile), 'Claude Extensions');
+  const name = list(dir).find((n) => /lunardraw/i.test(n));
+  return name ? join(dir, name) : undefined;
 };
 
 export type ConnectResult = FoundApp & { ok: boolean; note: string };
@@ -102,7 +111,10 @@ export const findApps = (
   // the file Claude reads is the one that's there; failing that, the first folder that is
   const where = claudeDesktopConfigs(process.platform, env, home);
   const desktop = where.find((f) => exists(f)) ?? where.find((f) => exists(dirname(f)));
-  if (desktop) out.push({ id: 'claude-desktop', name: 'Claude (desktop app)', file: desktop });
+  if (desktop) {
+    const extension = claudeExtension(desktop, list);
+    out.push({ id: 'claude-desktop', name: 'Claude (desktop app)', file: desktop, ...(extension ? { extension } : {}) });
+  }
   if (has('claude')) out.push({ id: 'claude-code', name: 'Claude Code' });
   const codex = codexConfig(home, env);
   if (exists(dirname(codex)) || has('codex') || chatgptInstalled(home, exists, env, list)) {
@@ -233,6 +245,7 @@ const addToFile = (file: string, update: (before: string | undefined) => string)
 export const isConnected = (app: FoundApp): boolean => {
   try {
     if (app.id === 'claude-code') return run('claude', ['mcp', 'get', 'lunardraw']).ok;
+    if (app.extension) return true;
     if (app.id === 'openclaw') {
       const r = run('openclaw', ['mcp', 'status']);
       return r.ok && /\blunardraw\b/.test(r.out);
@@ -266,6 +279,7 @@ export const connectApps = (apps: FoundApp[], entry: McpEntry): ConnectResult[] 
   apps.map((app) => {
     try {
       const done = (note: string): ConnectResult => ({ ...app, ok: true, note: `added (${note}). ${RELOAD[app.id][0].toUpperCase()}${RELOAD[app.id].slice(1)}` });
+      if (app.extension) return { ...app, ok: true, note: 'it has the Lunardraw extension already: nothing to add' };
       switch (app.id) {
         case 'claude-desktop':
         case 'cursor':

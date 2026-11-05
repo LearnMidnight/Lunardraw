@@ -412,6 +412,26 @@ describe('the guided setup', () => {
     expect(SKILL).toContain('lunardraw-agent buy --games 2 --json');
   });
 
+  it('leaves Claude alone when it has the Lunardraw extension', async () => {
+    const { claudeExtension, connectApps, findApps, isConnected } = await import('../kit/connect.js');
+    const home = mkdtempSync(join(tmpdir(), 'connect-ext-'));
+    const xdg = process.env.XDG_CONFIG_HOME;
+    delete process.env.XDG_CONFIG_HOME;
+    try {
+      const dir = process.platform === 'darwin' ? join(home, 'Library', 'Application Support', 'Claude') : join(home, '.config', 'Claude');
+      mkdirSync(join(dir, 'Claude Extensions', 'local.mcpb.learnmidnight.lunardraw'), { recursive: true });
+      writeFileSync(join(dir, 'claude_desktop_config.json'), '{"mcpServers":{}}');
+      expect(claudeExtension(join(dir, 'claude_desktop_config.json'))).toMatch(/lunardraw$/);
+      const [claude] = findApps({ home, hasCommand: () => false });
+      expect(claude.extension).toBeDefined();
+      expect(isConnected(claude)).toBe(true);
+      expect(connectApps([claude], { command: 'node', args: ['x', 'mcp'] })[0].note).toMatch(/extension already/);
+      expect(readFileSync(join(dir, 'claude_desktop_config.json'), 'utf8')).toBe('{"mcpServers":{}}');
+    } finally {
+      if (xdg !== undefined) process.env.XDG_CONFIG_HOME = xdg;
+    }
+  });
+
   it('runs an MCP server, or from an unwritable folder, in its own home', async () => {
     const { workingFolder } = await import('../kit/cwd.js');
     expect(workingFolder('mcp', 'C:\\Windows\\System32', '/h', () => false)).toBe('/h');

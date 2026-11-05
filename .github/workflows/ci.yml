@@ -480,3 +480,21 @@ jobs:
       # As a player would (npm install -g), on a machine with no C compiler.
       - name: Install it globally, with no compiler, and run it
         run: bash scripts/smoke-agent.sh "${{ steps.pack.outputs.tgz }}"
+
+      # The same kit as a Claude desktop extension (one file, no Node or terminal needed).
+      - name: Build the Claude extension
+        id: mcpb
+        run: |
+          node scripts/pack-mcpb.mjs "$RUNNER_TEMP/agent-stage" "$RUNNER_TEMP/agent-out" | tee mcpb.log
+          echo "file=$(tail -1 mcpb.log)" >> "$GITHUB_OUTPUT"
+
+      - name: Open it the way Claude would
+        run: bash scripts/smoke-mcpb.sh "${{ steps.mcpb.outputs.file }}"
+
+      # Downloadable from the run's page, to try a change before it's released.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lunardraw-claude-extension
+          path: ${{ steps.mcpb.outputs.file }}
+          retention-days: 7
+          compression-level: 0

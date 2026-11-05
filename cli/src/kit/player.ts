@@ -152,7 +152,10 @@ export const requireLocalProvingKey = (dir = starfallZkConfigPath()): void => {
  * first sync takes hours on Preprod) and run `fn` with it. Buying checks the
  * owner's limits first and records each purchase in state.json.
  */
-export const withPlayer = async <T>(config: KitConfig, seed: string, fn: (p: Player) => Promise<T>, home?: string): Promise<T> => {
+/** What the opening wallet says on the way: its object (to watch the sync), waiting for tNIGHT, waiting for DUST. */
+export type OpenHooks = Pick<NonNullable<Parameters<typeof openWallet>[1]>, 'onWallet' | 'onNoFunds' | 'onWaitingForDust'>;
+
+export const withPlayer = async <T>(config: KitConfig, seed: string, fn: (p: Player) => Promise<T>, home?: string, hooks: OpenHooks = {}): Promise<T> => {
   const record = readStarfallRecord(config.network);
   const statePath = kitPaths(home, config.network).state;
   const port = localPort(config.prover);
@@ -161,7 +164,7 @@ export const withPlayer = async <T>(config: KitConfig, seed: string, fn: (p: Pla
   return withSession(
     config.network,
     async (session) => {
-      const wallet = await openWallet(session, { seed });
+      const wallet = await openWallet(session, { seed, ...hooks });
       // The keeper's fee fixes, for the kit too: declare each fee at the time
       // of the wallet's DUST view (dust-time.ts), wait for the wallet to reach
       // the tip before paying it, and pay again from the same proof if the
