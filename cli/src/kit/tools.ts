@@ -61,6 +61,14 @@ export const mcpTools = (): Tool[] => {
     setInterval(() => void listingTick(), 30 * 60_000).unref?.();
   }
 
+  // A purchase takes 2-3 minutes, but many AI apps give up on a tool call after
+  // about a minute (Claude reaching a computer's tools: 60 s, seen 5 Nov 2026).
+  // So the buy tool answers within ANSWER_MS and, if the purchase isn't done
+  // by then, carries on in the background; my_tickets says how it's going.
+  const ANSWER_MS = Number(process.env.LUNARDRAW_AGENT_ANSWER_MS ?? 45_000);
+  type Purchase = { started: string; games: number; state: 'buying' | 'done' | 'failed'; outcome?: unknown; error?: string };
+  let purchase: Purchase | undefined;
+
   // keep the client informed during long calls
   const ticking = async <T>(progress: (m: string) => void, what: string, work: Promise<T>): Promise<T> => {
     const t = setInterval(() => progress(`${what}…`), 15_000);
@@ -121,28 +129,68 @@ export const mcpTools = (): Tool[] => {
         "Buy Starfall tickets for the draw on sale, paid from this agent's own wallet (tNIGHT test tokens, no real value). " +
         'Call it when the user asks you to buy or play: buying for them is what it is for. Give games or package for QuickPick, ' +
         'or numbers (with moonball, system or pick) for a chosen entry; sweep plays every Moonball. Refused if it would pass the ' +
-        "owner's spending limits. Takes 2-3 minutes (longer if the wallet isn't open yet).",
+        "owner's spending limits. A purchase takes 2-3 minutes: if it isn't done within about 45 seconds this answers \"buying\" " +
+        "and it finishes by itself; then check lunardraw_my_tickets instead of buying again.",
       inputSchema: BUY_SCHEMA,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
       run: async (args, progress) => {
         const entries = buyEntries(buyArgs(args));
-        const p = await ticking(progress, 'opening the wallet', openPlayer(progress));
-        const outcome = await ticking(progress, 'buying', p.buy(entries, progress));
-        if (outcome.bought) void listingTick();
-        return { text: JSON.stringify(outcome, null, 2), isError: outcome.bought < outcome.of };
+        if (purchase?.state === 'buying') {
+          return {
+            text: JSON.stringify({ status: 'a purchase is already on its way', started: purchase.started, games: purchase.games, next: "Don't buy again yet: call lunardraw_my_tickets in a minute or two to see it land." }, null, 2),
+          };
+        }
+        const games = entries.reduce((n, e) => n + Starfall.gamesOf(e), 0);
+        const mine: Purchase = { started: new Date().toISOString(), games, state: 'buying' };
+        purchase = mine;
+        let answered = false;
+        const tell = (m: string) => {
+          if (!answered) progress(m);
+        };
+        const work = (async () => {
+          const p = await ticking(tell, 'opening the wallet', openPlayer(tell));
+          return ticking(tell, 'buying', p.buy(entries, tell));
+        })();
+        work.then(
+          (outcome) => {
+            Object.assign(mine, { state: outcome.bought ? 'done' : 'failed', outcome });
+            if (outcome.bought) void listingTick();
+          },
+          (err: unknown) => Object.assign(mine, { state: 'failed', error: err instanceof Error ? err.message : String(err) }),
+        );
+        const late = Symbol('late');
+        const first = await Promise.race([work, new Promise<typeof late>((r) => setTimeout(() => r(late), ANSWER_MS).unref?.())]);
+        answered = true;
+        if (first === late) {
+          return {
+            text: JSON.stringify(
+              {
+                status: 'buying',
+                games,
+                note: "The purchase is on its way and finishes by itself (2-3 minutes in all). Don't buy again: call lunardraw_my_tickets in about 3 minutes to see the numbers.",
+              },
+              null,
+              2,
+            ),
+          };
+        }
+        return { text: JSON.stringify(first, null, 2), isError: first.bought < first.of };
       },
     },
     {
       name: 'lunardraw_my_tickets',
       title: "The agent's tickets",
-      description: 'Every Starfall ticket this agent bought, with each draw\'s result and prize once it\'s out, and what it spent in the last 24 hours. Use it for "did I win?".',
+      description: 'Every Starfall ticket this agent bought, with each draw\'s result and prize once it\'s out, what it spent in the last 24 hours, and a purchase still on its way. Use it for "did I win?" and to check a purchase landed.',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       annotations: { readOnlyHint: true, openWorldHint: true },
       run: async () => {
         ready();
         const state = loadAgentState(kitPaths(kitHome(), config.network).state);
         const view = state.purchases.length ? (await readOverview(config)).view : undefined;
-        return { text: JSON.stringify(ticketsReport(state, view, Date.now()), null, 2) };
+        const report = ticketsReport(state, view, Date.now());
+        // a purchase still on its way (or how the last one ended), so nobody buys twice
+        const latest = purchase && { purchase: { state: purchase.state, started: purchase.started, games: purchase.games, ...(purchase.error ? { error: purchase.error } : {}), ...(purchase.state === 'buying' ? { note: 'still on its way: check again in a minute' } : {}) } };
+        return { text: JSON.stringify({ ...latest, ...report }, null, 2) };
       },
     },
   ];
