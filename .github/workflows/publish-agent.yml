@@ -11,6 +11,11 @@ name: Publish the agent kit to npm
 # release, which goes live when an owner approves it with 2FA. The very first
 # release can't do that (the package must exist first), so it publishes with
 # the NPM_TOKEN secret, a granular token for @lunardraw deleted straight after.
+#
+# It also builds the same kit as a Claude desktop extension (lunardraw.mcpb)
+# and, unless it's a dry run, attaches it to a GitHub release, agent-v<version>:
+# https://github.com/LearnMidnight/Lunardraw/releases/latest/download/lunardraw.mcpb
+# is what lunardraw.io's download button points at.
 on:
   workflow_dispatch:
     inputs:
@@ -98,6 +103,22 @@ jobs:
       - name: Install it globally, with no compiler, and run it
         run: bash scripts/smoke-agent.sh "${{ steps.pack.outputs.tgz }}"
 
+      - name: Build the Claude extension
+        id: mcpb
+        run: |
+          node scripts/pack-mcpb.mjs "$RUNNER_TEMP/agent-stage" "$RUNNER_TEMP/agent-out" | tee mcpb.log
+          echo "file=$(tail -1 mcpb.log)" >> "$GITHUB_OUTPUT"
+
+      - name: Open it the way Claude would
+        run: bash scripts/smoke-mcpb.sh "${{ steps.mcpb.outputs.file }}"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lunardraw-claude-extension
+          path: ${{ steps.mcpb.outputs.file }}
+          retention-days: 30
+          compression-level: 0
+
       - name: Version not on npm yet
         run: |
           version=$(node -p "require('./cli/package.json').version")
@@ -127,3 +148,30 @@ jobs:
               echo "::notice title=Staged::Approve on npmjs.com → Staged Packages, or: npm stage approve <id>"
             fi
           fi
+
+  # The Claude extension, on a GitHub release (a job of its own, so only this
+  # step can write to the repository, after everything above has passed).
+  release-extension:
+    needs: publish
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: lunardraw-claude-extension
+          path: ext
+
+      - name: Release it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          file=$(ls ext/lunardraw-*.mcpb)
+          version=$(basename "$file" .mcpb | sed 's/^lunardraw-//')
+          cp "$file" ext/lunardraw.mcpb
+          gh release create "agent-v$version" ext/lunardraw.mcpb "$file" \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest \
+            --title "Lunardraw agent kit $version" \
+            --notes "The Lunardraw agent kit $version as a Claude desktop extension: download **lunardraw.mcpb**, open it, and Claude installs it (no Node.js or terminal needed). Then add a free Blockfrost key (Midnight Preprod) in the extension's settings and ask Claude: \"Set me up for Starfall.\" The same kit is on npm as @lunardraw/agent@$version. Test tokens only. https://lunardraw.io/play-with-ai/"
+          echo "::notice title=Claude extension::https://github.com/$GITHUB_REPOSITORY/releases/tag/agent-v$version"

@@ -9,6 +9,10 @@ Let an AI agent play **Starfall**, [Lunardraw](https://lunardraw.io)'s lottery o
 - **No proof server needed.** Ticket purchases are proved by Lunardraw's hosted prover (it sees the ticket being bought, never the draw), and the wallet proves its own fees on your machine.
 - **Spending limits** (25 tNIGHT a draw and 100 a day by default) are set by the owner in a config file. An AI using the MCP server can read them but can't change them.
 
+## The easiest way: the Claude extension
+
+Using the Claude desktop app? Download **[lunardraw.mcpb](https://github.com/LearnMidnight/Lunardraw/releases/latest/download/lunardraw.mcpb)** and open it: Claude installs it, with no Node.js or terminal needed. Paste a free Blockfrost key (blockfrost.io, a **Midnight Preprod** project) into its settings, then ask Claude *"Set me up for Starfall"*: it shows your wallet's address, the faucet for free tNIGHT, and how far the first sync has got. It's the same kit as below and shares its folder (`~/.lunardraw-agent`), so use one or the other in Claude, not both.
+
 ## Set up (about 10 minutes, then a long first sync)
 
 You need [Node.js](https://nodejs.org) 22 or later. Then, in a terminal:

@@ -25,7 +25,7 @@ export const TOOL_DEFS: ToolDef[] = [
   {
     name: 'lunardraw_wallet',
     title: "The agent's wallet",
-    description: "This agent's Starfall wallet: its address and its tNIGHT and DUST (DUST pays the fees). If the wallet is still opening (a few minutes the first time) it says so, with the address: ask again in a minute.",
+    description: "This agent's Starfall wallet: its address and its tNIGHT and DUST (DUST pays the fees). While it isn't ready yet it says why and what the owner should do: a new wallet's sync progress (hours, the first time), or the faucet to get free tNIGHT from. Use it to help someone get started.",
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, openWorldHint: true },
   },

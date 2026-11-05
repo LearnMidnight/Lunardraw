@@ -9,7 +9,9 @@ import { ensureWallet, hasBlockfrost, kitHome, kitPaths, loadConfig, useHome } f
 import { buyArgs, type Tool } from './mcp.js';
 import { toolDef } from './tool-defs.js';
 import { refreshListing } from './directory.js';
-import { type Player, readOverview, ticketsReport, withPlayer } from './player.js';
+import { walletAddressOf } from '@nightcast/deploy';
+import { type OpenHooks, type Player, readOverview, ticketsReport, withPlayer } from './player.js';
+import { FAUCET, syncFraction } from './setup.js';
 
 const DIVISIONS = ['7 + Moonball', '7', '6 + Moonball', '6', '5 + Moonball', '4 + Moonball', '5', '3 + Moonball', '2 + Moonball'];
 
@@ -23,9 +25,54 @@ export const mcpTools = (o: { answerMs?: number } = {}): Tool[] => {
   useHome(config);
   const ready = () => {
     if (!hasBlockfrost(kitHome(), config.network)) {
-      throw new Error('The agent has no Blockfrost project id yet. Its owner runs `lunardraw-agent init --blockfrost <project id>` (free at blockfrost.io).');
+      throw new Error(
+        'The agent has no Blockfrost project id yet (a free key that lets it read Midnight Preprod). The owner gets one at https://blockfrost.io ' +
+          '(Add project, network "Midnight Preprod", copy the Project ID) and puts it in the Lunardraw extension\'s settings in Claude ' +
+          '(Settings, Extensions, Lunardraw, Configure), or runs `lunardraw-agent setup` in a terminal.',
+      );
     }
   };
+
+  // How far the wallet is from ready, for answers while it opens (a new wallet's first sync takes hours)
+  type Stage = { phase: 'opening' | 'syncing' | 'waiting for tNIGHT' | 'waiting for DUST' | 'ready'; synced?: number };
+  let stage: Stage = { phase: 'opening' };
+  const hooks: OpenHooks = {
+    onWallet: (w) => {
+      stage = { phase: 'syncing', synced: 0 };
+      const sub = w.wallet.state().subscribe((s: unknown) => {
+        if (stage.phase === 'syncing') stage = { phase: 'syncing', synced: syncFraction(s) };
+      });
+      void player?.finally(() => sub.unsubscribe()).catch(() => undefined);
+    },
+    onNoFunds: () => (stage = { phase: 'waiting for tNIGHT', synced: 1 }),
+    onWaitingForDust: () => (stage = { phase: 'waiting for DUST', synced: 1 }),
+  };
+  /** What to tell the owner while the wallet isn't ready. */
+  const notReady = (): Record<string, unknown> => {
+    const address = walletAddressOf(config.network, ensureWallet().seed);
+    const faucet = FAUCET[config.network];
+    switch (stage.phase) {
+      case 'syncing': {
+        const pct = Math.floor((stage.synced ?? 0) * 100);
+        return {
+          address,
+          status: `syncing with Midnight Preprod: ${pct}%`,
+          note:
+            pct < 95
+              ? `A new wallet's first sync reads the whole Preprod chain and takes a few hours (it saves its progress; later starts take minutes). Nothing to do but wait and keep this app open. Meanwhile the owner can fund it: paste the address into ${faucet} and ask for tNIGHT (free test tokens).`
+              : 'Catching up with the chain: a minute or two.',
+        };
+      }
+      case 'waiting for tNIGHT':
+        return { address, status: 'synced, waiting for tNIGHT', note: `The wallet holds no tNIGHT yet. The owner pastes the address into the faucet, ${faucet}, ticks the captcha and asks for tNIGHT (free, no value). The agent notices it arriving by itself.` };
+      case 'waiting for DUST':
+        return { address, status: 'got tNIGHT, waiting for DUST', note: 'It registered its tNIGHT for DUST, the token that pays the fees; the first DUST usually comes within a few minutes. Then it can buy.' };
+      default:
+        return { address, status: 'opening', note: 'The wallet is opening (a few minutes the first time in a session). Ask again in a minute.' };
+    }
+  };
+  /** Not worth starting a purchase: the wallet is hours away, or has nothing to pay with. */
+  const farFromReady = () => stage.phase === 'waiting for tNIGHT' || stage.phase === 'waiting for DUST' || (stage.phase === 'syncing' && (stage.synced ?? 0) < 0.95);
 
   // one wallet for the server's life, opened when first needed
   let player: Promise<Player> | undefined;
@@ -35,10 +82,18 @@ export const mcpTools = (o: { answerMs?: number } = {}): Tool[] => {
     if (!player) {
       progress('opening the wallet (a few minutes)');
       player = new Promise<Player>((resolve, reject) => {
-        withPlayer(config, ensureWallet().seed, (p) => {
-          resolve(p);
-          return new Promise<void>((done) => (release = done));
-        }).catch((err) => {
+        withPlayer(
+          config,
+          ensureWallet().seed,
+          (p) => {
+            stage = { phase: 'ready', synced: 1 };
+            resolve(p);
+            return new Promise<void>((done) => (release = done));
+          },
+          undefined,
+          hooks,
+        ).catch((err) => {
+          stage = { phase: 'opening' };
           player = undefined;
           reject(err);
         });
@@ -117,12 +172,7 @@ export const mcpTools = (o: { answerMs?: number } = {}): Tool[] => {
         const opening = openPlayer(progress);
         const late = Symbol('late');
         const first = await ticking(progress, 'opening the wallet', Promise.race([opening, lateAfter(late)]));
-        if (first === late) {
-          const { walletAddressOf } = await import('@nightcast/deploy');
-          return {
-            text: JSON.stringify({ address: walletAddressOf(config.network, ensureWallet().seed), status: 'opening', limits: config.limits, note: 'The wallet is still opening (a few minutes the first time in a session). Ask again in a minute for its tNIGHT and DUST.' }, null, 2),
-          };
-        }
+        if (first === late) return { text: JSON.stringify({ ...notReady(), limits: config.limits }, null, 2) };
         const p = first;
         const { night, dust } = await p.balances();
         return { text: JSON.stringify({ address: p.address, tNight: Number(night) / 1e6, dust: (Number(dust) / 1e15).toFixed(2), limits: config.limits }, null, 2) };
@@ -132,6 +182,10 @@ export const mcpTools = (o: { answerMs?: number } = {}): Tool[] => {
       ...toolDef('lunardraw_buy_tickets'),
       run: async (args, progress) => {
         const entries = buyEntries(buyArgs(args));
+        ready();
+        if (farFromReady()) {
+          return { text: JSON.stringify({ status: 'not ready to buy yet: nothing was bought', ...notReady() }, null, 2), isError: true };
+        }
         if (purchase?.state === 'buying') {
           return {
             text: JSON.stringify({ status: 'a purchase is already on its way', started: purchase.started, games: purchase.games, next: "Don't buy again yet: call lunardraw_my_tickets in a minute or two to see it land." }, null, 2),

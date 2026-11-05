@@ -25,7 +25,7 @@ export type Tool = {
   run(args: Record<string, unknown>, progress: (message: string) => void): Promise<ToolText>;
 };
 
-export const SERVER_INFO = { name: 'lunardraw', title: 'Lunardraw', version: '0.1.4' };
+export const SERVER_INFO = { name: 'lunardraw', title: 'Lunardraw', version: '0.1.5' };
 const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 
 export const INSTRUCTIONS =
@@ -34,7 +34,8 @@ export const INSTRUCTIONS =
   "Buying is what this server is for: when the user asks you to buy or play, call lunardraw_buy_tickets (it pays from this agent's own test wallet). " +
   'Draws close on the hour on Preprod. A game is 7 numbers from 1-35 plus a Moonball from 1-20 and costs 1.2 tNIGHT; prizes and refunds ' +
   "are paid to the agent's wallet automatically (no claiming). Check lunardraw_draw_on_sale before buying. Purchases are limited by the owner's " +
-  'spending limits, which you cannot change. Opening the wallet takes a few minutes the first time in a session; a purchase takes 2-3 minutes.';
+  'spending limits, which you cannot change. Opening the wallet takes a few minutes the first time in a session; a purchase takes 2-3 minutes. ' +
+  "If the agent isn't ready (no Blockfrost key, a new wallet still syncing, no tNIGHT yet), the tools say what the owner should do: pass that on, step by step.";
 
 export type Rpc = { jsonrpc: '2.0'; id?: string | number | null; method?: string; params?: Record<string, unknown> };
 

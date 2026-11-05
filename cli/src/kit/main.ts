@@ -3,7 +3,7 @@
  * lunardraw-agent: play Starfall (Lunardraw's lottery on Midnight Preprod)
  * from an AI agent's own machine and wallet. See README-agent.md.
  */
-import { openSync, renameSync, statSync, writeSync } from 'node:fs';
+import { existsSync, openSync, readFileSync, renameSync, statSync, writeSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import {
   agentPort,
@@ -47,6 +47,7 @@ export const KIT_USAGE = `lunardraw-agent: play Starfall, Lunardraw's lottery on
                                                      Lunardraw's relay (keeps the agent running from sign-in)
   lunardraw-agent serve [--port <n>] [--host <ip>]   run the agent here: a local address for your own programs
                                                      (REST and MCP over HTTP; see /openapi.json) and the relay link
+  lunardraw-agent stop                               stop the agent running in the background
   lunardraw-agent skill                              how an AI agent plays, as a skill file (SKILL.md) to give it
 
 --json prints machine-readable output (status, wallet, buy, tickets).
@@ -72,6 +73,37 @@ const setup = (): { config: KitConfig; seed: string } => {
     throw new Error(`no Blockfrost project id yet: get a free one at https://blockfrost.io (a Midnight ${config.network} project), then run \`lunardraw-agent init --blockfrost <project id>\``);
   }
   return { config, seed: ensureWallet().seed };
+};
+
+/**
+ * For an AI app that starts the kit before anyone ran setup (the Claude
+ * extension, say): a config with the default limits and a new wallet if
+ * there are none yet, and the Blockfrost key the app was given
+ * (LUNARDRAW_BLOCKFROST, from the extension's settings) kept in the home.
+ */
+const firstRun = (home: string): KitConfig => {
+  let config: KitConfig;
+  try {
+    config = loadConfig(home);
+  } catch (err) {
+    if (existsSync(kitPaths(home).config)) throw err; // there, but broken: say so
+    config = DEFAULT_CONFIG;
+    saveConfig(config, home);
+  }
+  ensureWallet(home);
+  const key = process.env.LUNARDRAW_BLOCKFROST?.trim();
+  if (key) {
+    const file = kitPaths(home, config.network).blockfrost;
+    const had = existsSync(file) ? readFileSync(file, 'utf8').trim() : undefined;
+    if (had !== key) {
+      try {
+        saveBlockfrost(key, home, config.network);
+      } catch (err) {
+        process.stderr.write(`lunardraw: the Blockfrost project id from the app's settings wasn't kept: ${err instanceof Error ? err.message : String(err)}\n`);
+      }
+    }
+  }
+  return config;
 };
 
 /** Send everything this process prints to a log file (the agent in the background). */
@@ -378,6 +410,14 @@ export const kit = async (argv: string[]): Promise<number> => {
 
     case 'play': {
       const { config } = setup();
+      // `play` opens the wallet itself, every draw: not while the agent is running here with it open
+      const running = await runningAgent(config);
+      if (running) {
+        throw new Error(
+          'the agent is already running on this computer (for your AI apps, or `serve` / `remote` in the background) and has the wallet open. ' +
+            'Ask your AI to buy instead, or stop the agent first: `lunardraw-agent stop` for the one in the background, and quit the AI apps using it.',
+        );
+      }
       const { starfall } = await import('../starfall-commands.js');
       const p = kitPaths(kitHome(), config.network);
       const local = /^local:(\d+)$/.exec(config.prover);
@@ -443,8 +483,8 @@ export const kit = async (argv: string[]): Promise<number> => {
       const out = takeStdout(); // from here on, stdout carries the protocol only
       const { mcpTools } = await import('./tools.js');
       const { agentBackend } = await import('./host.js');
-      const config = loadConfig();
       const home = kitHome();
+      const config = firstRun(home);
       // one agent per computer: the first app's server opens the wallet, the others pass their requests to it
       const backend = await agentBackend({
         home,
@@ -541,6 +581,18 @@ export const kit = async (argv: string[]): Promise<number> => {
       say('\nYour private address for AI apps:\n');
       say(`  ${r.address}\n`);
       for (const line of remoteSteps()) say(line);
+      return 0;
+    }
+
+    case 'stop': {
+      const { serving } = await import('./remote.js');
+      const pid = serving(kitHome());
+      if (!pid || pid < 0) {
+        say(pid ? 'The agent in the background belongs to another user: it can\'t be stopped from here.' : 'The agent isn\'t running in the background.');
+        return 0;
+      }
+      process.kill(pid);
+      say(`Stopped the agent running in the background (process ${pid}). It starts again when you sign in, if \`remote\` set that up (\`lunardraw-agent remote off --stop-at-login\` stops that).`);
       return 0;
     }
 
