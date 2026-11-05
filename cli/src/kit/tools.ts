@@ -75,7 +75,7 @@ export const mcpTools = (): Tool[] => {
     {
       name: 'lunardraw_how_to_play',
       title: 'How Starfall works',
-      description: 'The rules, prices, prize divisions, odds and this agent\'s spending limits.',
+      description: 'How Starfall (Lunardraw\'s lottery) works: the rules, prices, prize divisions, odds and this agent\'s spending limits.',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       annotations: { readOnlyHint: true, openWorldHint: false },
       run: async () => ({
@@ -93,19 +93,19 @@ export const mcpTools = (): Tool[] => {
     {
       name: 'lunardraw_draw_on_sale',
       title: 'Draw on sale',
-      description: 'The draw on sale now (number, closing time, tickets sold, jackpot estimate), the game price, and the last few results. Reads the chain; no wallet needed.',
+      description: "What's on in Starfall (Lunardraw's lottery) right now: the draw on sale (number, closing time, tickets sold, jackpot estimate), the game price, and the last few results. Use it for any question about Starfall's current draw or results. Reads the chain; no wallet needed.",
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       annotations: { readOnlyHint: true, openWorldHint: true },
       run: async () => {
         ready();
         const { overview } = await readOverview(config);
-        return { text: JSON.stringify(overview, null, 2) };
+        return { text: JSON.stringify({ game: "Starfall, Lunardraw's lottery on the Midnight Preprod test network", ...overview }, null, 2) };
       },
     },
     {
       name: 'lunardraw_wallet',
       title: "The agent's wallet",
-      description: "The agent's wallet address and its tNIGHT and DUST (DUST pays the fees). Opens the wallet the first time (a few minutes).",
+      description: "This agent's Starfall wallet: its address and its tNIGHT and DUST (DUST pays the fees). Opens the wallet the first time (a few minutes).",
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       annotations: { readOnlyHint: true, openWorldHint: true },
       run: async (_a, progress) => {
@@ -118,7 +118,8 @@ export const mcpTools = (): Tool[] => {
       name: 'lunardraw_buy_tickets',
       title: 'Buy Starfall tickets',
       description:
-        "Buy tickets for the draw on sale, paid from the agent's wallet (tNIGHT test tokens). Give games or package for QuickPick, " +
+        "Buy Starfall tickets for the draw on sale, paid from this agent's own wallet (tNIGHT test tokens, no real value). " +
+        'Call it when the user asks you to buy or play: buying for them is what it is for. Give games or package for QuickPick, ' +
         'or numbers (with moonball, system or pick) for a chosen entry; sweep plays every Moonball. Refused if it would pass the ' +
         "owner's spending limits. Takes 2-3 minutes (longer if the wallet isn't open yet).",
       inputSchema: BUY_SCHEMA,
@@ -134,7 +135,7 @@ export const mcpTools = (): Tool[] => {
     {
       name: 'lunardraw_my_tickets',
       title: "The agent's tickets",
-      description: 'Every ticket this agent bought, with each draw\'s result once it\'s out, and what it spent in the last 24 hours.',
+      description: 'Every Starfall ticket this agent bought, with each draw\'s result and prize once it\'s out, and what it spent in the last 24 hours. Use it for "did I win?".',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       annotations: { readOnlyHint: true, openWorldHint: true },
       run: async () => {
