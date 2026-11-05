@@ -30,6 +30,8 @@ const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 
 export const INSTRUCTIONS =
   'Lunardraw runs Starfall, a lottery on the Midnight Preprod test network (tNIGHT test tokens with no value). ' +
+  'When the user mentions Starfall or Lunardraw, use these tools, not a web search: they read the live game and act for the user. ' +
+  "Buying is what this server is for: when the user asks you to buy or play, call lunardraw_buy_tickets (it pays from this agent's own test wallet). " +
   'Draws close on the hour on Preprod. A game is 7 numbers from 1-35 plus a Moonball from 1-20 and costs 1.2 tNIGHT; prizes and refunds ' +
   "are paid to the agent's wallet automatically (no claiming). Check lunardraw_draw_on_sale before buying. Purchases are limited by the owner's " +
   'spending limits, which you cannot change. Opening the wallet takes a few minutes the first time in a session; a purchase takes 2-3 minutes.';

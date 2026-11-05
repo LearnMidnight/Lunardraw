@@ -268,7 +268,13 @@ export const syncWallet = async (
       try {
         sub?.unsubscribe();
         on.onProgress?.(1);
-        const { night, dust } = await walletBalances(wallet);
+        // Registering new tNIGHT for DUST spends and remakes its coin, so for a
+        // minute or two the balance reads 0: wait for it to show again.
+        let { night, dust } = await walletBalances(wallet);
+        for (let i = 0; night === 0n && i < 24; i++) {
+          await new Promise((r) => setTimeout(r, 5_000));
+          ({ night, dust } = await walletBalances(wallet));
+        }
         return { address: walletAddress(wallet), night, dust };
       } finally {
         sub?.unsubscribe();

@@ -9,6 +9,8 @@ import { DEFAULT_CONFIG, ensureWallet, hasBlockfrost, type KitConfig, kitHome, k
 export const KIT_USAGE = `lunardraw-agent: play Starfall, Lunardraw's lottery on the Midnight Preprod test network, from your own wallet.
 
   lunardraw-agent setup                              the guided setup: start here
+  lunardraw-agent connect                            add Lunardraw to the AI apps on this computer (Claude, Claude Code, Gemini CLI)
+  lunardraw-agent doctor                             check everything and say what to fix
   lunardraw-agent init [--blockfrost <project id>]   the same without questions: a wallet and a config
   lunardraw-agent address                            the wallet's address (to fund it from the faucet)
   lunardraw-agent status                             the draw on sale, the jackpot, recent results
@@ -113,6 +115,69 @@ export const kit = async (argv: string[]): Promise<number> => {
     case 'setup': {
       const { setup } = await import('./setup.js');
       return setup();
+    }
+
+    case 'connect': {
+      const { mcpEntry } = await import('./setup.js');
+      const { connectApps, findApps, manualLines, nextSteps } = await import('./connect.js');
+      const entry = mcpEntry();
+      const found = findApps();
+      const results = connectApps(found, entry);
+      for (const r of results) say(`${r.ok ? '✓' : '✗'} ${r.name}: ${r.note}`);
+      say(found.length ? '' : 'No Claude desktop app, Claude Code or Gemini CLI found on this computer.');
+      say('Another agent (OpenClaw, Hermes, Cursor…)? Add it there:');
+      for (const line of manualLines(entry)) say(line);
+      say('\nWhat now:');
+      for (const line of nextSteps(results.filter((r) => r.ok).map((r) => r.id))) say(`  ${line}`);
+      return results.some((r) => !r.ok) ? 1 : 0;
+    }
+
+    case 'doctor': {
+      const { checkBlockfrost } = await import('./setup.js');
+      const { findApps, isConnected } = await import('./connect.js');
+      const { existsSync, readFileSync } = await import('node:fs');
+      const fix: string[] = [];
+      const line = (ok: boolean, what: string) => say(`${ok ? '✓' : '✗'} ${what}`);
+      const major = Number(process.versions.node.split('.')[0]);
+      line(major >= 22, `Node.js ${process.versions.node}${major >= 22 ? '' : ' (22 or newer is needed)'}`);
+      if (major < 22) fix.push('Install Node.js 22 or newer from https://nodejs.org, then open a new terminal.');
+      let config: KitConfig | undefined;
+      try {
+        config = loadConfig();
+      } catch {
+        /* not set up */
+      }
+      const p = kitPaths(kitHome(), config?.network ?? 'preprod');
+      const hasWallet = existsSync(p.wallet);
+      line(hasWallet, hasWallet ? `wallet: ${p.wallet}` : 'no wallet yet');
+      if (!config || !hasWallet) fix.push('Run `lunardraw-agent setup`.');
+      if (config) {
+        if (hasBlockfrost(kitHome(), config.network)) {
+          const id = process.env.NIGHTCAST_BLOCKFROST_PROJECT_ID?.trim() || readFileSync(p.blockfrost, 'utf8').trim();
+          const check = await checkBlockfrost(id, config.network);
+          line(check.ok, check.ok ? 'Blockfrost key works' : `Blockfrost key: ${check.why?.replace(/\*\*/g, '')}`);
+          if (!check.ok) fix.push(`Make a new key on blockfrost.io (a Midnight Preprod project), rename ${p.blockfrost} and run \`lunardraw-agent setup\` again.`);
+        } else {
+          line(false, 'no Blockfrost key yet');
+          fix.push('Run `lunardraw-agent setup`: it asks for the key.');
+        }
+        line(true, config.listing ? `in the agent directory as ${config.listing.name}` : 'not in the agent directory (optional: `lunardraw-agent list --name <name>`)');
+        line(true, `spending limits: ${config.limits.perDraw} tNIGHT a draw, ${config.limits.perDay} a day`);
+      }
+      const apps = findApps();
+      const connected = apps.filter((a) => isConnected(a));
+      if (!apps.length) {
+        line(false, 'no AI app found (Claude desktop app, Claude Code or Gemini CLI)');
+        fix.push('Install the Claude desktop app from https://claude.ai/download, sign in, then run `lunardraw-agent connect`.');
+      }
+      for (const a of apps) line(connected.includes(a), `${a.name}: ${connected.includes(a) ? 'Lunardraw is added' : 'Lunardraw isn\'t added yet'}`);
+      if (apps.length && connected.length < apps.length) fix.push('Run `lunardraw-agent connect`.');
+      if (!fix.length && connected.some((a) => a.id === 'claude-desktop')) {
+        fix.push('All good. If Claude doesn\'t show the Lunardraw tools, quit it completely and open it again, then ask in a new chat: "What\'s on in Starfall right now?"');
+      }
+      say(`\n${fix.length ? 'Next' : 'All good'}:`);
+      for (const f of fix.length ? fix : ['Ask your AI: "What\'s on in Starfall right now?" For tNIGHT and DUST: `lunardraw-agent wallet`.']) say(`  ${f}`);
+      return fix.some((f) => !f.startsWith('All good')) ? 1 : 0;
     }
 
     case 'address': {

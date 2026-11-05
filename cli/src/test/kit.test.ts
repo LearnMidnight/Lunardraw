@@ -297,6 +297,16 @@ describe('the guided setup', () => {
     expect(claudeDesktopConfig('darwin', {}, '/Users/ann')).toBe('/Users/ann/Library/Application Support/Claude/claude_desktop_config.json');
     expect(claudeDesktopConfig('linux', {}, '/home/ann')).toBe('/home/ann/.config/Claude/claude_desktop_config.json');
     expect(claudeDesktopConfig('win32', { APPDATA: 'C:\\Users\\ann\\AppData\\Roaming' }, 'C:\\Users\\ann')).toMatch(/Roaming.Claude.claude_desktop_config\.json$/);
+    // the Microsoft Store install keeps its settings in its own package folder
+    const { claudeDesktopConfigs } = await import('../kit/setup.js');
+    const listing = (dir: string) => (/Claude-Data$/.test(dir) ? ['claude_pzs8sxrjxfjjc'] : /Packages$/.test(dir) ? ['Microsoft.Photos_8wekyb', 'Claude_pzs8sxrjxfjjc'] : []);
+    const found = claudeDesktopConfigs('win32', { APPDATA: 'C:\\a\\Roaming', LOCALAPPDATA: 'C:\\a\\Local' }, 'C:\\a', listing);
+    expect(found).toHaveLength(3);
+    // where the Store install keeps them now comes first
+    expect(found[0]).toMatch(/Claude-Data.claude_pzs8sxrjxfjjc.claude_desktop_config\.json$/);
+    expect(found[1]).toMatch(/Roaming.Claude.claude_desktop_config\.json$/);
+    expect(found[2]).toMatch(/Claude_pzs8sxrjxfjjc.LocalCache.Roaming.Claude.claude_desktop_config\.json$/);
+    expect(claudeDesktopConfigs('darwin', {}, '/Users/ann', () => ['Claude'])).toHaveLength(1);
     const entry = mcpEntry('/usr/bin/node', '/opt/kit/bin/lunardraw-agent.js', {});
     expect(entry).toEqual({ command: '/usr/bin/node', args: ['/opt/kit/bin/lunardraw-agent.js', 'mcp'] });
     expect(mcpEntry('n', 's', { LUNARDRAW_AGENT_HOME: '/h' }).env).toEqual({ LUNARDRAW_AGENT_HOME: '/h' });
@@ -304,6 +314,42 @@ describe('the guided setup', () => {
     expect(merged).toEqual({ theme: 'dark', mcpServers: { files: { command: 'x' }, lunardraw: entry } });
     expect(JSON.parse(withLunardraw(undefined, entry))).toEqual({ mcpServers: { lunardraw: entry } });
     expect(() => withLunardraw('[1]', entry)).toThrow(/isn't a JSON object/);
+  });
+
+  it('finds the AI apps here and adds Lunardraw to each, keeping their settings', async () => {
+    const { connectApps, findApps, nextSteps } = await import('../kit/connect.js');
+    const home = mkdtempSync(join(tmpdir(), 'connect-'));
+    const desktopDir = process.platform === 'darwin' ? join(home, 'Library', 'Application Support', 'Claude') : join(home, '.config', 'Claude');
+    const xdg = process.env.XDG_CONFIG_HOME;
+    delete process.env.XDG_CONFIG_HOME;
+    try {
+      // nothing installed: nothing found
+      expect(findApps({ home, hasCommand: () => false })).toEqual([]);
+      mkdirSync(desktopDir, { recursive: true });
+      writeFileSync(join(desktopDir, 'claude_desktop_config.json'), '{"mcpServers":{"files":{"command":"x"}}}');
+      mkdirSync(join(home, '.gemini'));
+      const apps = findApps({ home, hasCommand: () => false });
+      expect(apps.map((a) => a.id)).toEqual(['claude-desktop', 'gemini-cli']);
+      const entry = { command: '/usr/bin/node', args: ['/opt/kit/bin/lunardraw-agent.js', 'mcp'] };
+      const results = connectApps(apps, entry);
+      expect(results.every((r) => r.ok)).toBe(true);
+      expect(JSON.parse(readFileSync(join(desktopDir, 'claude_desktop_config.json'), 'utf8')).mcpServers).toEqual({ files: { command: 'x' }, lunardraw: entry });
+      expect(readFileSync(join(desktopDir, 'claude_desktop_config.json.before-lunardraw'), 'utf8')).toContain('"files"');
+      expect(JSON.parse(readFileSync(join(home, '.gemini', 'settings.json'), 'utf8')).mcpServers.lunardraw).toEqual({ ...entry, timeout: 900_000 });
+      // what to do next says where to ask (people typed the question into the terminal)
+      expect(nextSteps(['claude-desktop']).join(' ')).toMatch(/Quit Claude completely.*In Claude \(not in this window\)/);
+      expect(nextSteps([]).join(' ')).toMatch(/claude\.ai\/download.*lunardraw-agent connect/);
+    } finally {
+      if (xdg !== undefined) process.env.XDG_CONFIG_HOME = xdg;
+    }
+  });
+
+  it('runs an MCP server, or from an unwritable folder, in its own home', async () => {
+    const { workingFolder } = await import('../kit/cwd.js');
+    expect(workingFolder('mcp', 'C:\\Windows\\System32', '/h', () => false)).toBe('/h');
+    expect(workingFolder('mcp', '/work', '/h', () => true)).toBe('/h');
+    expect(workingFolder('status', '/work', '/h', () => true)).toBe('/work');
+    expect(workingFolder('status', 'C:\\Windows\\System32', '/h', () => false)).toBe('/h');
   });
 
   it('checks a Blockfrost key before keeping it', async () => {

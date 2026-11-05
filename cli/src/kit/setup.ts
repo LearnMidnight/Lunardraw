@@ -6,9 +6,9 @@
  * time: done steps are skipped, and the sync carries on where it stopped.
  */
 import { spawn } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { DEFAULT_CONFIG, ensureWallet, hasBlockfrost, type KitConfig, kitHome, kitPaths, loadConfig, saveBlockfrost, saveConfig, useHome } from './home.js';
 
@@ -61,6 +61,41 @@ export const claudeDesktopConfig = (platform: NodeJS.Platform = process.platform
     : platform === 'win32'
       ? join(env.APPDATA ?? join(home, 'AppData', 'Roaming'), 'Claude', 'claude_desktop_config.json')
       : join(env.XDG_CONFIG_HOME ?? join(home, '.config'), 'Claude', 'claude_desktop_config.json');
+
+/**
+ * Every place Claude Desktop may keep its settings, likeliest first: on
+ * Windows the Microsoft Store install's %LOCALAPPDATA%\\Claude-Data\\<package id>
+ * (where it keeps them now), the usual %APPDATA%\\Claude, then the Store
+ * package's own LocalCache folder (older versions).
+ */
+export const claudeDesktopConfigs = (
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+  home = homedir(),
+  list: (dir: string) => string[] = (dir) => {
+    try {
+      return readdirSync(dir);
+    } catch {
+      return [];
+    }
+  },
+): string[] => {
+  const out: string[] = [];
+  if (platform === 'win32') {
+    const local = env.LOCALAPPDATA ?? join(home, 'AppData', 'Local');
+    // the Store install's current home: %LOCALAPPDATA%\Claude-Data\<package id>\ (seen 5 Nov 2026, app 4.16336)
+    const data = join(local, 'Claude-Data');
+    for (const name of list(data).filter((n) => /claude/i.test(n))) out.push(join(data, name, 'claude_desktop_config.json'));
+    out.push(claudeDesktopConfig(platform, env, home));
+    // and its older one, inside the package
+    const packages = join(local, 'Packages');
+    for (const name of list(packages).filter((n) => /claude/i.test(n))) {
+      out.push(join(packages, name, 'LocalCache', 'Roaming', 'Claude', 'claude_desktop_config.json'));
+    }
+    return out;
+  }
+  return [claudeDesktopConfig(platform, env, home)];
+};
 
 export type McpEntry = { command: string; args: string[]; env?: Record<string, string> };
 
@@ -150,6 +185,8 @@ export const setup = async (): Promise<number> => {
       if (await yes('Open blockfrost.io in your browser now?')) openUrl(BLOCKFROST_SIGNUP);
       for (;;) {
         const id = (await rl.question('Paste the project ID here (or press Enter to stop for now): ')).trim();
+        // it's a key: don't leave it on the screen (or in a copied transcript)
+        if (id && process.stdout.isTTY) process.stdout.write(`\x1b[1A\r\x1b[2KPaste the project ID here (or press Enter to stop for now): ${'•'.repeat(8)}\n`);
         if (!id) {
           say('No problem: run `lunardraw-agent setup` again when you have it.');
           return 1;
@@ -177,31 +214,25 @@ export const setup = async (): Promise<number> => {
     if (await yes('Open the faucet in your browser now?')) openUrl(faucet);
     await rl.question('Press Enter once you\'ve asked the faucet (the tokens arrive while the wallet syncs). ');
 
-    // 3. the AI assistant
+    // 3. the AI assistant: found and connected here, nothing to copy
     step(3, 'connect your AI');
     const entry = mcpEntry();
-    const desktop = claudeDesktopConfig();
-    if (existsSync(dirname(desktop))) {
-      if (await yes('Claude Desktop is installed. Add Lunardraw to it?')) {
-        const before = existsSync(desktop) ? readFileSync(desktop, 'utf8') : undefined;
-        if (before !== undefined) copyFileSync(desktop, `${desktop}.before-lunardraw`);
-        mkdirSync(dirname(desktop), { recursive: true });
-        writeFileSync(desktop, withLunardraw(before, entry));
-        say(`✓ Added. Quit and reopen Claude Desktop to load it.${before !== undefined ? ` (Your old settings are saved as ${desktop}.before-lunardraw.)` : ''}`);
+    const { connectApps, findApps, manualLines } = await import('./connect.js');
+    const found = findApps();
+    let connected: string[] = [];
+    if (found.length) {
+      say(`Found: ${found.map((a) => a.name).join(', ')}.`);
+      if (await yes(`Add Lunardraw to ${found.length === 1 ? 'it' : 'them'}?`)) {
+        for (const r of connectApps(found, entry)) say(`  ${r.ok ? '✓' : '✗'} ${r.name}: ${r.note}`);
+        connected = found.map((a) => a.id);
       }
     } else {
-      say('Claude Desktop isn\'t installed here (that\'s fine).');
+      say('No AI app found on this computer yet. The easiest is the Claude desktop app (https://claude.ai/download):');
+      say('install it and sign in, then run `lunardraw-agent connect` to add Lunardraw to it.');
     }
-    say('\nOther AI apps and agents (any that can run a local MCP server; pick the one you use):');
-    say(`  Claude Code:   claude mcp add lunardraw -- "${entry.command}" "${entry.args[0]}" mcp`);
-    say(`  Gemini CLI:    gemini mcp add lunardraw "${entry.command}" "${entry.args[0]}" mcp`);
-    say(`  OpenClaw:      openclaw mcp add lunardraw --command "${entry.command}" --arg "${entry.args[0]}" --arg mcp`);
-    say(`  Hermes Agent:  in ~/.hermes/config.yaml, under mcp_servers:`);
-    say(`                   lunardraw: { command: "${entry.command}", args: ["${entry.args[0]}", "mcp"], timeout: 900 }`);
-    say(`  Anything else: command "${entry.command}", arguments "${entry.args[0]}" "mcp"`);
-    say('  (Allow tool calls up to 15 minutes: the first purchase opens the wallet, then buys.)');
-    say('ChatGPT and Grok can use any of these agents as the brain (OpenClaw and Hermes run GPT, Grok and Gemini models);');
-    say("their own apps only reach MCP servers on the internet, which this one (holding your wallet) deliberately isn't.");
+    say('(Claude in a web browser or on a phone can\'t reach your wallet: it stays on this computer.)');
+    say('Using another agent? OpenClaw, Hermes or any MCP app:');
+    for (const line of manualLines(entry)) say(line);
 
     // the agent directory (opt in)
     if (!config.listing && (await yes('\nShow your agent in the agent directory on lunardraw.io? It shows a name you choose and its totals, never its numbers.'))) {
@@ -259,10 +290,17 @@ export const setup = async (): Promise<number> => {
       },
     });
     if (tty) process.stdout.write('\n');
-    say(`\n${bold('All set!')} The wallet holds ${Number(result.night) / 1e6} tNIGHT and has DUST for fees.`);
-    say('\nAsk your AI assistant something like:');
-    say(bold('  "What\'s on in Starfall? Buy me two QuickPick games."'));
-    say('\nOr from here: `lunardraw-agent status`, `lunardraw-agent buy --games 2`, `lunardraw-agent tickets`.');
+    say(
+      `\n${bold('All set!')} ` +
+        (result.night > 0n
+          ? `The wallet holds ${Number(result.night) / 1e6} tNIGHT and has DUST for fees.`
+          : 'The wallet has DUST for fees; its tNIGHT shows again once its DUST registration lands (a few minutes). Check with `lunardraw-agent status`.'),
+    );
+    const { nextSteps } = await import('./connect.js');
+    say(`\n${bold('What now')}`);
+    for (const line of nextSteps(connected as Parameters<typeof nextSteps>[0])) say(`  ${line}`);
+    say('\nThen try: "Buy me two QuickPick games." or "Did any of my tickets win?"');
+    say('Something not working? Run `lunardraw-agent doctor`.');
     say(`Spending limits: ${config.limits.perDraw} tNIGHT a draw, ${config.limits.perDay} a day (change them in ${paths.config}).`);
     return 0;
   } finally {
