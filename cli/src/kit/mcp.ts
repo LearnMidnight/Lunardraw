@@ -25,7 +25,7 @@ export type Tool = {
   run(args: Record<string, unknown>, progress: (message: string) => void): Promise<ToolText>;
 };
 
-export const SERVER_INFO = { name: 'lunardraw', title: 'Lunardraw', version: '0.1.3' };
+export const SERVER_INFO = { name: 'lunardraw', title: 'Lunardraw', version: '0.1.4' };
 const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 
 export const INSTRUCTIONS =
@@ -36,7 +36,7 @@ export const INSTRUCTIONS =
   "are paid to the agent's wallet automatically (no claiming). Check lunardraw_draw_on_sale before buying. Purchases are limited by the owner's " +
   'spending limits, which you cannot change. Opening the wallet takes a few minutes the first time in a session; a purchase takes 2-3 minutes.';
 
-type Rpc = { jsonrpc: '2.0'; id?: string | number | null; method?: string; params?: Record<string, unknown> };
+export type Rpc = { jsonrpc: '2.0'; id?: string | number | null; method?: string; params?: Record<string, unknown> };
 
 /**
  * Handle one JSON-RPC message; returns the response, or undefined for a
@@ -85,10 +85,25 @@ export const handle = async (msg: Rpc, tools: Tool[], notify: (method: string, p
  * Serve over stdin/stdout until stdin closes. Everything else written to
  * stdout (console.log, process.stdout.write) is sent to stderr instead.
  */
-export const serveStdio = async (tools: Tool[]): Promise<void> => {
-  const out = process.stdout.write.bind(process.stdout) as (s: string) => boolean;
+let protocolOut: ((s: string) => boolean) | undefined;
+
+/**
+ * Keep stdout for the protocol: from now on everything else written to it
+ * (console.log, process.stdout.write) goes to stderr. Returns the real stdout.
+ */
+export const takeStdout = (): ((s: string) => boolean) => {
+  if (protocolOut) return protocolOut;
+  protocolOut = process.stdout.write.bind(process.stdout) as (s: string) => boolean;
   process.stdout.write = process.stderr.write.bind(process.stderr) as typeof process.stdout.write;
   console.log = console.error;
+  return protocolOut;
+};
+
+export const serveStdio = async (
+  tools: Tool[] | ((msg: Rpc, notify: (method: string, params: Record<string, unknown>) => void) => Promise<object | undefined>),
+  out: (s: string) => boolean = takeStdout(),
+): Promise<void> => {
+  const answer = typeof tools === 'function' ? tools : (msg: Rpc, notify: (method: string, params: Record<string, unknown>) => void) => handle(msg, tools, notify);
   const send = (obj: object) => out(JSON.stringify(obj) + '\n');
   const notify = (method: string, params: Record<string, unknown>) => send({ jsonrpc: '2.0', method, params });
   const rl = createInterface({ input: process.stdin });
@@ -103,9 +118,14 @@ export const serveStdio = async (tools: Tool[]): Promise<void> => {
       continue;
     }
     // calls run side by side (a purchase takes minutes; a status check shouldn't wait for it)
-    const p = handle(msg, tools, notify).then((r) => {
-      if (r) send(r);
-    });
+    const p = answer(msg, notify).then(
+      (r) => {
+        if (r) send(r);
+      },
+      (err: unknown) => {
+        if (msg.id !== undefined && msg.id !== null) send({ jsonrpc: '2.0', id: msg.id, error: { code: -32603, message: err instanceof Error ? err.message : String(err) } });
+      },
+    );
     pending.add(p);
     void p.finally(() => pending.delete(p));
   }
@@ -127,6 +147,21 @@ export const BUY_SCHEMA = {
     sweep: { type: 'boolean', description: 'Moonball Sweep: play every Moonball (20 times the games).' },
   },
   additionalProperties: false,
+};
+
+/** `lunardraw-agent buy`'s options as the buy tool's arguments (to ask the agent running here). */
+export const buyToolArgs = (v: { games?: string; package?: string; numbers?: string; moonball?: string; system?: string; pick?: string; sweep?: boolean }): Record<string, unknown> => {
+  const int = (x: string | undefined) => (x === undefined ? undefined : Number(x));
+  const args: Record<string, unknown> = {
+    games: int(v.games),
+    package: v.package,
+    numbers: v.numbers === undefined ? undefined : v.numbers.split(/[\s,]+/).filter(Boolean).map(Number),
+    moonball: int(v.moonball),
+    system: int(v.system),
+    pick: int(v.pick),
+    sweep: v.sweep || undefined,
+  };
+  return Object.fromEntries(Object.entries(args).filter(([, x]) => x !== undefined));
 };
 
 /** Tool arguments to `buyEntries`' string options. */

@@ -6,6 +6,9 @@
  *   blockfrost-<network>.secret the Blockfrost project id for Preprod (mode 600)
  *   state.json                  what it bought, and which results it has reported
  *   wallet-state/               the wallet's saved sync, so a restart takes minutes, not hours
+ *   agent-token.secret          the key for the agent's local web address (host.ts; mode 600)
+ *   relay-link.secret           the private link for AIs on the web or a phone (relay-link.ts; mode 600)
+ *   agent.log                   what the agent running in the background did
  *
  * The limits are in the owner's config file on purpose: an AI using the kit
  * (through the MCP server) can read them but never change them.
@@ -30,10 +33,22 @@ export type KitConfig = {
   listing?: { name: string; style: string; via: string };
   /** The directory's registry (default: Lunardraw's). */
   registry?: string;
+  /** The port of the agent's local web address on this computer (host.ts; default 6338). */
+  port?: number;
+  /** Whether AIs on the web or a phone can reach the agent through Lunardraw's relay (`lunardraw-agent remote`). */
+  remote?: boolean;
+  /** The relay (default: Lunardraw's). */
+  relay?: string;
 };
 
 /** Lunardraw's agent registry (the agent directory on lunardraw.io reads it). */
 export const DEFAULT_REGISTRY = 'https://207-180-249-120.sslip.io/agents';
+
+/** Lunardraw's relay, which passes AIs on the web or a phone through to an agent on its owner's computer. */
+export const DEFAULT_RELAY = 'https://207-180-249-120.sslip.io/relay';
+
+/** The agent's local web address's port, unless config.json or LUNARDRAW_AGENT_PORT say otherwise. */
+export const DEFAULT_PORT = 6338;
 
 export const DEFAULT_CONFIG: KitConfig = { network: 'preprod', prover: 'hosted', limits: { perDraw: 25, perDay: 100 } };
 
@@ -46,9 +61,12 @@ export const kitPaths = (home = kitHome(), network: KitNetwork = 'preprod') => (
   blockfrost: join(home, `blockfrost-${network}.secret`),
   state: join(home, 'state.json'),
   walletState: join(home, 'wallet-state'),
+  token: join(home, 'agent-token.secret'),
+  link: join(home, 'relay-link.secret'),
+  log: join(home, 'agent.log'),
 });
 
-const writePrivate = (path: string, text: string) => {
+export const writePrivate = (path: string, text: string) => {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   writeFileSync(`${path}.tmp`, text, { mode: 0o600 });
   chmodSync(`${path}.tmp`, 0o600);
@@ -70,7 +88,19 @@ export const parseConfig = (raw: unknown): KitConfig => {
   }
   const listing = c.listing && typeof c.listing === 'object' ? { name: String(c.listing.name ?? ''), style: String(c.listing.style ?? ''), via: String(c.listing.via ?? 'other') } : undefined;
   if (c.registry !== undefined && (typeof c.registry !== 'string' || !/^https?:\/\/\S+$/.test(c.registry))) throw new Error('config.json: registry must be an https:// address');
-  return { network, prover, limits, ...(c.payTo ? { payTo: String(c.payTo) } : {}), ...(listing ? { listing } : {}), ...(c.registry ? { registry: c.registry } : {}) };
+  if (c.relay !== undefined && (typeof c.relay !== 'string' || !/^https?:\/\/\S+$/.test(c.relay))) throw new Error('config.json: relay must be an https:// address');
+  if (c.port !== undefined && !(Number.isInteger(c.port) && c.port > 0 && c.port < 65536)) throw new Error('config.json: port must be a port number (1-65535)');
+  return {
+    network,
+    prover,
+    limits,
+    ...(c.payTo ? { payTo: String(c.payTo) } : {}),
+    ...(listing ? { listing } : {}),
+    ...(c.registry ? { registry: c.registry } : {}),
+    ...(c.port ? { port: c.port } : {}),
+    ...(c.remote ? { remote: true } : {}),
+    ...(c.relay ? { relay: c.relay.replace(/\/+$/, '') } : {}),
+  };
 };
 
 export const loadConfig = (home = kitHome()): KitConfig => {
@@ -129,6 +159,20 @@ export const useHome = (config: KitConfig, home = kitHome()): void => {
   process.env.NIGHTCAST_STATE_DIR ??= p.walletState;
   process.env.LUNARDRAW_DEPLOYMENTS_DIR ??= findDeployments(config.network);
 };
+
+/** A random secret kept in a private file (made the first time; `fresh` makes a new one). */
+export const ensureSecret = (path: string, fresh = false): string => {
+  if (!fresh && existsSync(path)) {
+    const s = readFileSync(path, 'utf8').trim();
+    if (/^[A-Za-z0-9_-]{32,}$/.test(s)) return s;
+  }
+  const s = Buffer.from(webcrypto.getRandomValues(new Uint8Array(32))).toString('base64url');
+  writePrivate(path, s + '\n');
+  return s;
+};
+
+/** The port of the agent's local web address. */
+export const agentPort = (config?: Pick<KitConfig, 'port'>): number => Number(process.env.LUNARDRAW_AGENT_PORT) || config?.port || DEFAULT_PORT;
 
 /** tNIGHT to STAR (the base unit). */
 export const star = (tNight: number): bigint => BigInt(Math.round(tNight * 1e6));

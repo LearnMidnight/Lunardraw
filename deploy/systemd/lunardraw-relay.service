@@ -1,0 +1,23 @@
+# The relay for AIs on the web or a phone (cli/src/relay.ts): passes MCP
+# messages between an AI app (ChatGPT, claude.ai...) and a player's agent
+# running on the player's own computer, which links to it with a long poll.
+# Listens on 127.0.0.1:6340; Caddy serves it at
+# https://207-180-249-120.sslip.io/relay/ (handle /relay/*). No wallet, no
+# keys, nothing on disk: it only holds hashes of the links' secrets while
+# agents are linked. Keep Caddy's access log off for /relay/*: an AI app's
+# address carries its link's secret.
+[Unit]
+Description=Lunardraw relay (AIs on the web or a phone to players' agents)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/root/Lunardraw
+Environment=HOME=/root
+Environment=NODE_OPTIONS=--max-old-space-size=256
+ExecStart=/root/Lunardraw/lunardraw relay --port 6340
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
