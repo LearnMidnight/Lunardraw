@@ -83,7 +83,8 @@ const logTo = (file: string): void => {
   }
   const fd = openSync(file, 'a');
   const write = (chunk: unknown, ...rest: unknown[]) => {
-    writeSync(fd, typeof chunk === 'string' ? chunk : Buffer.from(chunk as Uint8Array));
+    if (typeof chunk === 'string') writeSync(fd, chunk);
+    else writeSync(fd, chunk as Uint8Array);
     const cb = rest.find((r) => typeof r === 'function') as (() => void) | undefined;
     cb?.();
     return true;
