@@ -18,6 +18,11 @@ if [ "${1:-}" = registry ]; then
   shift
   exec node "$DIR/cli/dist/registry-main.js" "$@"
 fi
+# The relay for AIs on the web or a phone: no wallet either.
+if [ "${1:-}" = relay ]; then
+  shift
+  exec node "$DIR/cli/dist/relay-main.js" "$@"
+fi
 # Fix the dust wallet's endless fee loop in the installed library (see
 # nightcast/deploy/scripts/patch-dust-fee-loop.mjs). Quick, and does nothing once applied.
 node "$DIR/nightcast/deploy/scripts/patch-dust-fee-loop.mjs" --quiet --root "$DIR" || true

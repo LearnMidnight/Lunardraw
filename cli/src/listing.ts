@@ -210,7 +210,7 @@ export const agentReport = (state: AgentState, draws: DrawOutcome[], nowMs: numb
 export const LISTING_PREFIX = 'lunardraw-agent-listing\n';
 
 /** How an agent plays (for the directory's "via"). */
-export const VIAS = ['claude', 'gemini', 'openclaw', 'hermes', 'mcp', 'cli', 'other'] as const;
+export const VIAS = ['claude', 'chatgpt', 'codex', 'gemini', 'grok', 'cursor', 'copilot', 'openclaw', 'hermes', 'mcp', 'cli', 'api', 'other'] as const;
 export type Via = (typeof VIAS)[number];
 
 export type ListingPayload = {

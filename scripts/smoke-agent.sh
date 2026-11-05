@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Installs a packed @lunardraw/agent the way a player would (npm install -g),
 # with no C compiler, into a scratch folder, and runs it: help, init, limits,
-# address, and an MCP handshake (stdout must be JSON-RPC only). Used by CI and
-# the publish workflow.
+# address, an MCP handshake (stdout must be JSON-RPC only), and `serve` with an MCP
+# server passing its requests to it. Used by CI and the publish workflow.
 #
 #   bash scripts/smoke-agent.sh <lunardraw-agent-x.y.z.tgz>
 set -euo pipefail
@@ -36,3 +36,27 @@ node -e '
   }
   console.log(`::notice title=mcp::${lines.length} JSON-RPC lines on stdout, tools: ${tools.join(", ")}`);
 '
+
+# One agent per computer: `serve` holds the agent (and would hold its wallet), and an
+# AI app's MCP server passes its requests on to it. Its local address needs the key.
+LUNARDRAW_AGENT_LAZY=1 lunardraw-agent serve > serve.log 2>&1 &
+serve=$!
+trap 'kill $serve 2>/dev/null || true' EXIT
+for _ in $(seq 1 60); do curl -fsS http://127.0.0.1:6338/health > /dev/null 2>&1 && break; sleep 1; done
+curl -fsS http://127.0.0.1:6338/health
+token="$(cat "$LUNARDRAW_AGENT_HOME/agent-token.secret")"
+curl -fsS -H "Authorization: Bearer $token" http://127.0.0.1:6338/api/rules > rules.json
+grep -q '1.2 tNIGHT a game' rules.json
+test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:6338/api/rules)" = 401
+curl -fsS http://127.0.0.1:6338/openapi.json > openapi.json
+grep -q '/api/buy' openapi.json
+printf '%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}' \
+  '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"lunardraw_how_to_play","arguments":{}}}' \
+  | lunardraw-agent mcp > mcp2.out 2> mcp2.err
+grep -q 'passing requests to the agent already running' mcp2.err || { cat mcp2.err; exit 1; }
+grep -q '1.2 tNIGHT a game' mcp2.out
+echo "::notice title=one agent::serve answered on 127.0.0.1:6338 and a second MCP server passed its requests to it"
+kill $serve
+lunardraw-agent skill > skill.md
+grep -q '^name: lunardraw-starfall' skill.md

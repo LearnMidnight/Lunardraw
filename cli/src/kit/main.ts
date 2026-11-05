@@ -3,13 +3,30 @@
  * lunardraw-agent: play Starfall (Lunardraw's lottery on Midnight Preprod)
  * from an AI agent's own machine and wallet. See README-agent.md.
  */
+import { openSync, renameSync, statSync, writeSync } from 'node:fs';
 import { parseArgs } from 'node:util';
-import { DEFAULT_CONFIG, ensureWallet, hasBlockfrost, type KitConfig, kitHome, kitPaths, loadConfig, saveBlockfrost, saveConfig, useHome } from './home.js';
+import {
+  agentPort,
+  DEFAULT_CONFIG,
+  DEFAULT_RELAY,
+  ensureSecret,
+  ensureWallet,
+  hasBlockfrost,
+  type KitConfig,
+  kitHome,
+  kitPaths,
+  loadConfig,
+  saveBlockfrost,
+  saveConfig,
+  useHome,
+} from './home.js';
+import type { Player } from './player.js';
 
 export const KIT_USAGE = `lunardraw-agent: play Starfall, Lunardraw's lottery on the Midnight Preprod test network, from your own wallet.
 
   lunardraw-agent setup                              the guided setup: start here
-  lunardraw-agent connect                            add Lunardraw to the AI apps on this computer (Claude, Claude Code, Gemini CLI)
+  lunardraw-agent connect                            add Lunardraw to the AI apps on this computer (Claude, ChatGPT,
+                                                     Codex, Gemini CLI, Cursor, VS Code, Windsurf, LM Studio, OpenClaw, Hermes)
   lunardraw-agent doctor                             check everything and say what to fix
   lunardraw-agent init [--blockfrost <project id>]   the same without questions: a wallet and a config
   lunardraw-agent address                            the wallet's address (to fund it from the faucet)
@@ -21,13 +38,19 @@ export const KIT_USAGE = `lunardraw-agent: play Starfall, Lunardraw's lottery on
   lunardraw-agent play [--style mix|quickpick|lucky|moonhit|system] [--games <n>] [--numbers ... --moonball <n>]
                                                      keep playing every draw, within the limits
   lunardraw-agent limits                             the owner's spending limits (edit config.json to change)
-  lunardraw-agent list --name <name> [--style "<few words>"] [--via claude|gemini|openclaw|hermes|mcp|cli|other]
+  lunardraw-agent list --name <name> [--style "<few words>"] [--via claude|chatgpt|gemini|openclaw|hermes|mcp|cli|...]
                                                      show this agent in lunardraw.io's agent directory (its name, style
                                                      and totals, signed by its wallet; never its numbers)
   lunardraw-agent unlist                             take it out of the directory
-  lunardraw-agent mcp                                run as an MCP server for your AI (Claude, Gemini, OpenClaw, Hermes...)
+  lunardraw-agent mcp                                run as an MCP server for your AI (what connect sets up)
+  lunardraw-agent remote [off | new-link | address]  let ChatGPT, Claude or Grok on the web or a phone play too, through
+                                                     Lunardraw's relay (keeps the agent running from sign-in)
+  lunardraw-agent serve [--port <n>] [--host <ip>]   run the agent here: a local address for your own programs
+                                                     (REST and MCP over HTTP; see /openapi.json) and the relay link
+  lunardraw-agent skill                              how an AI agent plays, as a skill file (SKILL.md) to give it
 
 --json prints machine-readable output (status, wallet, buy, tickets).
+One agent runs per computer: every AI app connected to it shares it (and its open wallet).
 
 Everything lives in ${kitHome()} (LUNARDRAW_AGENT_HOME). Test tokens only: tNIGHT has no value.
 A new wallet's first sync reads the whole Preprod chain, which takes hours; after that its saved state
@@ -51,11 +74,52 @@ const setup = (): { config: KitConfig; seed: string } => {
   return { config, seed: ensureWallet().seed };
 };
 
+/** Send everything this process prints to a log file (the agent in the background). */
+const logTo = (file: string): void => {
+  try {
+    if (statSync(file).size > 5 * 2 ** 20) renameSync(file, `${file}.old`);
+  } catch {
+    /* new log */
+  }
+  const fd = openSync(file, 'a');
+  const write = (chunk: unknown, ...rest: unknown[]) => {
+    if (typeof chunk === 'string') writeSync(fd, chunk);
+    else writeSync(fd, chunk as Uint8Array);
+    const cb = rest.find((r) => typeof r === 'function') as (() => void) | undefined;
+    cb?.();
+    return true;
+  };
+  process.stdout.write = write as typeof process.stdout.write;
+  process.stderr.write = write as typeof process.stderr.write;
+};
+
+/** The agent running on this computer (an AI app's, or `serve`), to ask instead of opening the wallet again. */
+const runningAgent = async (config: KitConfig) => {
+  const { findHost } = await import('./host.js');
+  const home = kitHome();
+  const port = agentPort(config);
+  if (!(await findHost(port, home))) return undefined;
+  const token = ensureSecret(kitPaths(home, config.network).token);
+  const call = async (method: 'GET' | 'POST', path: string, body?: unknown) => {
+    const r = await fetch(`http://127.0.0.1:${port}${path}`, {
+      method,
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      signal: AbortSignal.timeout(5 * 60_000),
+    });
+    const out = (await r.json()) as { error?: string };
+    if (!r.ok) throw new Error(out.error ?? `the agent answered ${r.status}`);
+    return out;
+  };
+  return { get: (path: string) => call('GET', path), post: (path: string, body: unknown) => call('POST', path, body) };
+};
+
 export const kit = async (argv: string[]): Promise<number> => {
   const [command, ...rest] = argv;
-  const { values } = parseArgs({
+  const { values, positionals } = parseArgs({
     args: rest,
     strict: true,
+    allowPositionals: true,
     options: {
       blockfrost: { type: 'string' },
       network: { type: 'string' },
@@ -71,6 +135,11 @@ export const kit = async (argv: string[]): Promise<number> => {
       style: { type: 'string' },
       name: { type: 'string' },
       via: { type: 'string' },
+      port: { type: 'string' },
+      host: { type: 'string' },
+      log: { type: 'string' },
+      'no-autostart': { type: 'boolean', default: false },
+      'stop-at-login': { type: 'boolean', default: false },
       help: { type: 'boolean', default: false },
     },
   });
@@ -124,8 +193,8 @@ export const kit = async (argv: string[]): Promise<number> => {
       const found = findApps();
       const results = connectApps(found, entry);
       for (const r of results) say(`${r.ok ? '✓' : '✗'} ${r.name}: ${r.note}`);
-      say(found.length ? '' : 'No Claude desktop app, Claude Code or Gemini CLI found on this computer.');
-      say('Another agent (OpenClaw, Hermes, Cursor…)? Add it there:');
+      say(found.length ? '' : 'No AI app found on this computer (Claude, ChatGPT, Codex, Gemini CLI, Cursor, VS Code, Windsurf, LM Studio, OpenClaw, Hermes).');
+      say('Something else? Add it there:');
       for (const line of manualLines(entry)) say(line);
       say('\nWhat now:');
       for (const line of nextSteps(results.filter((r) => r.ok).map((r) => r.id))) say(`  ${line}`);
@@ -164,16 +233,29 @@ export const kit = async (argv: string[]): Promise<number> => {
         line(true, config.listing ? `in the agent directory as ${config.listing.name}` : 'not in the agent directory (optional: `lunardraw-agent list --name <name>`)');
         line(true, `spending limits: ${config.limits.perDraw} tNIGHT a draw, ${config.limits.perDay} a day`);
       }
+      if (config) {
+        const { findHost } = await import('./host.js');
+        const { serving } = await import('./remote.js');
+        const { startsAtLogin } = await import('./autostart.js');
+        const host = await findHost(agentPort(config), kitHome());
+        line(true, host ? `the agent is running (process ${host.pid}, on port ${agentPort(config)})` : 'the agent isn\'t running now (an AI app starts it when it needs it)');
+        if (config.remote) {
+          const bg = serving(kitHome());
+          line(!!bg, bg ? 'web and phone link: on, and the agent is running in the background' : 'web and phone link: on, but the agent isn\'t running in the background');
+          if (!bg) fix.push('Run `lunardraw-agent remote` to start it (AIs on the web or a phone can\'t reach it until then).');
+          line(startsAtLogin(), startsAtLogin() ? 'it starts when you sign in' : 'it doesn\'t start when you sign in (`lunardraw-agent remote` sets that up)');
+        } else line(true, 'web and phone link: off (optional: `lunardraw-agent remote`)');
+      }
       const apps = findApps();
       const connected = apps.filter((a) => isConnected(a));
       if (!apps.length) {
-        line(false, 'no AI app found (Claude desktop app, Claude Code or Gemini CLI)');
-        fix.push('Install the Claude desktop app from https://claude.ai/download, sign in, then run `lunardraw-agent connect`.');
+        line(false, 'no AI app found (Claude, ChatGPT, Codex, Gemini CLI, Cursor, VS Code, Windsurf, LM Studio, OpenClaw, Hermes)');
+        fix.push('Install the Claude desktop app (https://claude.ai/download) or the ChatGPT desktop app, sign in, then run `lunardraw-agent connect`.');
       }
       for (const a of apps) line(connected.includes(a), `${a.name}: ${connected.includes(a) ? 'Lunardraw is added' : 'Lunardraw isn\'t added yet'}`);
-      if (apps.length && connected.length < apps.length) fix.push('Run `lunardraw-agent connect`.');
-      if (!fix.length && connected.some((a) => a.id === 'claude-desktop')) {
-        fix.push('All good. If Claude doesn\'t show the Lunardraw tools, quit it completely and open it again, then ask in a new chat: "What\'s on in Starfall right now?"');
+      if (apps.length && !connected.length) fix.push('Run `lunardraw-agent connect`.');
+      if (!fix.length && connected.some((a) => a.id === 'claude-desktop' || a.id === 'chatgpt-codex')) {
+        fix.push('All good. If your AI app doesn\'t show the Lunardraw tools, quit it completely and open it again, then ask in a new chat: "What\'s on in Starfall right now?"');
       }
       say(`\n${fix.length ? 'Next' : 'All good'}:`);
       for (const f of fix.length ? fix : ['Ask your AI: "What\'s on in Starfall right now?" For tNIGHT and DUST: `lunardraw-agent wallet`.']) say(`  ${f}`);
@@ -209,6 +291,15 @@ export const kit = async (argv: string[]): Promise<number> => {
 
     case 'wallet': {
       const { config, seed } = setup();
+      const running = await runningAgent(config);
+      if (running) {
+        // the agent running here has the wallet open: ask it (opening it again would clash)
+        const w = (await running.get('/api/wallet')) as { address: string; tNight?: number; dust?: string; status?: string; note?: string };
+        if (values.json) return json(w), 0;
+        if (w.status === 'opening') say(`Wallet ${w.address}\n${w.note}`);
+        else say(`Wallet ${w.address}\ntNIGHT: ${w.tNight}\nDUST:   ${w.dust} (pays the fees; it builds up from the tNIGHT held)`);
+        return 0;
+      }
       const { withPlayer } = await import('./player.js');
       return withPlayer(config, seed, async (p) => {
         const { night, dust } = await p.balances();
@@ -225,6 +316,29 @@ export const kit = async (argv: string[]): Promise<number> => {
       const { readOverview, withPlayer } = await import('./player.js');
       const { overview } = await readOverview(config);
       if (!overview.onSale) throw new Error('no draw is on sale right now; the next opens on the hour');
+      const running = await runningAgent(config);
+      if (running) {
+        // the agent running here has the wallet open: it buys (opening the wallet again would clash)
+        process.stderr.write('Buying through the agent running on this computer…\n');
+        const { buyToolArgs } = await import('./mcp.js');
+        let answer = (await running.post('/api/buy', buyToolArgs(values))) as { status?: string; bought?: number; of?: number };
+        while (answer.status === 'buying' || answer.status === 'a purchase is already on its way') {
+          await new Promise((r) => setTimeout(r, 10_000));
+          const t = (await running.get('/api/tickets')) as { purchase?: { state: string; outcome?: { bought: number; of: number }; error?: string } };
+          if (t.purchase && t.purchase.state !== 'buying') {
+            if (t.purchase.error) throw new Error(t.purchase.error);
+            answer = t.purchase.outcome ?? { bought: 0, of: 0 };
+          }
+        }
+        const done = answer as Awaited<ReturnType<Player['buy']>>;
+        if (values.json) return json(done), done.bought === done.of ? 0 : 1;
+        if (done.bought) {
+          say(`Bought ${done.bought} ticket(s), ${done.games} game(s), for draw ${done.draw} (${done.cost}). Winnings are paid automatically to ${done.payTo}.`);
+          done.tickets.forEach((t, i) => say(`  ticket ${i + 1}: ${t}`));
+        }
+        if (done.message) say(`Stopped after ${done.bought} of ${done.of} ticket(s): ${done.message}`);
+        return done.bought === done.of ? 0 : 1;
+      }
       return withPlayer(config, seed, async (p) => {
         const outcome = await p.buy(entries, (m) => p.session.logger.info(m));
         if (outcome.bought && config.listing) {
@@ -325,9 +439,114 @@ export const kit = async (argv: string[]): Promise<number> => {
 
     case 'mcp': {
       process.env.NIGHTCAST_LOG_FD = '2';
+      const { serveStdio, takeStdout } = await import('./mcp.js');
+      const out = takeStdout(); // from here on, stdout carries the protocol only
       const { mcpTools } = await import('./tools.js');
-      const { serveStdio } = await import('./mcp.js');
-      await serveStdio(mcpTools());
+      const { agentBackend } = await import('./host.js');
+      const config = loadConfig();
+      const home = kitHome();
+      // one agent per computer: the first app's server opens the wallet, the others pass their requests to it
+      const backend = await agentBackend({
+        home,
+        port: agentPort(config),
+        token: ensureSecret(kitPaths(home, config.network).token),
+        makeTools: () => mcpTools(),
+        log: (m) => process.stderr.write(`lunardraw: ${m}\n`),
+      });
+      await serveStdio((msg, notify) => backend.call(msg, notify), out);
+      return 0;
+    }
+
+    case 'serve': {
+      if (values.log) logTo(values.log);
+      const config = loadConfig();
+      useHome(config);
+      const home = kitHome();
+      const paths = kitPaths(home, config.network);
+      const { serving, markServing } = await import('./remote.js');
+      const other = serving(home);
+      if (other && other !== process.pid) {
+        say(`The agent is already running in the background (process ${other}).`);
+        return 0;
+      }
+      markServing(home);
+      const port = values.port ? Number(values.port) : agentPort(config);
+      const token = ensureSecret(paths.token);
+      const { mcpTools } = await import('./tools.js');
+      const { agentBackend } = await import('./host.js');
+      const { linkToRelay } = await import('./relay-link.js');
+      const { SERVER_INFO } = await import('./mcp.js');
+      const log = (m: string) => say(`${new Date().toISOString()} ${m}`);
+      const backend = await agentBackend({ home, port, token, bind: values.host, makeTools: () => mcpTools(), log });
+      if (backend.mode() === 'host') {
+        log(`local address: http://${values.host && values.host !== '0.0.0.0' ? values.host : '127.0.0.1'}:${port} (MCP at /mcp, REST at /api, described at /openapi.json; the key is in ${paths.token})`);
+      }
+      // the link for AIs on the web or a phone, while config.json says "remote": true
+      const current = () => {
+        try {
+          return loadConfig(home);
+        } catch {
+          return config;
+        }
+      };
+      linkToRelay({
+        settings: () => {
+          const c = current();
+          return { on: !!c.remote, relay: c.relay ?? DEFAULT_RELAY, secret: c.remote ? ensureSecret(paths.link) : '' };
+        },
+        answer: (msg) => backend.call(msg),
+        version: SERVER_INFO.version,
+        log,
+      });
+      // if the agent this passes requests to stops (its app closed), take over straight away
+      setInterval(() => void backend.ensure().catch((err: unknown) => log(err instanceof Error ? err.message : String(err))), 30_000);
+      await new Promise(() => undefined);
+      return 0;
+    }
+
+    case 'remote': {
+      const { config } = setup();
+      const home = kitHome();
+      const what = positionals[0] ?? 'on';
+      const { remoteAddress, remoteSteps, turnOnRemote } = await import('./remote.js');
+      if (what === 'off') {
+        saveConfig({ ...config, remote: false }, home);
+        say('The link for AIs on the web or a phone is off (the running agent stops linking within a minute).');
+        if (values['stop-at-login']) {
+          const { stopAtLogin } = await import('./autostart.js');
+          const removed = stopAtLogin();
+          say(removed ? `It won't start when you sign in any more (removed ${removed}).` : 'It wasn\'t set to start when you sign in.');
+        } else say('The agent still starts when you sign in, for your AI apps here (`remote off --stop-at-login` stops that too).');
+        return 0;
+      }
+      if (what === 'address' || what === 'link') {
+        if (!config.remote) {
+          say('The link is off: `lunardraw-agent remote` turns it on.');
+          return 1;
+        }
+        say(remoteAddress(config, home));
+        return 0;
+      }
+      if (what === 'new-link') {
+        const address = remoteAddress({ ...config, remote: true }, home, true);
+        say('A new private address (the old one has stopped working). Replace it in your AI apps:\n');
+        say(`  ${address}\n`);
+        return 0;
+      }
+      if (what !== 'on') throw new Error(`lunardraw-agent remote [on | off | new-link | address], not "${what}"`);
+      const r = turnOnRemote(config, home, { atLogin: !values['no-autostart'] });
+      say('AIs on the web or a phone can now play with this agent, through Lunardraw\'s relay. Your wallet stays here.\n');
+      say(r.started === 'already' ? '✓ the agent is running in the background' : r.started === 'by the system' ? '✓ the agent is starting in the background' : '✓ the agent is starting in the background (it opens the wallet: a few minutes)');
+      if (r.atLogin) say(`✓ it starts when you sign in to this computer (${r.atLogin})`);
+      say('\nYour private address for AI apps:\n');
+      say(`  ${r.address}\n`);
+      for (const line of remoteSteps()) say(line);
+      return 0;
+    }
+
+    case 'skill': {
+      const { SKILL } = await import('./skill.js');
+      say(SKILL);
       return 0;
     }
 

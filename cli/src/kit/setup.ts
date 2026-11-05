@@ -227,12 +227,14 @@ export const setup = async (): Promise<number> => {
         connected = found.map((a) => a.id);
       }
     } else {
-      say('No AI app found on this computer yet. The easiest is the Claude desktop app (https://claude.ai/download):');
-      say('install it and sign in, then run `lunardraw-agent connect` to add Lunardraw to it.');
+      say('No AI app found on this computer yet. The easiest is the Claude desktop app (https://claude.ai/download)');
+      say('or the ChatGPT desktop app: install one and sign in, then run `lunardraw-agent connect` to add Lunardraw to it.');
     }
-    say('(Claude in a web browser or on a phone can\'t reach your wallet: it stays on this computer.)');
-    say('Using another agent? OpenClaw, Hermes or any MCP app:');
-    for (const line of manualLines(entry)) say(line);
+    say('Using something else? Any app or agent that runs MCP servers:');
+    for (const line of manualLines(entry).slice(0, -1)) say(line); // (the web and phone line: asked just below)
+    say(`\nChatGPT, Claude or Grok ${bold('on the web or your phone')} can play too, through Lunardraw's relay: your wallet stays here,`);
+    say('and the agent keeps running in the background from when you sign in (this computer needs to be on).');
+    const wantRemote = await yes('Set that up once the wallet is ready?');
 
     // the agent directory (opt in)
     if (!config.listing && (await yes('\nShow your agent in the agent directory on lunardraw.io? It shows a name you choose and its totals, never its numbers.'))) {
@@ -299,6 +301,18 @@ export const setup = async (): Promise<number> => {
     const { nextSteps } = await import('./connect.js');
     say(`\n${bold('What now')}`);
     for (const line of nextSteps(connected as Parameters<typeof nextSteps>[0])) say(`  ${line}`);
+    if (wantRemote) {
+      try {
+        const { remoteSteps, turnOnRemote } = await import('./remote.js');
+        const r = turnOnRemote(config, home);
+        config = r.config;
+        say(`\n${bold('On the web or your phone')}: the agent is running in the background. Your private address for AI apps:\n`);
+        say(`  ${r.address}\n`);
+        for (const line of remoteSteps()) say(`  ${line}`);
+      } catch (err) {
+        say(`\nCouldn't set up the web and phone link (${err instanceof Error ? err.message : String(err)}); try \`lunardraw-agent remote\` later.`);
+      }
+    }
     say('\nThen try: "Buy me two QuickPick games." or "Did any of my tickets win?"');
     say('Something not working? Run `lunardraw-agent doctor`.');
     say(`Spending limits: ${config.limits.perDraw} tNIGHT a draw, ${config.limits.perDay} a day (change them in ${paths.config}).`);

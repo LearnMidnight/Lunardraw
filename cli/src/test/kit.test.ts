@@ -344,6 +344,74 @@ describe('the guided setup', () => {
     }
   });
 
+  it('adds Lunardraw to ChatGPT and Codex (TOML), Hermes (YAML), VS Code and the other apps, keeping the rest', async () => {
+    const { connectApps, findApps, isConnected, withLunardrawToml, withLunardrawVscode, withLunardrawYaml } = await import('../kit/connect.js');
+    const entry = { command: '/usr/bin/node', args: ['/opt/kit/bin/lunardraw-agent.js', 'mcp'] };
+    // Codex's config.toml (the ChatGPT desktop app shares it): only our table changes
+    const toml = withLunardrawToml('model = "o3"\n\n[mcp_servers.files]\ncommand = "x"\n\n[mcp_servers.lunardraw]\ncommand = "old"\n\n[mcp_servers.lunardraw.env]\nA = "1"\n\n[profiles.fast]\nmodel = "x"\n', entry);
+    expect(toml).toContain('[mcp_servers.files]\ncommand = "x"');
+    expect(toml).toContain('[profiles.fast]\nmodel = "x"');
+    expect(toml).not.toMatch(/old|A = "1"/);
+    expect(toml.match(/\[mcp_servers\.lunardraw\]/g)).toHaveLength(1);
+    expect(toml).toContain('args = ["/opt/kit/bin/lunardraw-agent.js", "mcp"]\nstartup_timeout_sec = 60\ntool_timeout_sec = 120');
+    expect(withLunardrawToml(toml, entry)).toBe(toml);
+    expect(withLunardrawToml('', { command: 'C:\\Program Files\\nodejs\\node.exe', args: ['a', 'mcp'] })).toContain('command = "C:\\\\Program Files\\\\nodejs\\\\node.exe"');
+    expect(() => withLunardrawToml('mcp_servers.lunardraw.command = "x"\n', entry)).toThrow(/by hand/);
+    // Hermes's config.yaml: its own indent kept, the old entry replaced
+    const yaml = withLunardrawYaml('model: hermes\nmcp_servers:\n    files:\n        command: "x"\n    lunardraw:\n        command: "old"\n\n    other:\n        command: "y"\nterminal:\n  backend: local\n', entry);
+    expect(yaml).not.toContain('old');
+    expect(yaml).toContain('    lunardraw:\n        command: "/usr/bin/node"\n        args: ["/opt/kit/bin/lunardraw-agent.js", "mcp"]');
+    expect(yaml).toContain('    files:\n        command: "x"');
+    expect(yaml).toContain('    other:\n        command: "y"\nterminal:\n  backend: local');
+    expect(withLunardrawYaml(yaml, entry)).toBe(yaml);
+    expect(withLunardrawYaml('model: x\n', entry)).toBe('model: x\n\nmcp_servers:\n  lunardraw:\n    command: "/usr/bin/node"\n    args: ["/opt/kit/bin/lunardraw-agent.js", "mcp"]\n');
+    expect(withLunardrawYaml('mcp_servers: {}\n', entry)).toMatch(/^mcp_servers:\n  lunardraw:/);
+    expect(() => withLunardrawYaml('mcp_servers: { a: 1 }\n', entry)).toThrow(/by hand/);
+    // VS Code: under "servers", as stdio
+    expect(JSON.parse(withLunardrawVscode('{"servers":{"a":{"command":"x"}},"inputs":[]}', entry))).toEqual({ servers: { a: { command: 'x' }, lunardraw: { type: 'stdio', ...entry } }, inputs: [] });
+    // a home with them all: each found and set up; a file with comments is left alone
+    const home = mkdtempSync(join(tmpdir(), 'connect-all-'));
+    const env = { HOME: home };
+    for (const d of ['.codex', '.cursor', '.codeium/windsurf', '.lmstudio', '.hermes', '.config/Code/User']) mkdirSync(join(home, d), { recursive: true });
+    writeFileSync(join(home, '.cursor', 'mcp.json'), '// mine\n{"mcpServers":{}}');
+    writeFileSync(join(home, '.hermes', 'config.yaml'), 'model: x\n');
+    const apps = findApps({ home, env, hasCommand: () => false });
+    expect(apps.map((a) => a.id)).toEqual(['chatgpt-codex', 'cursor', 'vscode', 'windsurf', 'lm-studio', 'hermes']);
+    const results = connectApps(apps, entry);
+    expect(results.filter((r) => !r.ok).map((r) => r.id)).toEqual(['cursor']);
+    expect(results.find((r) => r.id === 'cursor')!.note).toMatch(/comments.*by hand/);
+    expect(readFileSync(join(home, '.cursor', 'mcp.json'), 'utf8')).toBe('// mine\n{"mcpServers":{}}');
+    expect(readFileSync(join(home, '.hermes', 'config.yaml.before-lunardraw'), 'utf8')).toBe('model: x\n');
+    for (const a of apps) expect(isConnected(a)).toBe(a.id !== 'cursor');
+  });
+
+  it('keeps the agent running from sign-in, and gives AIs on the web or a phone a private address', async () => {
+    const { autostartText } = await import('../kit/autostart.js');
+    const launch = { command: 'C:\\Program Files\\nodejs\\node.exe', args: ['C:\\npm\\lunardraw-agent.js', 'serve', '--log', 'C:\\h\\agent.log'] };
+    // Windows: a hidden start, every part quoted (VBScript doubles the quotes)
+    expect(autostartText(launch, 'C:\\h\\agent.log', 'win32')).toContain('sh.Run """C:\\Program Files\\nodejs\\node.exe"" ""C:\\npm\\lunardraw-agent.js"" ""serve"" ""--log"" ""C:\\h\\agent.log""", 0, False');
+    const mac = autostartText({ command: '/usr/local/bin/node', args: ['/opt/a & b/x.js', 'serve'], env: { LUNARDRAW_AGENT_HOME: '/h' } }, '/h/agent.log', 'darwin');
+    expect(mac).toContain('<string>/opt/a &amp; b/x.js</string>');
+    expect(mac).toContain('<key>LUNARDRAW_AGENT_HOME</key><string>/h</string>');
+    expect(autostartText({ command: '/usr/bin/node', args: ['/opt/a b/x.js', 'serve'] }, '/h/agent.log', 'linux')).toContain('ExecStart=/usr/bin/node "/opt/a b/x.js" serve');
+    const { linkAddress } = await import('../kit/relay-link.js');
+    expect(linkAddress('https://relay.example/relay/', 'abc')).toBe('https://relay.example/relay/mcp/abc');
+    const { remoteSteps } = await import('../kit/remote.js');
+    expect(remoteSteps().join('\n')).toMatch(/ChatGPT[\s\S]*No authentication[\s\S]*Claude[\s\S]*Add custom connector[\s\S]*Grok[\s\S]*new-link/);
+    // the owner's config keeps the link's settings
+    expect(parseConfig({ remote: true, relay: 'https://r.example/relay/', port: 7000 })).toMatchObject({ remote: true, relay: 'https://r.example/relay', port: 7000 });
+    expect(() => parseConfig({ port: 70000 })).toThrow(/port/);
+    // `buy`'s options, for the agent already running here
+    const { buyToolArgs } = await import('../kit/mcp.js');
+    expect(buyToolArgs({ games: '2', sweep: false })).toEqual({ games: 2 });
+    expect(buyToolArgs({ numbers: '3 9,14 21 27 33 35', moonball: '8' })).toEqual({ numbers: [3, 9, 14, 21, 27, 33, 35], moonball: 8 });
+    expect(buyArgs(buyToolArgs({ system: '9', numbers: '1 2 3 4 5 6 7 8 9', sweep: true }))).toMatchObject({ system: '9', numbers: '1 2 3 4 5 6 7 8 9', sweep: true });
+    // a skill file for agents that use the command line
+    const { SKILL } = await import('../kit/skill.js');
+    expect(SKILL).toMatch(/^---\nname: lunardraw-starfall\ndescription: /);
+    expect(SKILL).toContain('lunardraw-agent buy --games 2 --json');
+  });
+
   it('runs an MCP server, or from an unwritable folder, in its own home', async () => {
     const { workingFolder } = await import('../kit/cwd.js');
     expect(workingFolder('mcp', 'C:\\Windows\\System32', '/h', () => false)).toBe('/h');
