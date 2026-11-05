@@ -190,16 +190,36 @@ export const serveHost = (o: {
 
 export const portOf = (server: Server): number => (server.address() as AddressInfo).port;
 
-/** The agent running on this computer for this home, if there is one. */
-export const findHost = async (port: number, home: string, fetchFn: typeof fetch = fetch): Promise<Health | undefined> => {
+/**
+ * Who answers on the port: this home's agent ('ours', with its health),
+ * something else ('other': another program, or another home's agent), or
+ * nothing in time ('none': no server, or one too busy to answer, such as an
+ * agent opening its wallet).
+ */
+export const probeHost = async (
+  port: number,
+  home: string,
+  fetchFn: typeof fetch = fetch,
+  ms = 2_000,
+): Promise<{ kind: 'ours'; health: Health } | { kind: 'other' } | { kind: 'none' }> => {
+  let r: Response;
   try {
-    const r = await fetchFn(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(2_000) });
-    if (!r.ok) return undefined;
-    const h = (await r.json()) as Health;
-    return h.lunardraw === 'agent' && h.home === homeId(home) ? h : undefined;
+    r = await fetchFn(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(ms) });
   } catch {
-    return undefined;
+    return { kind: 'none' };
   }
+  try {
+    const h = (await r.json()) as Health;
+    return r.ok && h.lunardraw === 'agent' && h.home === homeId(home) ? { kind: 'ours', health: h } : { kind: 'other' };
+  } catch {
+    return { kind: 'other' };
+  }
+};
+
+/** The agent running on this computer for this home, if there is one (and it answers within 2 s). */
+export const findHost = async (port: number, home: string, fetchFn: typeof fetch = fetch): Promise<Health | undefined> => {
+  const p = await probeHost(port, home, fetchFn);
+  return p.kind === 'ours' ? p.health : undefined;
 };
 
 /** Pass an MCP message to the host; undefined for a notification. Throws if the host can't be reached. */
@@ -241,6 +261,8 @@ export const agentBackend = async (o: {
   makeTools: () => Tool[];
   /** Where the local address answers (127.0.0.1 unless asked: 0.0.0.0 for an agent in a container, say). */
   bind?: string;
+  /** How long to keep asking a port's holder who it is, when it's too busy to answer (ms). */
+  settleMs?: number;
   log?: (m: string) => void;
   /** For tests. */
   fetchFn?: typeof fetch;
@@ -261,14 +283,31 @@ export const agentBackend = async (o: {
       o.log?.(`the agent is running here, on http://127.0.0.1:${o.port}`);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EADDRINUSE') throw err;
-      if (await findHost(o.port, o.home, o.fetchFn)) {
-        mode = 'passing on';
-        return;
+      // Someone has the port. Very likely our own agent that started a moment earlier (an app
+      // can start two servers at once) and is busy opening the wallet, so slow to answer: keep
+      // asking. Opening the wallet here too would clash with it ("wallet in use").
+      const until = Date.now() + (o.settleMs ?? 30_000);
+      for (;;) {
+        const who = await probeHost(o.port, o.home, o.fetchFn, 5_000);
+        if (who.kind === 'ours') {
+          mode = 'passing on';
+          return;
+        }
+        if (who.kind === 'other') {
+          // another program (or another home's agent) has the port: work on our own, as before
+          tools = o.makeTools();
+          mode = 'alone';
+          o.log?.(`port ${o.port} is taken by another program, so this agent runs on its own (set "port" in config.json to use another)`);
+          return;
+        }
+        if (Date.now() > until) {
+          // still no answer: pass on anyway; calls retry, and take over if it has gone
+          mode = 'passing on';
+          o.log?.(`port ${o.port} is taken but its holder doesn't answer yet; passing requests to it`);
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 1_000));
       }
-      // something else has the port: work on our own, as before
-      tools = o.makeTools();
-      mode = 'alone';
-      o.log?.(`port ${o.port} is taken by another program, so this agent runs on its own (set "port" in config.json to use another)`);
     }
   };
   if (!(await findHost(o.port, o.home, o.fetchFn))) await become();
