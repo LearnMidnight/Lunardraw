@@ -1,7 +1,7 @@
 import { request } from 'node:http';
 import { describe, it } from 'vitest';
 import { agentBackend, findHost, homeId, portOf, serveHost } from '../kit/host.js';
-import type { Tool } from '../kit/mcp.js';
+import type { Rpc, Tool } from '../kit/mcp.js';
 import { linkAddress, linkToRelay } from '../kit/relay-link.js';
 import { AWAY_TEXT, createRelay, serveRelay } from '../relay.js';
 import assert from 'node:assert/strict';
@@ -17,7 +17,7 @@ const fakeTools = (tag: string): Tool[] => {
 };
 const json = async (r: Promise<Response>): Promise<any> => (await r).json();
 const token = 'T'.repeat(43);
-const rpc = (id: number, method: string, params: object = {}) => ({ jsonrpc: '2.0', id, method, params });
+const rpc = (id: number, method: string, params: Record<string, unknown> = {}): Rpc => ({ jsonrpc: '2.0', id, method, params });
 // raw request (to set Host and Origin, which fetch won't)
 const raw = (port: number, path: string, headers: Record<string, string>, body?: string) =>
   new Promise<{ status: number; body: string }>((resolve, reject) => {
