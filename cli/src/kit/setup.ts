@@ -6,7 +6,7 @@
  * time: done steps are skipped, and the sync carries on where it stopped.
  */
 import { spawn } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -61,6 +61,34 @@ export const claudeDesktopConfig = (platform: NodeJS.Platform = process.platform
     : platform === 'win32'
       ? join(env.APPDATA ?? join(home, 'AppData', 'Roaming'), 'Claude', 'claude_desktop_config.json')
       : join(env.XDG_CONFIG_HOME ?? join(home, '.config'), 'Claude', 'claude_desktop_config.json');
+
+/**
+ * Every place Claude Desktop may keep its settings: the usual one above and,
+ * on Windows, the Microsoft Store install's own folder
+ * (%LOCALAPPDATA%\\Packages\\<Claude package>\\LocalCache\\Roaming\\Claude), which
+ * the usual check misses.
+ */
+export const claudeDesktopConfigs = (
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+  home = homedir(),
+  list: (dir: string) => string[] = (dir) => {
+    try {
+      return readdirSync(dir);
+    } catch {
+      return [];
+    }
+  },
+): string[] => {
+  const out = [claudeDesktopConfig(platform, env, home)];
+  if (platform === 'win32') {
+    const packages = join(env.LOCALAPPDATA ?? join(home, 'AppData', 'Local'), 'Packages');
+    for (const name of list(packages).filter((n) => /claude/i.test(n))) {
+      out.push(join(packages, name, 'LocalCache', 'Roaming', 'Claude', 'claude_desktop_config.json'));
+    }
+  }
+  return out;
+};
 
 export type McpEntry = { command: string; args: string[]; env?: Record<string, string> };
 
@@ -150,6 +178,8 @@ export const setup = async (): Promise<number> => {
       if (await yes('Open blockfrost.io in your browser now?')) openUrl(BLOCKFROST_SIGNUP);
       for (;;) {
         const id = (await rl.question('Paste the project ID here (or press Enter to stop for now): ')).trim();
+        // it's a key: don't leave it on the screen (or in a copied transcript)
+        if (id && process.stdout.isTTY) process.stdout.write(`\x1b[1A\r\x1b[2KPaste the project ID here (or press Enter to stop for now): ${'•'.repeat(8)}\n`);
         if (!id) {
           say('No problem: run `lunardraw-agent setup` again when you have it.');
           return 1;
@@ -180,7 +210,7 @@ export const setup = async (): Promise<number> => {
     // 3. the AI assistant
     step(3, 'connect your AI');
     const entry = mcpEntry();
-    const desktop = claudeDesktopConfig();
+    const desktop = claudeDesktopConfigs().find((f) => existsSync(dirname(f))) ?? claudeDesktopConfig();
     if (existsSync(dirname(desktop))) {
       if (await yes('Claude Desktop is installed. Add Lunardraw to it?')) {
         const before = existsSync(desktop) ? readFileSync(desktop, 'utf8') : undefined;
@@ -191,7 +221,10 @@ export const setup = async (): Promise<number> => {
       }
     } else {
       say('Claude Desktop isn\'t installed here (that\'s fine).');
+      say('If you do use the Claude desktop app: in Claude, open Settings → Developer → Edit Config, put this in the file, then quit and reopen Claude:');
+      say(`  ${JSON.stringify({ mcpServers: { lunardraw: entry } })}`);
     }
+    say('Claude in a web browser (claude.ai) and on a phone can\'t reach it: use the desktop app or one of these.');
     say('\nOther AI apps and agents (any that can run a local MCP server; pick the one you use):');
     say(`  Claude Code:   claude mcp add lunardraw -- "${entry.command}" "${entry.args[0]}" mcp`);
     say(`  Gemini CLI:    gemini mcp add lunardraw "${entry.command}" "${entry.args[0]}" mcp`);
@@ -259,7 +292,12 @@ export const setup = async (): Promise<number> => {
       },
     });
     if (tty) process.stdout.write('\n');
-    say(`\n${bold('All set!')} The wallet holds ${Number(result.night) / 1e6} tNIGHT and has DUST for fees.`);
+    say(
+      `\n${bold('All set!')} ` +
+        (result.night > 0n
+          ? `The wallet holds ${Number(result.night) / 1e6} tNIGHT and has DUST for fees.`
+          : 'The wallet has DUST for fees; its tNIGHT shows again once its DUST registration lands (a few minutes). Check with `lunardraw-agent status`.'),
+    );
     say('\nAsk your AI assistant something like:');
     say(bold('  "What\'s on in Starfall? Buy me two QuickPick games."'));
     say('\nOr from here: `lunardraw-agent status`, `lunardraw-agent buy --games 2`, `lunardraw-agent tickets`.');
