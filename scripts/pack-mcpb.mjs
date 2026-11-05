@@ -45,13 +45,17 @@ writeFileSync(join(ext, 'server', 'package.json'), JSON.stringify({ name: 'lunar
 writeFileSync(
   join(ext, 'server', 'index.mjs'),
   `// Lunardraw's Claude extension: the agent kit's MCP server (lunardraw-agent mcp).
-// Syncing a Preprod wallet needs more memory than Node's default, so this
-// starts Node again with 3 GB unless it already has it.
+// Syncing a Preprod wallet needs more memory than Node may give by default, so
+// unless it already has about 3 GB, this starts Node again with that much.
+// Claude may run extensions with its own Node, built into the app: its
+// executable is then Claude itself, which runs as plain Node with
+// ELECTRON_RUN_AS_NODE.
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-const big = /--max-old-space-size/.test(process.env.NODE_OPTIONS ?? '') || process.execArgv.some((a) => a.startsWith('--max-old-space-size'));
-if (!big) {
-  const r = spawnSync(process.execPath, ['--max-old-space-size=3072', fileURLToPath(import.meta.url)], { stdio: 'inherit' });
+import { getHeapStatistics } from 'node:v8';
+if (getHeapStatistics().heap_size_limit < 2.5 * 2 ** 30 && !process.env.LUNARDRAW_RESTARTED) {
+  const env = { ...process.env, LUNARDRAW_RESTARTED: '1', ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}) };
+  const r = spawnSync(process.execPath, ['--max-old-space-size=3072', fileURLToPath(import.meta.url)], { stdio: 'inherit', env, windowsHide: true });
   process.exit(r.status ?? 1);
 }
 process.argv.splice(2, Infinity, 'mcp');
@@ -70,7 +74,7 @@ const tools = [
 const manifest = {
   manifest_version: '0.3',
   name: 'lunardraw',
-  display_name: 'Lunardraw: play Starfall',
+  display_name: 'Lunardraw (Starfall)', // no colon: Claude names its log file after it, and Windows can't
   version,
   description: "Let Claude play Starfall, Lunardraw's lottery on Midnight's Preprod test network, from a wallet on your computer. Test tokens only.",
   long_description: [
@@ -96,7 +100,8 @@ const manifest = {
     entry_point: 'server/index.mjs',
     mcp_config: {
       command: 'node',
-      args: ['--max-old-space-size=3072', '${__dirname}/server/index.mjs'],
+      // the script first: Claude may start it with its own Node, which takes the first argument as the script
+      args: ['${__dirname}/server/index.mjs'],
       env: { LUNARDRAW_BLOCKFROST: '${user_config.blockfrost}' },
     },
   },

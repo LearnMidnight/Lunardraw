@@ -3,7 +3,7 @@
  * chain): what tools.ts runs, and what Lunardraw's relay lists for a player's
  * agent while it's away (relay.ts).
  */
-import { BUY_SCHEMA, type Tool } from './mcp.js';
+import { BUY_SCHEMA, handle, type Rpc, type Tool } from './mcp.js';
 
 export type ToolDef = Omit<Tool, 'run'>;
 
@@ -49,6 +49,16 @@ export const TOOL_DEFS: ToolDef[] = [
     annotations: { readOnlyHint: true, openWorldHint: true },
   },
 ];
+
+/**
+ * The answers that don't need the tools to be running (initialize, ping,
+ * tools/list), so a server can answer its app at once while Midnight's
+ * libraries load; undefined for anything else.
+ */
+export const answerWithoutTools = async (msg: Rpc): Promise<object | undefined> => {
+  if (msg.method !== 'initialize' && msg.method !== 'ping' && msg.method !== 'tools/list') return undefined;
+  return handle(msg, TOOL_DEFS.map((d) => ({ ...d, run: async () => ({ text: '' }) })), () => undefined);
+};
 
 export const toolDef = (name: string): ToolDef => {
   const def = TOOL_DEFS.find((t) => t.name === name);

@@ -17,7 +17,8 @@ node -e '
   const m = require(process.argv[1]);
   const want = ["lunardraw_how_to_play", "lunardraw_draw_on_sale", "lunardraw_wallet", "lunardraw_buy_tickets", "lunardraw_my_tickets"];
   const tools = m.tools.map((t) => t.name);
-  if (m.name !== "lunardraw" || m.server.type !== "node" || want.some((w) => !tools.includes(w)) || !m.user_config.blockfrost.sensitive) {
+  // Claude names the extension log file after display_name: no characters Windows forbids in file names
+  if (m.name !== "lunardraw" || m.server.type !== "node" || want.some((w) => !tools.includes(w)) || !m.user_config.blockfrost.sensitive || /[<>:"/\\|?*]/.test(m.display_name) || !m.server.mcp_config.args[0].endsWith("index.mjs")) {
     console.log("::error title=extension manifest::" + JSON.stringify(m).slice(0, 800)); process.exit(1);
   }
 ' "$ext/manifest.json"
@@ -40,6 +41,22 @@ node -e '
     console.log("::error title=extension mcp::" + lines.join(" ").slice(0, 1500)); process.exit(1);
   }
 ' "$work/mcp.out"
+# it answers its app at once (Claude may give it only a few seconds), however long Midnight's libraries take
+rm -rf "$LUNARDRAW_AGENT_HOME"
+node -e '
+  const { spawn } = require("child_process");
+  const t0 = Date.now();
+  const p = spawn(process.argv[1], process.argv.slice(2), { stdio: ["pipe", "pipe", "ignore"] });
+  p.stdout.once("data", (d) => {
+    const ms = Date.now() - t0;
+    const ok = JSON.parse(String(d).split("\n")[0]).result?.serverInfo?.name === "lunardraw";
+    console.log(`::notice title=extension start::answered initialize in ${ms} ms`);
+    p.kill();
+    process.exit(ok && ms < 8000 ? 0 : 1);
+  });
+  p.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "ci", version: "1" } } }) + "\n");
+  setTimeout(() => { console.log("::error title=extension start::no answer to initialize within 20 s"); p.kill(); process.exit(1); }, 20000);
+' node "${argv[@]}"
 # the first start set the agent up: a config, a wallet (mode 600) and the key from the settings
 test -f "$LUNARDRAW_AGENT_HOME/config.json"
 test "$(stat -c %a "$LUNARDRAW_AGENT_HOME/wallet.secret")" = 600
