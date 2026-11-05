@@ -344,6 +344,14 @@ describe('the guided setup', () => {
     }
   });
 
+  it('runs an MCP server, or from an unwritable folder, in its own home', async () => {
+    const { workingFolder } = await import('../kit/cwd.js');
+    expect(workingFolder('mcp', 'C:\\Windows\\System32', '/h', () => false)).toBe('/h');
+    expect(workingFolder('mcp', '/work', '/h', () => true)).toBe('/h');
+    expect(workingFolder('status', '/work', '/h', () => true)).toBe('/work');
+    expect(workingFolder('status', 'C:\\Windows\\System32', '/h', () => false)).toBe('/h');
+  });
+
   it('checks a Blockfrost key before keeping it', async () => {
     const { checkBlockfrost } = await import('../kit/setup.js');
     const answer = (status: number) => (async () => new Response('{}', { status })) as unknown as typeof fetch;
