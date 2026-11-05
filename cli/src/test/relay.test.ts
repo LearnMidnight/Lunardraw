@@ -1,4 +1,4 @@
-import { request } from 'node:http';
+import { createServer, request } from 'node:http';
 import { describe, it } from 'vitest';
 import { agentBackend, findHost, homeId, portOf, serveHost } from '../kit/host.js';
 import type { Rpc, Tool } from '../kit/mcp.js';
@@ -91,6 +91,28 @@ describe('one agent per computer, and the relay for AIs on the web or a phone', 
     assert.equal(third.mode(), 'host');
     await third.close();
   });
+
+  it('never opens the wallet a second time while the port\'s holder is too busy to answer', async () => {
+    // an app can start two servers at once; the first is busy opening the wallet and slow to answer /health
+    const P = 40000 + Math.floor(Math.random() * 20000);
+    const busy = createServer((_req, res) => setTimeout(() => res.end(JSON.stringify({ lunardraw: 'agent', home: homeId('/race'), pid: 1, version: 'x', since: '' })), 3_000));
+    await new Promise<void>((r) => busy.listen(P, '127.0.0.1', () => r()));
+    let made = 0;
+    const second = await agentBackend({ home: '/race', port: P, token, makeTools: () => (made++, fakeTools('second')) });
+    assert.equal(second.mode(), 'passing on');
+    assert.equal(made, 0);
+    // one that never answers: still passes on (after settleMs) rather than open the wallet
+    const silent = createServer(() => undefined);
+    const Q = P + 1;
+    await new Promise<void>((r) => silent.listen(Q, '127.0.0.1', () => r()));
+    const third = await agentBackend({ home: '/race', port: Q, token, makeTools: () => (made++, fakeTools('third')), settleMs: 1_000 });
+    assert.equal(third.mode(), 'passing on');
+    assert.equal(made, 0);
+    for (const s of [busy, silent]) {
+      s.closeAllConnections();
+      s.close();
+    }
+  }, 30_000);
 
   it('passes an AI app\'s messages to the linked agent, and answers for it while it\'s away', async () => {
     // 3. the relay, end to end
