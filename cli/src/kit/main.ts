@@ -481,19 +481,23 @@ export const kit = async (argv: string[]): Promise<number> => {
       process.env.NIGHTCAST_LOG_FD = '2';
       const { serveStdio, takeStdout } = await import('./mcp.js');
       const out = takeStdout(); // from here on, stdout carries the protocol only
-      const { mcpTools } = await import('./tools.js');
-      const { agentBackend } = await import('./host.js');
+      const { answerWithoutTools } = await import('./tool-defs.js');
       const home = kitHome();
       const config = firstRun(home);
-      // one agent per computer: the first app's server opens the wallet, the others pass their requests to it
-      const backend = await agentBackend({
-        home,
-        port: agentPort(config),
-        token: ensureSecret(kitPaths(home, config.network).token),
-        makeTools: () => mcpTools(),
-        log: (m) => process.stderr.write(`lunardraw: ${m}\n`),
-      });
-      await serveStdio((msg, notify) => backend.call(msg, notify), out);
+      const log = (m: string) => process.stderr.write(`lunardraw: ${m}\n`);
+      // Answer the app straight away (it may give a server only a few seconds to start) and
+      // load Midnight's libraries, which take a while, alongside: the tools wait for them.
+      // One agent per computer: the first app's server opens the wallet, the others pass their requests to it.
+      const backend = (async () => {
+        const { mcpTools } = await import('./tools.js');
+        const { agentBackend } = await import('./host.js');
+        return agentBackend({ home, port: agentPort(config), token: ensureSecret(kitPaths(home, config.network).token), makeTools: () => mcpTools(), log });
+      })();
+      backend.catch((err: unknown) => log(`couldn't start the agent: ${err instanceof Error ? err.message : String(err)}`));
+      await serveStdio(async (msg, notify) => {
+        if (msg.id === undefined || msg.id === null) return undefined; // notifications need no answer
+        return (await answerWithoutTools(msg)) ?? (await backend).call(msg, notify);
+      }, out);
       return 0;
     }
 
