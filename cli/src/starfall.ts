@@ -376,13 +376,14 @@ export type StarfallDeployParams = {
 };
 
 /**
- * Weekly Starfall: a game costs 1.2 tNIGHT (1 to the pool, 0.2 to the
- * operator); about a week of sales; an hour to reveal; two hours for the
- * oracle; two days to settle once the numbers are in.
+ * Weekly Starfall: a game costs 1.3 tNIGHT (1 to the pool, 0.3 to the
+ * operator, which pays the running costs and the creator's cut); about a week
+ * of sales; an hour to reveal; two hours for the oracle; two days to settle
+ * once the numbers are in.
  */
 export const STARFALL_WEEKLY_DEFAULTS = {
-  ticketPrice: 1_200_000n,
-  feePerGame: 200_000n,
+  ticketPrice: 1_300_000n,
+  feePerGame: 300_000n,
   minSales: 86_400n,
   maxSales: 14n * 86_400n,
   revealWindow: 3_600n,

@@ -8,7 +8,7 @@ The goal is the rule at the centre of Lunardraw:
 
 v0 meets the privacy half by having winners **claim**: only a ticket's owner can prove it won. This contract removes the claim. A settler works through every ticket, and the contract checks each step, so nobody has to press a button and no ticket's numbers become public.
 
-The game is Australian Powerball's, as the Starfall spec asks: 7 numbers from 35 plus a Moonball from 20, nine divisions, Powerball's prize-pool allocation and rollover rules, QuickPick packages, and **System, Pick and Moonball Sweep entries, each one ticket however many games it holds** (see "Entries"). A game costs 1.2 tNIGHT: 1 tNIGHT goes to the prize pool and 0.2 tNIGHT is the operator's fee, per game, so a ticket of several games pays it once per game (a System 9 is 36 games: 43.2 tNIGHT, 7.2 in fees). Syndicates are designed and tested but wait for a later contract (see "Syndicates").
+The game is Australian Powerball's, as the Starfall spec asks: 7 numbers from 35 plus a Moonball from 20, nine divisions, Powerball's prize-pool allocation and rollover rules, QuickPick packages, and **System, Pick and Moonball Sweep entries, each one ticket however many games it holds** (see "Entries"). A game costs 1.3 tNIGHT: 1 tNIGHT goes to the prize pool and 0.3 tNIGHT is the operator's fee, per game, so a ticket of several games pays it once per game (a System 9 is 36 games: 46.8 tNIGHT, 10.8 in fees). Contracts deployed before 6 Nov 2026 charge 1.2 tNIGHT with a 0.2 fee; the price and fee are deploy settings, not code. Syndicates are designed and tested but wait for a later contract (see "Syndicates").
 
 ## What happens to a ticket
 
@@ -23,7 +23,7 @@ The game is Australian Powerball's, as the Starfall spec asks: 7 numbers from 35
 3. **Draw.** As v0: the organiser's sealed seed, the oracle's VRF and the site's number rule. Each draw is bound to the active oracle key **when it opens**, so buyers can see which key will answer it. `requestDraw(n, seed, next)` reveals draw `n`'s seed and can open the next draw in the same transaction; `requestDraw(0, …, next)` just opens a draw. `computeNumbers(n, now)` puts the numbers in the ledger; its clock stamp may be up to **30 minutes** from block time, so a slow numbers proof still lands (v0 allows 10; Lunardraw #32).
 4. **Settlement.** The settler decrypts every ticket with the settlement secret and calls `settleBatch` repeatedly. Each call covers the next 22 tickets in index order. For each ticket, the proof shows that the decrypted ticket hashes to the commitment stored at its index, then counts its winning games per division against the numbers stored in the ledger (without listing them: see "Entries"). Winning tickets become **entitlements** (winning games per division + payees) under the id `Poseidon(domain, C, salt)`. The salt is secret, so nobody can link an entitlement to a purchase.
 5. **Finalise.** When the last ticket is settled, anyone calls `finaliseDraw`, which:
-   - takes the operator fee off the sales to make the pool: `feePerGame` STAR for every game sold (0.2 tNIGHT of each 1.2 tNIGHT game, leaving 1 tNIGHT per game for prizes; the constructor requires the fee to be below the price), and **pays it to the operator address** in the same transaction;
+   - takes the operator fee off the sales to make the pool: `feePerGame` STAR for every game sold (0.3 tNIGHT of each 1.3 tNIGHT game, leaving 1 tNIGHT per game for prizes; the constructor requires the fee to be below the price), and **pays it to the operator address** in the same transaction;
    - gives each division its share of the pool, by Powerball's allocation (below), and adds the rollover to Division 1;
    - fixes each division's prize per winning game as `floor(division amount / winning games)`;
    - applies Powerball's no-winner rules: an unwon Division 1 rolls over (the jackpot); an unwon Division 2–8 falls into the next lower division that has a winner; an unwon Division 9, all rounding remainders, and what the floored division shares leave of the pool (at most 8 STAR) roll over, so no STAR is ever stranded. Draws finalise in order.
@@ -34,7 +34,7 @@ The game is Australian Powerball's, as the Starfall spec asks: 7 numbers from 35
 
 A ticket is one **entry**, `Entry { kind, count, numbers[12], moonball, sweep }`:
 
-| Entry | Numbers | Games | Price at 1.2 tNIGHT |
+| Entry | Numbers | Games | Price at 1.2 tNIGHT (before 6 Nov 2026; ×1.3/1.2 now) |
 |---|---|---|---|
 | Standard | 7 | 1 | 1.2 |
 | System 8 / 9 / 10 / 11 / 12 | 8–12, every 7 of them | 8 / 36 / 120 / 330 / 792 | 9.6 / 43.2 / 144 / 396 / 950.4 |
@@ -76,7 +76,7 @@ Shares are stored in basis points (`shares()` in the contract, `POWERBALL_SHARES
 - **No guaranteed jackpot.** Powerball advertises a minimum Division 1; Starfall's jackpot is exactly 33.5% of the pool plus whatever rolled over, because the contract only pays what it holds. A guarantee would need a funded reserve.
 - **No jackpot cap.** Powerball must pay out Division 1 after 25 rollovers. Starfall rolls over indefinitely; a cap (pay the jackpot down to the next division with a winner) is a small change to `finaliseDraw` once the product rule is decided.
 
-The fee is a constructor parameter. A flat fee per game (decided 22 Oct 2026, replacing a 2% share of sales) means the operator's income scales with lines sold, and a multi-line ticket pays it once per line: price 1.2 tNIGHT = 1 tNIGHT to the pool + 0.2 tNIGHT to the operator. Whether 0.2 tNIGHT covers transaction fees and a keeper is still to be assessed.
+The fee is a constructor parameter. A flat fee per game (decided 22 Oct 2026, replacing a 2% share of sales) means the operator's income scales with lines sold, and a multi-line ticket pays it once per line: price 1.3 tNIGHT = 1 tNIGHT to the pool + 0.3 tNIGHT to the operator (since 6 Nov 2026; Jack's decision). The operator fee pays the running costs (NIGHT held to generate the keeper's and oracle's DUST, hosting, Blockfrost) and the creator's cut, taken from the operator wallet by hand. Whether 0.3 tNIGHT covers the running costs at scale is to be measured (DUST per transaction).
 
 **Site note:** the theme's `lunardraw_settle()` mirrors `finaliseDraw`; it must also add `pool − Σ floor(pool × bp / 10000)` to the carry (the rounding fix above).
 
