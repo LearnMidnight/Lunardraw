@@ -44,7 +44,7 @@ const draw = (id: number, status: number, salesClose: number, extra: Partial<Sta
   }) as StarfallDrawView;
 
 const view = (draws: StarfallDrawView[]): StarfallView =>
-  ({ lastDraw: BigInt(draws.length), ticketPrice: 1_200_000n, feePerGame: 200_000n, creatorFeePerGame: 0n, settleWindow: 3600n, draws, entitlements: [] }) as unknown as StarfallView;
+  ({ lastDraw: BigInt(draws.length), ticketPrice: 1_200_000n, feePerGame: 200_000n, settleWindow: 3600n, draws, entitlements: [] }) as unknown as StarfallView;
 
 describe('the Starfall agent', () => {
   it('composes entries in each style', () => {

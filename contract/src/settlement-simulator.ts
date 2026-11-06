@@ -29,15 +29,11 @@ export type SettlementSimulatorOptions = {
   backupSecret?: Uint8Array;
   /** Secret of the settlement key the tickets are encrypted to. */
   settlementSecret: bigint;
-  /** Where operator fees (running costs) go (32-byte unshielded address). */
+  /** Where operator fees go (32-byte unshielded address). */
   operator: Uint8Array;
-  /** Operator fee per game in STAR, out of the ticket price (default 100,000 = 0.1 tNIGHT). */
+  /** Operator fee per game in STAR, out of the ticket price (default 200,000 = 0.2 tNIGHT). */
   feePerGame?: bigint;
-  /** Where creator fees go (32-byte unshielded address; default 32 bytes of 0xc0). */
-  creator?: Uint8Array;
-  /** Creator fee per game in STAR, out of the ticket price (default 200,000 = 0.2 tNIGHT). */
-  creatorFeePerGame?: bigint;
-  /** Price of one game (one line) in STAR (default 1.3 tNIGHT: 1 tNIGHT to the prize pool + the two fees). */
+  /** Price of one game (one line) in STAR (default 1.2 tNIGHT: 1 tNIGHT to the prize pool + the 0.2 tNIGHT fee). */
   ticketPrice?: bigint;
   minSales?: bigint;
   maxSales?: bigint;
@@ -153,10 +149,8 @@ export class SettlementSimulator {
       pureCircuits.organiserCommitmentOf(this.backupSecret),
       pureCircuits.settlementPublicKey(opts.settlementSecret),
       { bytes: opts.operator },
-      opts.feePerGame ?? 100_000n,
-      { bytes: opts.creator ?? new Uint8Array(32).fill(0xc0) },
-      opts.creatorFeePerGame ?? 200_000n,
-      opts.ticketPrice ?? 1_300_000n,
+      opts.feePerGame ?? 200_000n,
+      opts.ticketPrice ?? 1_200_000n,
       opts.minSales ?? 600n,
       opts.maxSales ?? 2_592_000n,
       opts.revealWindow ?? 3_600n,

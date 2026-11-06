@@ -60,10 +60,9 @@ export type StarfallDrawView = {
   games: bigint;
   /** Winning games per division so far (division 1 first). */
   winners: bigint[];
-  /** Fixed when the draw is finalised: rollover added to the jackpot, the operator and creator fees, each division's prize per game. */
+  /** Fixed when the draw is finalised: rollover added to the jackpot, the operator fee, each division's prize per game. */
   carried: bigint;
   fee: bigint;
-  creatorFee: bigint;
   prizes: bigint[];
   /** For a void draw: the indexes of tickets not refunded yet, and the games refunded so far. */
   unrefunded: bigint[];
@@ -79,7 +78,6 @@ export type StarfallView = {
   maxSales: bigint;
   ticketPrice: bigint;
   feePerGame: bigint;
-  creatorFeePerGame: bigint;
   revealWindow: bigint;
   drawWindow: bigint;
   settleWindow: bigint;
@@ -103,7 +101,6 @@ export const starfallViewOf = (l: Starfall.Ledger): StarfallView => ({
   maxSales: l.maxSales,
   ticketPrice: l.ticketPrice,
   feePerGame: l.feePerGame,
-  creatorFeePerGame: l.creatorFeePerGame,
   revealWindow: l.revealWindow,
   drawWindow: l.drawWindow,
   settleWindow: l.settleWindow,
@@ -146,7 +143,6 @@ export const starfallViewOf = (l: Starfall.Ledger): StarfallView => ({
       winners: p ? [...p.winners] : Array.from({ length: 9 }, () => 0n),
       carried: d.carried,
       fee: d.fee,
-      creatorFee: d.creatorFee,
       prizes: [...d.prizes],
       unrefunded,
       refundedGames,

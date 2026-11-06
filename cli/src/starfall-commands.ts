@@ -83,7 +83,7 @@ export const STARFALL_USAGE = `usage: ./lunardraw starfall <command>
   keygen settlement --out <file>
   commitment   --organiser <file>      (an organiser's Starfall commitment: public; for --backup)
   deploy       --network <${NETWORKS.join('|')}> --organiser <file> --backup <file> --oracle <file> --settlement <file> --wallet <file> [--accept]
-               [--operator <address>] [--fee <STAR>] [--creator <address>] [--creator-fee <STAR>] [--price <STAR>] [--min-sales <s>] [--max-sales <s>] [--reveal <s>] [--draw <s>] [--settle <s>]
+               [--operator <address>] [--price <STAR>] [--fee <STAR>] [--min-sales <s>] [--max-sales <s>] [--reveal <s>] [--draw <s>] [--settle <s>]
   accept-key   --network <network> --oracle <file> --wallet <file>
   keeper       --network <network> --organiser <file> --settlement <file> --wallet <file> [--every <seconds>] [--feed <file>]
                [--proof-server-port <port>] [--prove-lead <secs>] [--restart-after <min>] [--stall-after <min>] [--dust-wait <min>]
@@ -110,8 +110,7 @@ restart never buys twice. Styles: quickpick (--games random games), lucky (the s
 --moonball every draw), moonhit (7 random numbers with every Moonball), system (a System 8), mix
 (a random style each draw, mostly small QuickPicks). --budget caps one draw's spend (default 60).
 
-Defaults are a weekly Starfall: a game costs 1.3 tNIGHT (1 to the prize pool, 0.1 to the operator
-for running costs, 0.2 to the creator),
+Defaults are a weekly Starfall: a game costs 1.2 tNIGHT (1 to the prize pool, 0.2 to the operator),
 draws close on Thursdays at 20:00 Brisbane, sales of 1 to 14 days, 1 hour to reveal, 2 hours for
 the oracle, 2 days to settle once the numbers are in. --every <seconds> runs draws on a fixed period
 instead (for test networks).
@@ -125,9 +124,8 @@ The settlement key (keygen settlement) decrypts every ticket so the keeper can s
 keep its file private, like the organiser's. Its public half goes into the contract at deploy.
 --backup takes the backup organiser's secret file, or its Starfall commitment (64 hex characters, from
 \`./lunardraw starfall commitment --organiser <file>\` run where the backup's secret is), so its secret can
-stay offline. Starfall's commitments differ from v0's: a v0 deployment record's backupCommitment won't do. --operator is where the 0.1 tNIGHT running-costs fee per game goes (default:
-the deploying wallet); --creator is where the 0.2 tNIGHT creator fee per game goes (default: --operator).
-Both are fixed at deploy and paid when each draw is finalised.
+stay offline. Starfall's commitments differ from v0's: a v0 deployment record's backupCommitment won't do. --operator is where the 0.2 tNIGHT fee per game goes (default:
+the deploying wallet).
 The keeper works out each draw's seed from the organiser secret, so there is no seeds file.
 --status <file> makes the keeper or the oracle rewrite a small health file there every minute (its
 wallet's balances, its last pass, failures in a row) for \`./lunardraw monitor\`, which emails alerts.
@@ -282,7 +280,7 @@ const describeView = (view: StarfallView, nowSecs: number): string => {
     } else if (d.status === Starfall.DrawStatus.settled) {
       const unpaid = view.entitlements.filter((e) => e.drawId === d.id && !e.paid).length;
       const won = d.winners.reduce((a, b) => a + b, 0n);
-      extra = `  ${won} winning game(s)${unpaid > 0 ? `, ${unpaid} not paid yet` : ''}; fees ${tn(d.fee)} operator, ${tn(d.creatorFee)} creator`;
+      extra = `  ${won} winning game(s)${unpaid > 0 ? `, ${unpaid} not paid yet` : ''}; fee ${tn(d.fee)}`;
     } else if (d.status === Starfall.DrawStatus.voided) {
       extra = d.unrefunded.length > 0 ? `  ${d.unrefunded.length} ticket(s) still to refund` : '  refunded';
     }
@@ -399,8 +397,6 @@ export const starfall = async (argv: string[]): Promise<number> => {
       operator: { type: 'string' },
       price: { type: 'string' },
       fee: { type: 'string' },
-      creator: { type: 'string' },
-      'creator-fee': { type: 'string' },
       'min-sales': { type: 'string' },
       'max-sales': { type: 'string' },
       reveal: { type: 'string' },
@@ -470,12 +466,6 @@ export const starfall = async (argv: string[]): Promise<number> => {
             settlementKey: settlement.pk,
             operator: values.operator ? parseUserAddress(values.operator) : walletBytes(wallet),
             feePerGame: num(values.fee, STARFALL_WEEKLY_DEFAULTS.feePerGame),
-            creator: values.creator
-              ? parseUserAddress(values.creator)
-              : values.operator
-                ? parseUserAddress(values.operator)
-                : walletBytes(wallet),
-            creatorFeePerGame: num(values['creator-fee'], STARFALL_WEEKLY_DEFAULTS.creatorFeePerGame),
             ticketPrice: num(values.price, STARFALL_WEEKLY_DEFAULTS.ticketPrice),
             minSales: num(values['min-sales'], STARFALL_WEEKLY_DEFAULTS.minSales),
             maxSales: num(values['max-sales'], STARFALL_WEEKLY_DEFAULTS.maxSales),

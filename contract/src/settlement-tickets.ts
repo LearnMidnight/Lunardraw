@@ -287,7 +287,6 @@ export type ExpectedSettlement = {
   games: bigint;
   sales: bigint;
   fee: bigint;
-  creatorFee: bigint;
   /** Sales less the fee (a flat amount per game); the rollover is added to division 1 on top. */
   pool: bigint;
   /** Prize per winning game per division. */
@@ -312,15 +311,13 @@ export const expectedSettlement = (
   price: bigint,
   feePerGame: bigint,
   carryIn: bigint,
-  creatorFeePerGame = 0n,
 ): ExpectedSettlement => {
   const won = tickets.map((t) => gamesByDivisionFor(entryOf(t), numbers, moonball));
   const winners = [0, 1, 2, 3, 4, 5, 6, 7, 8].map((j) => won.reduce((a, w) => a + w[j], 0n));
   const games = tickets.reduce((a, t) => a + BigInt(gamesOf(entryOf(t))), 0n);
   const sales = price * games;
   const fee = feePerGame * games;
-  const creatorFee = creatorFeePerGame * games;
-  const pool = sales - fee - creatorFee;
+  const pool = sales - fee;
   const { prizes, carry } = prizesByPowerballRules(pool, carryIn, winners);
   const payouts = new Map<string, bigint>();
   tickets.forEach((t, i) => {
@@ -333,5 +330,5 @@ export const expectedSettlement = (
       payouts.set(k, (payouts.get(k) ?? 0n) + amounts[j]);
     });
   });
-  return { winners, games, sales, fee, creatorFee, pool, prizes, carry, payouts, won };
+  return { winners, games, sales, fee, pool, prizes, carry, payouts, won };
 };

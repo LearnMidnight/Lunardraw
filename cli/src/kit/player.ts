@@ -37,7 +37,7 @@ export type Overview = {
 /** What's on sale and the latest results, from a view of the contract. */
 export const overviewOf = (view: StarfallView, network: string, contract: string, nowSecs: number): Overview => {
   const selling = view.draws.find((d) => d.status === DrawStatus.open && d.salesClose > BigInt(Math.floor(nowSecs)));
-  const pool = (games: bigint) => games * (view.ticketPrice - view.feePerGame - view.creatorFeePerGame);
+  const pool = (games: bigint) => games * (view.ticketPrice - view.feePerGame);
   const onSale: DrawOnSale | null = selling
     ? {
         draw: Number(selling.id),

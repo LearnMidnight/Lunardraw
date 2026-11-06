@@ -79,10 +79,8 @@ describe.runIf(enabled)('Starfall on a local Midnight network', () => {
     backupCommitment: Starfall.pureCircuits.organiserCommitmentOf(backupSecret),
     settlementKey: Starfall.pureCircuits.settlementPublicKey(settlementSecret),
     operator,
-    feePerGame: 100_000n,
-    creator: Uint8Array.from({ length: 32 }, (_, i) => 200 + i),
-    creatorFeePerGame: 200_000n,
-    ticketPrice: 1_300_000n,
+    feePerGame: 200_000n,
+    ticketPrice: 1_200_000n,
     minSales: 60n,
     maxSales: 86_400n,
     revealWindow: 600n,
@@ -226,7 +224,6 @@ describe.runIf(enabled)('Starfall on a local Midnight network', () => {
     const settled = (await drawOf(1n))!;
     expect(settled.settled).toBe(18n);
     expect(settled.fee).toBe(72n * params.feePerGame);
-    expect(settled.creatorFee).toBe(72n * params.creatorFeePerGame);
     expect(settled.winners[7]).toBeGreaterThanOrEqual(1n);
     // The Pick 6 holds the 6 drawn numbers it was given: one of its games has all 7, with the Moonball.
     expect(settled.winners[0]).toBeGreaterThanOrEqual(1n);
