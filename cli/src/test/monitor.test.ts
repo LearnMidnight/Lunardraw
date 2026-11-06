@@ -47,7 +47,7 @@ const feed = (draws: StarfallFeedDraw[], open?: StarfallFeed['games']['starfall'
   generated_at: iso(generated),
   sample: false,
   contracts: { starfall: 'f868' },
-  games: { starfall: { price_star: 1_200_000, fee_star: 200_000, allocation_bp: [], carry_star: 0, open, draws } },
+  games: { starfall: { price_star: 1_300_000, fee_star: 100_000, creator_fee_star: 200_000, allocation_bp: [], carry_star: 0, open, draws } },
 });
 
 const inputs = (over: Partial<Inputs> = {}): Inputs => ({

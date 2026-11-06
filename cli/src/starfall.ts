@@ -363,10 +363,15 @@ export type StarfallDeployParams = {
   backupCommitment: Uint8Array;
   /** The key tickets are encrypted to (the settler's public key). */
   settlementKey: { x: bigint; y: bigint };
-  /** Where the operator fee goes: a 32-byte unshielded address. */
+  /** Where the operator fee (running costs) goes: a 32-byte unshielded address. */
   operator: Uint8Array;
-  /** Operator fee per game and price of a game, in STAR. */
+  /** Operator fee per game, in STAR. */
   feePerGame: bigint;
+  /** Where the creator fee goes: a 32-byte unshielded address. */
+  creator: Uint8Array;
+  /** Creator fee per game, in STAR. */
+  creatorFeePerGame: bigint;
+  /** Price of a game, in STAR. */
   ticketPrice: bigint;
   minSales: bigint;
   maxSales: bigint;
@@ -376,13 +381,15 @@ export type StarfallDeployParams = {
 };
 
 /**
- * Weekly Starfall: a game costs 1.2 tNIGHT (1 to the pool, 0.2 to the
- * operator); about a week of sales; an hour to reveal; two hours for the
- * oracle; two days to settle once the numbers are in.
+ * Weekly Starfall: a game costs 1.3 tNIGHT (1 to the pool, 0.1 to the
+ * operator for running costs, 0.2 to the creator); about a week of sales; an
+ * hour to reveal; two hours for the oracle; two days to settle once the
+ * numbers are in.
  */
 export const STARFALL_WEEKLY_DEFAULTS = {
-  ticketPrice: 1_200_000n,
-  feePerGame: 200_000n,
+  ticketPrice: 1_300_000n,
+  feePerGame: 100_000n,
+  creatorFeePerGame: 200_000n,
   minSales: 86_400n,
   maxSales: 14n * 86_400n,
   revealWindow: 3_600n,
@@ -402,6 +409,8 @@ export const deployStarfall = (providers: StarfallProviders, p: StarfallDeployPa
       p.settlementKey,
       { bytes: p.operator },
       p.feePerGame,
+      { bytes: p.creator },
+      p.creatorFeePerGame,
       p.ticketPrice,
       p.minSales,
       p.maxSales,
@@ -439,6 +448,8 @@ export type StarfallDeploymentRecord = {
     settlementKey: { x: string; y: string };
     operator: string;
     feePerGame: string;
+    creator: string;
+    creatorFeePerGame: string;
     ticketPrice: string;
     minSales: string;
     maxSales: string;
@@ -457,6 +468,8 @@ export const starfallRecordParameters = (p: StarfallDeployParams): StarfallDeplo
   settlementKey: { x: p.settlementKey.x.toString(), y: p.settlementKey.y.toString() },
   operator: hex(p.operator),
   feePerGame: p.feePerGame.toString(),
+  creator: hex(p.creator),
+  creatorFeePerGame: p.creatorFeePerGame.toString(),
   ticketPrice: p.ticketPrice.toString(),
   minSales: p.minSales.toString(),
   maxSales: p.maxSales.toString(),
@@ -541,6 +554,8 @@ export const verifyStarfall = (
   const actual: Record<string, bigint | string> = {
     operator: hex(l.operator.bytes),
     feePerGame: l.feePerGame,
+    creator: hex(l.creator.bytes),
+    creatorFeePerGame: l.creatorFeePerGame,
     ticketPrice: l.ticketPrice,
     minSales: l.minSales,
     maxSales: l.maxSales,
@@ -554,7 +569,7 @@ export const verifyStarfall = (
     ok: differ.length === 0,
     detail:
       differ.length === 0
-        ? `${Number(l.ticketPrice) / 1e6} tNIGHT a game (${Number(l.feePerGame) / 1e6} to the operator); sales ${l.minSales}-${l.maxSales} s; reveal ${l.revealWindow} s, draw ${l.drawWindow} s, settle ${l.settleWindow} s`
+        ? `${Number(l.ticketPrice) / 1e6} tNIGHT a game (${Number(l.feePerGame) / 1e6} to the operator, ${Number(l.creatorFeePerGame) / 1e6} to the creator); sales ${l.minSales}-${l.maxSales} s; reveal ${l.revealWindow} s, draw ${l.drawWindow} s, settle ${l.settleWindow} s`
         : differ.map(([k, v]) => `${k} ${v} (record ${String(p[k as keyof typeof p])})`).join('; '),
   });
   return checks;

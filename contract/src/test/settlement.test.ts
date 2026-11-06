@@ -41,17 +41,19 @@ const bytes = (label: string): Uint8Array => {
 };
 const randomAddress = (): Uint8Array => webcrypto.getRandomValues(new Uint8Array(32));
 
-const FEE = 200_000n; // 0.2 tNIGHT per game, to the operator
+const FEE = 100_000n; // 0.1 tNIGHT per game, to the operator (running costs)
+const CREATOR_FEE = 200_000n; // 0.2 tNIGHT per game, to the creator
 const PRIZE = 1_000_000n; // 1 tNIGHT per game, to the prize pool
-const PRICE = PRIZE + FEE; // 1.2 tNIGHT: what a player pays per game
+const PRICE = PRIZE + FEE + CREATOR_FEE; // 1.3 tNIGHT: what a player pays per game
 const SETTLE = 86_400n;
 const MAX_SALES = 30n * 86_400n;
 const REVEAL = 3_600n;
 const SALES = 3_600;
 const BATCH = Number(pureCircuits.batchSize());
 const OPERATOR = bytes('operator wallet');
+const CREATOR = bytes('creator wallet');
 
-const setup = (opts: { feePerGame?: bigint; acceptKey?: boolean } = {}) => {
+const setup = (opts: { feePerGame?: bigint; creatorFeePerGame?: bigint; acceptKey?: boolean } = {}) => {
   const oracleSecretKey = generateOracleSecretKey();
   const settlementSecret = randomScalar();
   const sim = new SettlementSimulator({
@@ -60,6 +62,8 @@ const setup = (opts: { feePerGame?: bigint; acceptKey?: boolean } = {}) => {
     settlementSecret,
     operator: OPERATOR,
     feePerGame: opts.feePerGame ?? FEE,
+    creator: CREATOR,
+    creatorFeePerGame: opts.creatorFeePerGame ?? CREATOR_FEE,
     ticketPrice: PRICE,
     minSales: 600n,
     maxSales: MAX_SALES,
@@ -324,7 +328,7 @@ describe('System, Pick and Moonball Sweep entries', () => {
     tickets.push(...Array.from({ length: 30 }, () => makeTicket(n, quickPick(), randomAddress())));
     buyAll(sim, tickets);
     drawIt(sim, n, seed);
-    const expected = expectedSettlement(tickets, draw.numbers, draw.moonball, PRICE, FEE, 0n);
+    const expected = expectedSettlement(tickets, draw.numbers, draw.moonball, PRICE, FEE, 0n, CREATOR_FEE);
     expect(expected.won[0][0]).toBe(1n); // the Pick 6 sweep's jackpot
     expect(totalOf(expected.won[1])).toBeGreaterThan(30n); // the System 9's many winning games
     expect(totalOf(expected.won[2])).toBe(0n);
@@ -345,10 +349,11 @@ describe('System, Pick and Moonball Sweep entries', () => {
       expected.won.filter((w) => totalOf(w) > 0n).map((w) => w.join('.')).sort(),
     );
     const paid = expected.prizes.reduce((a, prize, i) => a + prize * expected.winners[i], 0n);
-    expect(expected.fee + paid + l.carry).toBe(expected.sales);
+    expect(expected.fee + expected.creatorFee + paid + l.carry).toBe(expected.sales);
     if (sim.payments !== undefined) {
       const want = new Map(expected.payouts);
       want.set(hex(OPERATOR), expected.fee);
+      want.set(hex(CREATOR), expected.creatorFee);
       expect(sortedEntries(totals(sim.payments))).toEqual(sortedEntries(want));
     }
   });
@@ -452,7 +457,7 @@ describe('settling 100 private tickets', () => {
     const nums = drawIt(sim, n, seed);
     expect(nums.main.map(Number)).toEqual(draw.numbers);
 
-    const expected = expectedSettlement(tickets, draw.numbers, draw.moonball, PRICE, FEE, 0n);
+    const expected = expectedSettlement(tickets, draw.numbers, draw.moonball, PRICE, FEE, 0n, CREATOR_FEE);
     expect(expected.winners[0]).toBe(2n); // the two crafted jackpot winners
     expect(expected.winners.every((w) => w > 0n)).toBe(true);
 
@@ -483,7 +488,7 @@ describe('settling 100 private tickets', () => {
 
     // Every STAR of sales is accounted for: fee + prizes paid + rollover.
     const paid = expected.prizes.reduce((a, prize, i) => a + prize * expected.winners[i], 0n);
-    expect(expected.fee + paid + l.carry).toBe(expected.sales);
+    expect(expected.fee + expected.creatorFee + paid + l.carry).toBe(expected.sales);
     // With winners in every division nothing cascades: each prize is its division's share.
     expected.prizes.forEach((prize, i) => {
       expect(prize).toBe((expected.pool * BigInt(POWERBALL_SHARES_BP[i])) / 10_000n / expected.winners[i]);
@@ -495,6 +500,7 @@ describe('settling 100 private tickets', () => {
     if (sim.payments !== undefined) {
       const want = new Map(expected.payouts);
       want.set(hex(OPERATOR), expected.fee);
+      want.set(hex(CREATOR), expected.creatorFee);
       expect(sortedEntries(totals(sim.payments))).toEqual(sortedEntries(want));
     }
   });
@@ -532,7 +538,7 @@ describe('settling 100 private tickets', () => {
       buyAll(sim, tickets);
       drawIt(sim, n, seed);
       expect(sim.settleAll(n)).toBe(Math.ceil(count / BATCH));
-      const expected = expectedSettlement(tickets, draw.numbers, draw.moonball, PRICE, FEE, 0n);
+      const expected = expectedSettlement(tickets, draw.numbers, draw.moonball, PRICE, FEE, 0n, CREATOR_FEE);
       expect(sim.getLedger().progress.lookup(n).winners).toEqual(expected.winners);
       expect(sim.getLedger().draws.lookup(n).prizes).toEqual(expected.prizes);
     }
@@ -863,13 +869,13 @@ describe('rolling draws', () => {
     expect(() => sim.finaliseDraw(second.n)).toThrow(/previous draw isn't finalised/);
 
     sim.settleAll(first.n);
-    const e1 = expectedSettlement(losers, first.draw.numbers, first.draw.moonball, PRICE, FEE, 0n);
+    const e1 = expectedSettlement(losers, first.draw.numbers, first.draw.moonball, PRICE, FEE, 0n, CREATOR_FEE);
     expect(e1.winners.every((w) => w === 0n)).toBe(true);
     expect(sim.getLedger().carry).toBe(e1.pool);
-    expect(e1.pool).toBe(30n * PRICE - e1.fee);
+    expect(e1.pool).toBe(30n * PRICE - e1.fee - e1.creatorFee);
 
     sim.finaliseDraw(second.n);
-    const e2 = expectedSettlement(winners2, draw2.numbers, draw2.moonball, PRICE, FEE, e1.pool);
+    const e2 = expectedSettlement(winners2, draw2.numbers, draw2.moonball, PRICE, FEE, e1.pool, CREATOR_FEE);
     const d2 = sim.getLedger().draws.lookup(second.n);
     expect(d2.carried).toBe(e1.pool);
     expect(d2.prizes).toEqual(e2.prizes);
@@ -936,7 +942,7 @@ describe("Powerball's prize rules", () => {
   });
 
   it('the contract agrees: an awkward pool leaves no STAR unaccounted for', () => {
-    // 7 games at 1.2 tNIGHT with a fee of 0.2 tNIGHT + 1 STAR leaves a pool that doesn't divide evenly.
+    // 7 games at 1.3 tNIGHT with fees of 0.1 tNIGHT + 1 STAR and 0.2 tNIGHT leave a pool that doesn't divide evenly.
     const { sim, oracleSecretKey } = setup({ feePerGame: FEE + 1n });
     const { n, seed, draw } = openWithSeed(sim, oracleSecretKey);
     const tickets = [
@@ -946,17 +952,17 @@ describe("Powerball's prize rules", () => {
     buyAll(sim, tickets);
     drawIt(sim, n, seed);
     sim.settleAll(n);
-    const expected = expectedSettlement(tickets, draw.numbers, draw.moonball, PRICE, FEE + 1n, 0n);
+    const expected = expectedSettlement(tickets, draw.numbers, draw.moonball, PRICE, FEE + 1n, 0n, CREATOR_FEE);
     const l = sim.getLedger();
     expect(l.draws.lookup(n).prizes).toEqual(expected.prizes);
     expect(l.carry).toBe(expected.carry);
     const paid = expected.prizes.reduce((a, p, j) => a + p * expected.winners[j], 0n);
-    expect(expected.fee + paid + l.carry).toBe(7n * PRICE);
+    expect(expected.fee + expected.creatorFee + paid + l.carry).toBe(7n * PRICE);
   });
 });
 
-describe('the operator fee', () => {
-  it('is a flat amount per game, so a ticket of several lines pays it several times', () => {
+describe('the operator and creator fees', () => {
+  it('are flat amounts per game, so a ticket of several lines pays them several times', () => {
     const { sim, oracleSecretKey } = setup();
     const { n, seed } = openWithSeed(sim, oracleSecretKey);
     const me = randomAddress();
@@ -968,28 +974,33 @@ describe('the operator fee', () => {
     sim.settleAll(n);
     if (sim.payments !== undefined) {
       expect(sim.payments.filter((p) => p.to === hex(OPERATOR))).toEqual([{ to: hex(OPERATOR), amount: 12n * FEE }]);
+      expect(sim.payments.filter((p) => p.to === hex(CREATOR))).toEqual([{ to: hex(CREATOR), amount: 12n * CREATOR_FEE }]);
     }
     const l = sim.getLedger();
     const d = l.draws.lookup(n);
-    // Of each 1.2 tNIGHT game, 0.2 goes to the operator, paid when the draw is finalised ...
+    // Of each 1.3 tNIGHT game, 0.1 goes to the operator and 0.2 to the creator, paid when the draw is finalised ...
     expect(d.fee).toBe(12n * FEE);
+    expect(d.creatorFee).toBe(12n * CREATOR_FEE);
     // ... and 1 tNIGHT is the pool: paid out or rolled over.
     const paid = d.prizes.reduce((a, x, j) => a + x * l.progress.lookup(n).winners[j], 0n);
     expect(paid + l.carry).toBe(12n * PRIZE);
-    // A QuickPick package costs its games x the price: a Mini is 9.6 tNIGHT.
-    expect(BigInt(QUICK_PICK_PACKAGES.mini) * PRICE).toBe(9_600_000n);
+    // A QuickPick package costs its games x the price: a Mini is 10.4 tNIGHT.
+    expect(BigInt(QUICK_PICK_PACKAGES.mini) * PRICE).toBe(10_400_000n);
   });
 
-  it('must be below the ticket price, and can be zero', () => {
+  it('must be below the ticket price together, and can be zero', () => {
     expect(() => setup({ feePerGame: PRICE })).toThrow(/below the ticket price/);
-    const { sim, oracleSecretKey } = setup({ feePerGame: 0n });
+    // Each alone is below the price, but together they'd leave no prize pool.
+    expect(() => setup({ feePerGame: PRICE - CREATOR_FEE })).toThrow(/fees per game must be below the ticket price/);
+    const { sim, oracleSecretKey } = setup({ feePerGame: 0n, creatorFeePerGame: 0n });
     const { n, seed } = openWithSeed(sim, oracleSecretKey);
     buyAll(sim, Array.from({ length: 5 }, () => makeTicket(n, quickPick(), randomAddress())));
     drawIt(sim, n, seed);
     sim.payments = sim.payments === undefined ? undefined : [];
     sim.settleAll(n);
     expect(sim.getLedger().draws.lookup(n).fee).toBe(0n);
-    if (sim.payments !== undefined) expect(sim.payments.some((p) => p.to === hex(OPERATOR))).toBe(false);
+    expect(sim.getLedger().draws.lookup(n).creatorFee).toBe(0n);
+    if (sim.payments !== undefined) expect(sim.payments.some((p) => p.to === hex(OPERATOR) || p.to === hex(CREATOR))).toBe(false);
   });
 });
 

@@ -1,6 +1,6 @@
 # Starfall on Preprod: a step-by-step guide
 
-This replaces the v0 soak with **Starfall**, the real game (docs/SETTLEMENT.md): games cost 1.2 tNIGHT, nobody claims prizes, and the keeper settles every draw privately and pays the winners itself. It runs on the same server as the v0 soak, with the same wallets and keys, plus one new key.
+This replaces the v0 soak with **Starfall**, the real game (docs/SETTLEMENT.md): games cost 1.3 tNIGHT, nobody claims prizes, and the keeper settles every draw privately and pays the winners itself. It runs on the same server as the v0 soak, with the same wallets and keys, plus one new key.
 
 It assumes the setup from [preview-guide.md](preview-guide.md) and [deploy/systemd/README.md](../deploy/systemd/README.md): the repo in `/root/Lunardraw`, secrets in `/root/lunardraw-secrets` and `/root/nightcast-secrets`, the three v0 services running.
 
@@ -85,7 +85,7 @@ The test timings, in seconds:
 - the oracle has 15 minutes to answer;
 - settlement must finish within an hour of the numbers.
 
-The price (1.2 tNIGHT) and fee (0.2 tNIGHT) are the defaults. The fee goes to the deploying wallet unless you add `--operator <address>`.
+The price (1.3 tNIGHT) and fees (0.1 tNIGHT to the operator for running costs, 0.2 tNIGHT to the creator) are the defaults. The operator fee goes to the deploying wallet unless you add `--operator <address>`; the creator fee goes to `--creator <address>` (default: the operator's).
 
 It ends with a checklist that should be all **PASS**, including `the organiser secret can open draws`, and writes `deployments/starfall-preprod.json`. Send me the output (it's all public).
 

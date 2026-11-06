@@ -31,8 +31,9 @@ const hex = (b: Uint8Array): string => Buffer.from(b).toString('hex');
 const randomAddress = (): Uint8Array => webcrypto.getRandomValues(new Uint8Array(32));
 const OPERATOR = new Uint8Array(32).fill(9);
 const BUYER = new Uint8Array(32).fill(7);
-const FEE = 200_000n;
-const PRICE = 1_200_000n;
+const FEE = 100_000n;
+const CREATOR_FEE = 200_000n;
+const PRICE = 1_300_000n;
 const SALES = 3_600; // the tests' draws close on the hour
 const REVEAL = 1_800;
 const DRAW = 1_800;
@@ -48,6 +49,7 @@ const setup = () => {
     settlementSecret,
     operator: OPERATOR,
     feePerGame: FEE,
+    creatorFeePerGame: CREATOR_FEE,
     ticketPrice: PRICE,
     minSales: 600n,
     maxSales: 30n * 86_400n,
@@ -132,6 +134,7 @@ describe('the Starfall keeper', () => {
     const settled = draw(sim, 1n);
     expect(settled.status).toBe(DrawStatus.settled);
     expect(settled.fee).toBe(30n * FEE);
+    expect(settled.creatorFee).toBe(30n * CREATOR_FEE);
 
     // Then every entitlement is paid, the sure winner's among them.
     const ids = sim.entitlementsOf(1n);
@@ -422,6 +425,7 @@ describe('the Starfall plan', () => {
     maxSales: 86_400n,
     ticketPrice: PRICE,
     feePerGame: FEE,
+    creatorFeePerGame: 0n,
     revealWindow: 600n,
     drawWindow: 600n,
     settleWindow: 3_600n,
@@ -448,6 +452,7 @@ describe('the Starfall plan', () => {
       winners: [],
       carried: 0n,
       fee: 0n,
+      creatorFee: 0n,
       prizes: [],
       unrefunded: [],
       refundedGames: 0n,
@@ -514,8 +519,9 @@ describe('the Starfall site feed', () => {
 
     let f = await feed();
     const game = f.games.starfall;
-    expect(game.price_star).toBe(1_200_000);
-    expect(game.fee_star).toBe(200_000);
+    expect(game.price_star).toBe(1_300_000);
+    expect(game.fee_star).toBe(100_000);
+    expect(game.creator_fee_star).toBe(200_000);
     expect(game.allocation_bp).toEqual([3350, 185, 230, 200, 150, 940, 730, 1550, 2665]);
     expect(game.open).toMatchObject({ num: 1, games_sold: 30 });
     // the monitor warns before the reveal deadline
@@ -541,7 +547,7 @@ describe('the Starfall site feed', () => {
     d1 = (await feed()).games.starfall.draws.find((d) => d.num === 1)!;
     expect(d1.status).toBe('settled');
     // The site's check: prizes and rollover by Powerball's rules from the games sold and the winners.
-    const pool = 30n * (PRICE - FEE);
+    const pool = 30n * (PRICE - FEE - CREATOR_FEE);
     const expected = Starfall.prizesByPowerballRules(pool, BigInt(d1.carried_in_star!), d1.winners!.map(BigInt));
     expect(d1.prizes_star).toEqual(expected.prizes.map(Number));
     expect(d1.carry_out_star).toBe(Number(expected.carry));

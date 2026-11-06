@@ -165,8 +165,10 @@ describe('verifyStarfall', () => {
         backupCommitment: Starfall.pureCircuits.organiserCommitmentOf(sim.backupSecret),
         settlementKey: Starfall.pureCircuits.settlementPublicKey(settlementSecret),
         operator: OPERATOR,
-        feePerGame: 200_000n,
-        ticketPrice: 1_200_000n,
+        feePerGame: 100_000n,
+        creator: new Uint8Array(32).fill(0xc0),
+        creatorFeePerGame: 200_000n,
+        ticketPrice: 1_300_000n,
         minSales: 600n,
         maxSales: 30n * 86_400n,
         revealWindow: 1_800n,
@@ -193,10 +195,10 @@ describe('verifyStarfall', () => {
     expect(failing(verifyStarfall({ ...record, parameters: { ...p, settlementKey: { x: '1', y: '2' } } }, state))).toEqual([
       'settlement key matches the record',
     ]);
-    const other = { ...record, parameters: { ...p, operator: '00'.repeat(32), feePerGame: '100000' } };
+    const other = { ...record, parameters: { ...p, operator: '00'.repeat(32), creatorFeePerGame: '50000' } };
     const checks = verifyStarfall(other, state);
     expect(failing(checks)).toEqual(['price, fee and windows match']);
-    expect(checks.find((c) => !c.ok)!.detail).toMatch(/operator .*feePerGame 200000/);
+    expect(checks.find((c) => !c.ok)!.detail).toMatch(/operator .*creatorFeePerGame 200000 \(record 50000\)/);
     expect(failing(verifyStarfall(record, null))).toEqual(['contract exists']);
   });
 });

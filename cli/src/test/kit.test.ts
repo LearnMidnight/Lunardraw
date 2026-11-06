@@ -36,7 +36,7 @@ const drawView = (over: Record<string, unknown>) => ({
   ...over,
 });
 const view = (draws: Record<string, unknown>[], carry = 1000_000000n): StarfallView =>
-  ({ draws: draws.map(drawView), ticketPrice: 1_200_000n, feePerGame: 200_000n, carry }) as unknown as StarfallView;
+  ({ draws: draws.map(drawView), ticketPrice: 1_300_000n, feePerGame: 100_000n, creatorFeePerGame: 200_000n, carry }) as unknown as StarfallView;
 
 describe('the agent kit', () => {
   it("reads the owner's config, with defaults, and refuses a bad one", () => {
@@ -89,7 +89,7 @@ describe('the agent kit', () => {
     const o = overviewOf(v, 'preprod', 'f868', NOW / 1000);
     // jackpot: rollover 1000 + 33.5% of 10 games x 1 tNIGHT
     expect(o.onSale).toEqual({ draw: 12, salesClose: '2026-11-03T03:00:00.000Z', minutesLeft: 50, tickets: 3, games: 10, jackpotEstimate: '1003.35 tNIGHT' });
-    expect(o.gamePrice).toBe('1.2 tNIGHT');
+    expect(o.gamePrice).toBe('1.3 tNIGHT');
     expect(o.recent).toEqual([
       { draw: 11, status: 'settled', numbers: [3, 5, 9, 14, 21, 27, 33], moonball: 7, games: 20, winningGames: 3 },
       { draw: 10, status: 'void', games: 4 },

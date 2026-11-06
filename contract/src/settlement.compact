@@ -149,10 +149,11 @@ export struct Draw {
   numbers: Vector<7, Uint<8>>;
   moonball: Uint<8>;
   // Rollover from earlier draws added to this draw's division 1 (the
-  // jackpot), and the operator's fee from its sales, both fixed when the draw
-  // is finalised.
+  // jackpot), the operator's fee (running costs) and the creator's fee from
+  // its sales, all fixed when the draw is finalised.
   carried: Uint<128>;
   fee: Uint<128>;
+  creatorFee: Uint<128>;
   // Each division's prize per winning game, once finalised.
   prizes: Vector<9, Uint<128>>;
 }
@@ -242,12 +243,16 @@ export sealed ledger backupOrganiser: Bytes<32>;
 // Public key the tickets are encrypted to: the settler's (stage 1), a TEE's
 // or an MPC committee's joint key later.
 export sealed ledger settlementKey: JubjubPoint;
-// Where the operator fee goes, and the fee per game, in STAR: a flat amount
-// out of each game's price, so a ticket of several games pays it once per game. The rest of the price is the prize pool's. Starfall's
-// numbers: a game costs 1.2 tNIGHT, 1 tNIGHT to the pool and 0.2 to the
-// operator.
+// The two fees out of each game's price, in STAR, and where they go: flat
+// amounts per game, so a ticket of several games pays them once per game.
+// The operator fee pays the running costs (the keeper's and oracle's DUST,
+// hosting); the creator fee is the creator's. The rest of the price is the
+// prize pool's. Starfall's numbers: a game costs 1.3 tNIGHT, 1 tNIGHT to the
+// pool, 0.1 to the operator and 0.2 to the creator.
 export sealed ledger operator: UserAddress;
 export sealed ledger feePerGame: Uint<128>;
+export sealed ledger creator: UserAddress;
+export sealed ledger creatorFeePerGame: Uint<128>;
 // Price of one game, in STAR (1 tNIGHT = 1,000,000 STAR). A ticket costs its
 // games times this.
 export sealed ledger ticketPrice: Uint<128>;
@@ -272,11 +277,12 @@ witness divModWide(n: Field, d: Uint<128>): [Uint<128>, Uint<128>];
 // ----------------------------------------------------------- constructor
 
 constructor(key: JubjubPoint, organiserCommitment: Bytes<32>, backupCommitment: Bytes<32>,
-            sealingKey: JubjubPoint, operatorAddress: UserAddress, fee: Uint<128>, price: Uint<128>,
+            sealingKey: JubjubPoint, operatorAddress: UserAddress, fee: Uint<128>,
+            creatorAddress: UserAddress, creatorFee: Uint<128>, price: Uint<128>,
             salesMin: Uint<64>, salesMax: Uint<64>,
             reveal: Uint<64>, draw: Uint<64>, settle: Uint<64>) {
   assert(price > 0, "ticket price must be positive");
-  assert(fee < price, "operator fee per game must be below the ticket price");
+  assert((fee + creatorFee) as Uint<129> < price, "the fees per game must be below the ticket price");
   assert(!isIdentity(sealingKey), "identity settlement key not allowed");
   assert(salesMin >= 60 && salesMin < salesMax && salesMax <= 7776000, "sales period must be 60 seconds to 90 days");
   assert(reveal >= 60 && draw >= 60, "reveal and draw windows must be at least 60 seconds");
@@ -293,6 +299,8 @@ constructor(key: JubjubPoint, organiserCommitment: Bytes<32>, backupCommitment: 
   settlementKey = disclose(sealingKey);
   operator = disclose(operatorAddress);
   feePerGame = disclose(fee);
+  creator = disclose(creatorAddress);
+  creatorFeePerGame = disclose(creatorFee);
   ticketPrice = disclose(price);
   minSales = disclose(salesMin);
   maxSales = disclose(salesMax);
@@ -662,6 +670,7 @@ circuit openNext(close: Uint<64>, commitment: Bytes<32>): Uint<32> {
     moonball: 0,
     carried: 0,
     fee: 0,
+    creatorFee: 0,
     prizes: [0, 0, 0, 0, 0, 0, 0, 0, 0]
   });
   ticketCount.insert(id, 0);
@@ -856,8 +865,8 @@ export circuit settleBatch(n: Uint<32>): Uint<64> {
 }
 
 // Once every ticket is settled, anyone fixes each division's prize per
-// winning game and pays the draw's operator fee (feePerGame per game sold,
-// off sales first). Draws are finalised in order: the previous draw must be
+// winning game and pays the draw's two fees (feePerGame to the operator and
+// creatorFeePerGame to the creator, per game sold, off sales first). Draws are finalised in order: the previous draw must be
 // settled or void, and then all the rollover so far joins this draw's jackpot.
 export circuit finaliseDraw(n: Uint<32>): [] {
   const id = disclose(n);
@@ -875,7 +884,8 @@ export circuit finaliseDraw(n: Uint<32>): [] {
   const sold = gamesSold.lookup(id);
   const sales = (ticketPrice * sold) as Uint<128>;
   const fee = (feePerGame * sold) as Uint<128>;
-  const pool = (sales - fee) as Uint<128>;
+  const creatorFee = (creatorFeePerGame * sold) as Uint<128>;
+  const pool = (sales - fee - creatorFee) as Uint<128>;
   // Powerball's rules: each division gets its share of the pool; the rollover
   // (jackpot) joins division 1 only; an unwon division 2..8 falls to the next
   // lower division with a winner; an unwon division 1 or 9, and rounding
@@ -898,9 +908,12 @@ export circuit finaliseDraw(n: Uint<32>): [] {
   }, PrizeCalc { prizes: [0, 0, 0, 0, 0, 0, 0, 0, 0], cascade: 0, carry: 0, allocated: 0 },
      shares(), p.winners, [0, 1, 2, 3, 4, 5, 6, 7, 8]);
   carry = (calc.carry + (pool - calc.allocated)) as Uint<128>;
-  draws.insert(id, Draw { ...d, status: DrawStatus.settled, carried: carried, fee: fee, prizes: calc.prizes });
+  draws.insert(id, Draw { ...d, status: DrawStatus.settled, carried: carried, fee: fee, creatorFee: creatorFee, prizes: calc.prizes });
   if (fee > 0) {
     sendUnshielded(nativeToken(), fee, right<ContractAddress, UserAddress>(operator));
+  }
+  if (creatorFee > 0) {
+    sendUnshielded(nativeToken(), creatorFee, right<ContractAddress, UserAddress>(creator));
   }
 }
 
