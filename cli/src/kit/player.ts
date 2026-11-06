@@ -11,7 +11,7 @@ import { buyerProviders, buyWithRetry, proverArg } from '../buyer.js';
 import { publicDataFor, withSession } from '../common.js';
 import { BuyStopped, joinStarfall, pendingReverter, readStarfallRecord, readStarfallView, type RevertableWallet, starfallZkConfigPath } from '../starfall.js';
 import { type AgentState, describeResult, loadAgentState, type Result, saveAgentState, spentOnDraw, spentSince } from '../starfall-agent.js';
-import { describeEntry, parseUserAddress } from '../starfall-commands.js';
+import { describeEntry, entriesBought, parseUserAddress } from '../starfall-commands.js';
 import { openWallet } from '../wallet-lock.js';
 import { declareFeesAtDustTime, type DustTimeWallet } from '../dust-time.js';
 import { withFreshFees } from '../fresh-fees.js';
@@ -205,7 +205,7 @@ export const withPlayer = async <T>(config: KitConfig, seed: string, fn: (p: Pla
             if (night < cost) throw new Error(`${games} game(s) cost ${tNight(cost)} but the wallet holds ${tNight(night)}: get more from the faucet`);
             if (dust <= 0n) throw new Error('the wallet has no DUST yet to pay the fee (it builds up a few minutes after tNIGHT arrives)');
             joined ??= await joinStarfall(providers, record.contractAddress, {});
-            const tickets = entries.map((e) => Starfall.makeTicket(selling.id, e, payTo));
+            const tickets = Starfall.ticketsFor(selling.id, entries, payTo);
             log?.(`buying ${tickets.length} ticket(s), ${games} game(s), for draw ${selling.id} (sales close ${iso(selling.salesClose)}) for ${tNight(cost)}`);
             let bought = tickets.length;
             let message: string | undefined;
@@ -222,7 +222,7 @@ export const withPlayer = async <T>(config: KitConfig, seed: string, fn: (p: Pla
               message = err.message;
               txs = Math.ceil(err.bought / Number(Starfall.pureCircuits.maxTickets()));
             }
-            const done = entries.slice(0, bought);
+            const done = entriesBought(tickets, bought);
             const doneGames = done.reduce((a, e) => a + Starfall.gamesOf(e), 0);
             if (bought > 0) {
               const fresh = loadAgentState(statePath); // re-read: another command may have written it meanwhile

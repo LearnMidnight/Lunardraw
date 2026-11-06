@@ -139,7 +139,7 @@ export const serveStdio = async (
 export const BUY_SCHEMA = {
   type: 'object',
   properties: {
-    games: { type: 'integer', minimum: 1, maximum: 50, description: 'QuickPick: this many random games (one ticket each).' },
+    games: { type: 'integer', minimum: 1, maximum: 50, description: 'QuickPick: this many random games (12 to a ticket, one transaction).' },
     package: { type: 'string', enum: Object.keys(Starfall.QUICK_PICK_PACKAGES), description: 'A QuickPick package instead of games.' },
     numbers: { type: 'array', items: { type: 'integer', minimum: 1, maximum: 35 }, description: 'Your own numbers: 7 for a standard game, 8-12 with system, 5-6 with pick.' },
     moonball: { type: 'integer', minimum: 1, maximum: 20, description: 'Your own Moonball (random if left out).' },

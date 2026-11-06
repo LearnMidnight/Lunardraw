@@ -4,7 +4,7 @@
  *
  *   open draw ──▶ sales close ──▶ reveal its seed and open the next draw
  *   fulfilled ──▶ compute the numbers
- *   drawn     ──▶ decrypt the tickets, settle them a batch (22) at a time, in order
+ *   drawn     ──▶ decrypt the tickets, settle them a batch (batchSize(), 14) at a time, in order
  *             ──▶ finalise (prizes fixed, operator fee paid; draws in order)
  *   settled   ──▶ pay every winning ticket's entitlement
  *   a deadline missed ──▶ void the draw, then refund every ticket

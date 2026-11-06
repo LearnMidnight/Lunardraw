@@ -5,9 +5,10 @@
 //
 //   1. A ticket is one entry: a standard game, a System (8 to 12 numbers,
 //      every 7 of them) or a Pick (5 or 6 numbers, completed every way), with
-//      one Moonball or all 20 (Moonball Sweep). Its buyer pays for every game
-//      in it, publishes a commitment to it and the same ticket encrypted to
-//      the settlement key, and proves in the purchase that both hold the same
+//      one Moonball or all 20 (Moonball Sweep), plus up to maxLines() extra
+//      standard games ("lines"), so a QuickPick package of up to 12 games is
+//      one ticket. Its buyer pays for every game in it, publishes a
+//      commitment to it and the same ticket encrypted to the settlement key, and proves in the purchase that both hold the same
 //      valid ticket. The ticket also fixes who gets its prize: up to three
 //      addresses with shares.
 //   2. Tickets are numbered 0, 1, 2, ... per draw as they're bought; the count
@@ -81,22 +82,34 @@ export struct Payee {
   share: Uint<16>;
 }
 
+// An extra standard game on a ticket: 7 numbers in 1..35 in increasing order
+// and a Moonball 1..20, or all zero (unused). Scoring one costs a few hundred
+// rows, against about 5,000 for a ticket of its own (docs/SETTLEMENT.md).
+export struct Line {
+  numbers: Vector<7, Uint<8>>;
+  moonball: Uint<8>;
+}
+
 // What a ticket commits to. Payees after the first may be empty (share 0 and
 // an all-zero address); the shares add up to 10000. Known to the buyer, and
 // to the settlement key holder once decrypted.
 export struct TicketPreimage {
   drawId: Uint<32>;
   entry: Entry;
+  // Up to maxLines() extra standard games; unused ones are all zero. Their
+  // number is fixed by contract/scripts/gen-lines.py, which checks this.
+  lines: Vector<11, Line>;
   payees: Vector<3, Payee>;
   // A random field element: keeps the commitment and the entitlement id unguessable.
   salt: Field;
 }
 
 // A ticket encrypted to the settlement key: ephemeral = r*G, and each packed
-// field of the ticket plus a keystream from the shared point r*K.
+// field of the ticket plus a keystream from the shared point r*K. The length
+// follows from maxLines() (gen-lines.py checks it).
 export struct SealedTicket {
   ephemeral: JubjubPoint;
-  body: Vector<9, Field>;
+  body: Vector<12, Field>;
 }
 
 export struct TicketRecord {
@@ -109,10 +122,19 @@ export struct TicketRecord {
   refunded: Boolean;
 }
 
+// What a ticket commitment hashes: the ticket, with its lines packed three to
+// a field element as they're sealed (hashing them as 88 separate bytes cost
+// about 70 rows more per line). Packing is one-to-one: every byte is a
+// Uint<8> (the compiler range-checks each one a settler supplies), and 24
+// bytes fit a field element.
 struct TicketHashInput {
   domain: Bytes<32>;
   deployment: ContractAddress;
-  ticket: TicketPreimage;
+  drawId: Uint<32>;
+  entry: Entry;
+  payees: Vector<3, Payee>;
+  salt: Field;
+  lines: Vector<4, Field>;
 }
 
 struct AlphaPreimage {
@@ -200,6 +222,7 @@ struct Settled {
 
 include "batch";
 include "entries";
+include "lines";
 
 // --------------------------------------------------------------- ledger
 
@@ -313,12 +336,16 @@ export pure circuit organiserCommitmentOf(secret: Bytes<32>): Bytes<32> {
 // (k=20 instead of k=17). Compact may change transientHash between compiler
 // versions, but this contract is deployed locked, so its circuits, and so its
 // hash, never change; tickets are bought and settled with its own compiled
-// circuits.
+// circuits. v3: tickets carry lines.
 export pure circuit ticketCommitment(deployment: ContractAddress, t: TicketPreimage): Bytes<32> {
   return upgradeFromTransient(transientHash<TicketHashInput>(TicketHashInput {
-    domain: pad(32, "starfall:ticket:v2"),
+    domain: pad(32, "starfall:ticket:v3"),
     deployment: deployment,
-    ticket: t
+    drawId: t.drawId,
+    entry: t.entry,
+    payees: t.payees,
+    salt: t.salt,
+    lines: packedLines(t)
   }));
 }
 
@@ -383,8 +410,25 @@ pure circuit validPayees(p: Vector<3, Payee>): Boolean {
   return total == 10000 && p[0].share > 0 && tidy;
 }
 
+// Whether a line is used: a used line's Moonball is 1..20, an unused one's 0.
+pure circuit lineUsed(l: Line): Boolean {
+  return l.moonball != 0;
+}
+
+// A line is a standard game or all zero. Increasing from above 0 to at most
+// 35 makes its numbers distinct and in range, so only the last needs the
+// upper bound.
+pure circuit validLine(l: Line): Boolean {
+  const n = l.numbers;
+  return l.moonball == 0
+    ? n[0] == 0 && n[1] == 0 && n[2] == 0 && n[3] == 0 && n[4] == 0 && n[5] == 0 && n[6] == 0
+    : n[0] > 0 && n[1] > n[0] && n[2] > n[1] && n[3] > n[2] && n[4] > n[3] && n[5] > n[4] && n[6] > n[5] &&
+      n[6] <= 35 && l.moonball <= 20;
+}
+
 export pure circuit validTicket(t: TicketPreimage): Boolean {
-  return validEntry(t.entry) && validPayees(t.payees);
+  return validEntry(t.entry) && validPayees(t.payees) &&
+         fold((acc: Boolean, l: Line): Boolean => acc && validLine(l), true, t.lines);
 }
 
 pure circuit has(v: Vector<7, Uint<8>>, n: Uint<8>): Boolean {
@@ -413,11 +457,28 @@ export pure circuit gamesByDivision(e: Entry, numbers: Vector<7, Uint<8>>, moonb
   return [w[5], wo[5], w[4], wo[4], w[3], w[2], wo[3], w[1], w[0]];
 }
 
+// Whether x is one of the drawn numbers: (x - n1)(x - n2)...(x - n7) is 0
+// exactly then (the field is prime, and x and each n are below 256). Cheaper
+// in a proof than comparing x with each number.
+pure circuit drawn(x: Uint<8>, numbers: Vector<7, Uint<8>>): Boolean {
+  return fold((p: Field, d: Uint<8>): Field => p * ((x as Field) - (d as Field)), 1, numbers) == 0;
+}
+
+// How many of a line's numbers were drawn. A line's numbers are distinct, so
+// this is its main numbers right; 0 for an unused line (0 is never drawn).
+pure circuit lineHits(l: Line, numbers: Vector<7, Uint<8>>): Uint<3> {
+  const n = l.numbers;
+  return (drawn(n[0], numbers) ? 1 : 0) + (drawn(n[1], numbers) ? 1 : 0) + (drawn(n[2], numbers) ? 1 : 0) +
+         (drawn(n[3], numbers) ? 1 : 0) + (drawn(n[4], numbers) ? 1 : 0) + (drawn(n[5], numbers) ? 1 : 0) +
+         (drawn(n[6], numbers) ? 1 : 0);
+}
+
 // --------------------------------------------------- ticket encryption
 //
-// A ticket packs into 9 field elements: the entry (kind, count, 12 numbers,
-// Moonball, sweep) and the three 2-byte shares (22 bytes), each payee's
-// address halves as they're carried, the salt, and a 0 (unused). Nothing is
+// A ticket packs into 8 field elements plus its lines: the entry (kind, count,
+// 12 numbers, Moonball, sweep) and the three 2-byte shares (22 bytes), each
+// payee's address halves as they're carried, the salt, and then the lines,
+// three (24 bytes) to a field element (lines.compact). Nothing is
 // split byte by byte, which kept a purchase's proof small.
 // Encryption is ElGamal-style key agreement on Jubjub (the curve Nightcast's
 // VRF uses) with a Poseidon keystream: ephemeral R = r*G, shared S = r*K, and
@@ -440,7 +501,20 @@ pure circuit shareBytes(p: Payee): Vector<2, Uint<8>> {
   return (p.share as Bytes<2>) as Vector<2, Uint<8>>;
 }
 
-pure circuit packTicket(t: TicketPreimage): Vector<9, Field> {
+pure circuit lineBytes(l: Line): Vector<8, Uint<8>> {
+  return [...l.numbers, l.moonball];
+}
+
+pure circuit packLines(a: Line, b: Line, c: Line): Field {
+  const v: Vector<24, Uint<8>> = [...lineBytes(a), ...lineBytes(b), ...lineBytes(c)];
+  return fold((acc: Field, x: Uint<8>, w: Field): Field => acc + (x as Field) * w, 0, v, weights24());
+}
+
+pure circuit noLine(): Line {
+  return Line { numbers: [0, 0, 0, 0, 0, 0, 0], moonball: 0 };
+}
+
+pure circuit packTicket(t: TicketPreimage): Vector<12, Field> {
   const e = t.entry;
   const head: Vector<22, Uint<8>> = [e.kind, e.count, ...e.numbers, e.moonball, e.sweep ? 1 : 0,
                                      ...shareBytes(t.payees[0]), ...shareBytes(t.payees[1]), ...shareBytes(t.payees[2])];
@@ -449,7 +523,7 @@ pure circuit packTicket(t: TicketPreimage): Vector<9, Field> {
     t.payees[0].lo as Field, t.payees[0].hi as Field,
     t.payees[1].lo as Field, t.payees[1].hi as Field,
     t.payees[2].lo as Field, t.payees[2].hi as Field,
-    t.salt, 0
+    t.salt, ...packedLines(t)
   ];
 }
 
@@ -462,7 +536,7 @@ export pure circuit addressOf(p: Payee): UserAddress {
   return UserAddress { bytes: join16(p.lo as Field, p.hi as Field) };
 }
 
-pure circuit unpackTicket(drawId: Uint<32>, f: Vector<9, Field>): TicketPreimage {
+pure circuit unpackTicket(drawId: Uint<32>, f: Vector<12, Field>): TicketPreimage {
   const h = (f[0] as Bytes<22>) as Vector<22, Uint<8>>;
   return TicketPreimage {
     drawId: drawId,
@@ -473,15 +547,16 @@ pure circuit unpackTicket(drawId: Uint<32>, f: Vector<9, Field>): TicketPreimage
       moonball: h[14],
       sweep: h[15] != 0
     },
+    lines: unpackLines(f),
     payees: [unpackPayee(h[16], h[17], f[1], f[2]), unpackPayee(h[18], h[19], f[3], f[4]), unpackPayee(h[20], h[21], f[5], f[6])],
     salt: f[7]
   };
 }
 
-pure circuit keystream(shared: JubjubPoint): Vector<9, Field> {
+pure circuit keystream(shared: JubjubPoint): Vector<12, Field> {
   const x = jubjubPointX(shared);
   const y = jubjubPointY(shared);
-  return map((i: Field): Field => transientHash<[Field, Field, Field]>([x, y, i]), [0, 1, 2, 3, 4, 5, 6, 7, 8]);
+  return map((i: Field): Field => transientHash<[Field, Field, Field]>([x, y, i]), bodySlots());
 }
 
 // Encrypt a ticket to `key` with randomness r.
@@ -674,9 +749,9 @@ circuit openNext(close: Uint<64>, commitment: Bytes<32>): Uint<32> {
 
 // Buy 1 to maxTickets() tickets for an open draw in one transaction, paying
 // the price of every game in them: standard games, Systems, Picks, with or
-// without Moonball Sweep. Each ticket has its own index and settles as one
-// entry however many games it holds. For each one, publishes the commitment
-// and the ticket encrypted to the settlement key; the proof shows both hold
+// without Moonball Sweep, and each ticket's lines. Each ticket has its own
+// index and settles as one ticket however many games it holds. For each one,
+// publishes the commitment and the ticket encrypted to the settlement key; the proof shows both hold
 // the same valid ticket. Refunds of a void draw go to `refundTo`. Returns the
 // index of the first ticket bought.
 export circuit buyTickets(count: Uint<8>, refundTo: UserAddress): Uint<64> {
@@ -691,7 +766,7 @@ export circuit buyTickets(count: Uint<8>, refundTo: UserAddress): Uint<64> {
   const first = ticketCount.lookup(id);
   assert(first + (n as Uint<64>) <= 4294967295, "draw is full");
   // Games per ticket (0 for an unused slot), and so the price of the purchase.
-  const games = map((t: TicketPreimage, j: Uint<8>): Uint<32> => j < n ? gamesIn(t.entry) : 0, ts, ticketSlots());
+  const games = map((t: TicketPreimage, j: Uint<8>): Uint<32> => j < n ? ticketGames(t) : 0, ts, ticketSlots());
   const bought = disclose(fold((acc: Uint<64>, g: Uint<32>): Uint<64> => (acc + g) as Uint<64>, 0, games));
   receiveUnshielded(nativeToken(), (ticketPrice * bought) as Uint<128>);
   const to = disclose(refundTo);
@@ -819,7 +894,7 @@ export circuit settleBatch(n: Uint<32>): Uint<64> {
       const rec = tickets.lookup(ticketKey(id, index));
       assert(disclose(ticketCommitment(kernel.self(), s.ticket) == rec.commitment),
              "ticket does not match its commitment");
-      const g = gamesByDivision(s.ticket.entry, d.numbers, d.moonball);
+      const g = ticketDivisions(s.ticket, d.numbers, d.moonball);
       return Settled {
         games: g,
         won: fold((acc: Boolean, x: Uint<32>): Boolean => acc || x != 0, false, g),

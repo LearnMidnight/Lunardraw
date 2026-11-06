@@ -109,16 +109,18 @@ Once the player wallet has synced and has tNIGHT, buy a package for the draw on 
   --package starter --proof-server-port 6300
 ```
 
-| Package | Games | Transactions |
-|---|---|---|
-| single | 1 | 1 |
-| starter | 4 | 2 |
-| mini | 8 | 4 |
-| regular | 12 | 6 |
-| mega | 25 | 13 |
-| maxi | 50 | 25 |
+| Package | Games | Tickets | Transactions |
+|---|---|---|---|
+| single | 1 | 1 | 1 |
+| starter | 4 | 1 | 1 |
+| mini | 8 | 1 | 1 |
+| regular | 12 | 1 | 1 |
+| super | 18 | 2 | 1 |
+| mega | 25 | 3 | 1 |
+| jumbo | 36 | 3 | 1 |
+| maxi | 50 | 5 | 1 |
 
-Or `--games <n>` for any number. Each transaction is a proof of up to 18 tickets (a minute or two and about 1.3 GB of memory): a Super or smaller is one transaction, a Maxi three. The numbers are printed when it's done: winnings go to the player wallet by themselves.
+Or `--games <n>` for any number. Standard games go 12 to a ticket (a contract with lines, 6 Nov 2026 and later), and each transaction is a proof of up to 13 tickets, 156 games (a minute or two and about 1.3 GB of memory): every package is one transaction. The numbers are printed when it's done: winnings go to the player wallet by themselves.
 
 System, Pick and Moonball Sweep entries are **one ticket each**, however many games they hold (a contract with entries, PR #41 and later):
 

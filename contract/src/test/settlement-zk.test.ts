@@ -20,7 +20,7 @@ import { generateOperatorSecret, generateOracleSecretKey, oraclePublicKey, pureC
 import { combineDrawSeed, drawStarfall, seedCommitment } from '@nightcast/sdk';
 import { pureCircuits } from '../managed/settlement/contract/index.js';
 import { type ProofData, SettlementSimulator } from '../settlement-simulator.js';
-import { makeTicket, randomScalar } from '../settlement-tickets.js';
+import { GAMES_PER_TICKET, makeTicket, randomScalar, ticketsFor } from '../settlement-tickets.js';
 import { quickPick, type PlainLine } from '../tickets.js';
 
 const ZKIR = fileURLToPath(new URL('../managed/settlement/zkir/', import.meta.url));
@@ -100,18 +100,23 @@ const allPass = async (runs: Run[]) => {
 };
 
 describe('every circuit run passes the zkir check', () => {
-  it('purchases of 1, 2 and 18 tickets, a settled draw with winners, payments to 1 and 3 payees', async () => {
+  it('purchases of 1, 2 and 13 full tickets, a settled draw with winning lines, payments to 1 and 3 payees', async () => {
     const { sim, runs, open } = setup();
     const { n, seed, draw } = open();
     const me = randomAddress();
     sim.buyTickets([makeTicket(n, quickPick(), me)], me);
     sim.buyTickets([makeTicket(n, quickPick(), me), makeTicket(n, quickPick(), me)], me);
-    // A full purchase: every slot used.
-    sim.buyTickets(Array.from({ length: Number(pureCircuits.maxTickets()) }, () => makeTicket(n, quickPick(), me)), me);
-    // A sure winner paid to one address, and one split between three payees.
+    // A full purchase: every slot used, every line of every ticket used.
+    const full = ticketsFor(n, Array.from({ length: Number(pureCircuits.maxTickets()) * GAMES_PER_TICKET }, () => quickPick()), me);
+    expect(full.length).toBe(Number(pureCircuits.maxTickets()));
+    sim.buyTickets(full, me);
+    // Sure winners paid to one address (on its last line), and split between three payees (on its entry).
     sim.buyTickets(
       [
-        makeTicket(n, lineHitting(draw.numbers, draw.moonball, 3), randomAddress()),
+        makeTicket(n, quickPick(), randomAddress(), undefined, [
+          ...Array.from({ length: GAMES_PER_TICKET - 2 }, () => quickPick()),
+          lineHitting(draw.numbers, draw.moonball, 3),
+        ]),
         makeTicket(n, lineHitting(draw.numbers, draw.moonball, 4), [
           { address: randomAddress(), share: 5_000 },
           { address: randomAddress(), share: 3_000 },
@@ -125,7 +130,7 @@ describe('every circuit run passes the zkir check', () => {
     sim.requestAndOpenNext(n, seed, { salesClose: BigInt(sim.now + 3_600), seedCommitment: new Uint8Array(32).fill(99) });
     sim.fulfilDraw(n);
     sim.computeNumbers(n);
-    expect(sim.settleAll(n)).toBe(2); // 23 tickets: a full batch of 22, then 1
+    expect(sim.settleAll(n)).toBe(2); // 18 tickets: a full batch of 14, then 4
     expect(sim.entitlementsOf(n).length).toBeGreaterThanOrEqual(2);
     const circuits = new Set(runs.map((r) => r.circuit));
     for (const c of ['buyTickets', 'requestDraw', 'fulfilDraw', 'computeNumbers', 'settleBatch', 'finaliseDraw', 'payEntitlement']) {

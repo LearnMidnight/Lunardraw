@@ -25,6 +25,8 @@ import {
 } from '../starfall.js';
 
 const { DrawStatus, SettlementSimulator, makeTicket, randomScalar } = Starfall;
+/** Tickets that take two settlement batches: a full one and part of the next. */
+const TWO_BATCHES = Number(Starfall.pureCircuits.batchSize()) + 8;
 type Sim = InstanceType<typeof SettlementSimulator>;
 
 const hex = (b: Uint8Array): string => Buffer.from(b).toString('hex');
@@ -109,13 +111,13 @@ describe('the Starfall keeper', () => {
     expect((await keeper.tick()).done).toEqual(['open after 0']);
     expect(draw(sim, 1n).status).toBe(DrawStatus.open);
 
-    // 30 games: two batches. One is a sure winner (3 + Moonball); the rest are QuickPicks.
+    // Two batches of tickets. One is a sure winner (3 + Moonball); the rest are QuickPicks.
     const { numbers, moonball } = numbersOf(ctx, 1n);
     const winner = randomAddress();
     const games = [makeTicket(1n, lineHitting(numbers, moonball, 3), winner)];
-    for (let i = 0; i < 29; i++) games.push(makeTicket(1n, quickPick(), randomAddress()));
+    for (let i = 1; i < TWO_BATCHES; i++) games.push(makeTicket(1n, quickPick(), randomAddress()));
     sim.buyPackage(games, BUYER);
-    expect(sim.ticketsSold(1n)).toBe(30n);
+    expect(sim.ticketsSold(1n)).toBe(BigInt(TWO_BATCHES));
 
     passing(sim, draw(sim, 1n).salesClose);
     expect((await keeper.tick()).done).toEqual(['reveal 1']);
@@ -127,11 +129,11 @@ describe('the Starfall keeper', () => {
     // One batch a pass, in order, until every ticket is settled.
     expect((await keeper.tick()).done).toEqual(['settle 1 from 0']);
     expect((await keeper.tick()).done).toEqual([`settle 1 from ${Starfall.pureCircuits.batchSize()}`]);
-    expect(sim.getLedger().progress.lookup(1n).next).toBe(30n);
+    expect(sim.getLedger().progress.lookup(1n).next).toBe(BigInt(TWO_BATCHES));
     expect((await keeper.tick()).done).toEqual(['finalise 1']);
     const settled = draw(sim, 1n);
     expect(settled.status).toBe(DrawStatus.settled);
-    expect(settled.fee).toBe(30n * FEE);
+    expect(settled.fee).toBe(BigInt(TWO_BATCHES) * FEE);
 
     // Then every entitlement is paid, the sure winner's among them.
     const ids = sim.entitlementsOf(1n);
@@ -193,6 +195,35 @@ describe('the Starfall keeper', () => {
     await keeper.tick();
     expect(woundDown(await ctx.chain.view())).toBe(true);
   }, 60_000);
+
+  it('settles QuickPick tickets of 12 games in one batch and pays a winning line', async () => {
+    const ctx = setup();
+    const { sim } = ctx;
+    const keeper = ctx.keeper();
+    await keeper.tick(); // open 1
+    const { numbers, moonball } = numbersOf(ctx, 1n);
+    const winner = randomAddress();
+    // 156 games in 13 tickets, one purchase: the sure winner is the last line of a full ticket.
+    const games = Array.from({ length: 156 }, () => quickPick());
+    games[23] = lineHitting(numbers, moonball, 3);
+    const tickets = Starfall.ticketsFor(1n, games, winner);
+    expect(tickets.length).toBe(13);
+    expect(Starfall.linesOf(tickets[1]).length).toBe(11);
+    expect(sim.buyPackage(tickets, BUYER)).toBe(1);
+    passing(sim, draw(sim, 1n).salesClose);
+    await keeper.tick(); // reveal
+    oracleAnswers(sim);
+    await keeper.tick(); // compute
+    expect((await keeper.tick()).done).toEqual(['settle 1 from 0']);
+    expect((await keeper.tick()).done).toEqual(['finalise 1']);
+    expect(draw(sim, 1n).fee).toBe(156n * FEE);
+    expect(sim.getLedger().progress.lookup(1n).winners[7]).toBeGreaterThanOrEqual(1n); // the 3 + Moonball
+    for (let pass = 0; pass < 10 && sim.entitlementsOf(1n).some((id) => !sim.getLedger().entitlements.lookup(id).paid); pass++) {
+      await keeper.tick();
+    }
+    for (const id of sim.entitlementsOf(1n)) expect(sim.getLedger().entitlements.lookup(id).paid).toBe(true);
+    if (sim.payments) expect(sim.payments.some((p) => p.to === hex(winner) && p.amount > 0n)).toBe(true);
+  }, 120_000);
 
   it('finalises an unsold draw straight away, and draws in order', async () => {
     const ctx = setup();
@@ -344,7 +375,7 @@ describe('the standby keeper', () => {
     const primary = ctx.keeper({ openNew: false });
     const standby = ctx.keeper({ role: 'standby', openNew: false, takeOverAfterSecs: 300 });
     openFirst(ctx);
-    sim.buyPackage(Array.from({ length: 30 }, () => makeTicket(1n, quickPick(), randomAddress())), BUYER);
+    sim.buyPackage(Array.from({ length: TWO_BATCHES }, () => makeTicket(1n, quickPick(), randomAddress())), BUYER);
     passing(sim, draw(sim, 1n).salesClose);
     await primary.tick(); // reveal
     oracleAnswers(sim);
@@ -509,7 +540,7 @@ describe('the Starfall site feed', () => {
     await keeper.tick();
     const { numbers, moonball } = numbersOf(ctx, 1n);
     const games = [makeTicket(1n, lineHitting(numbers, moonball, 3), randomAddress())];
-    for (let i = 0; i < 29; i++) games.push(makeTicket(1n, quickPick(), randomAddress()));
+    for (let i = 1; i < TWO_BATCHES; i++) games.push(makeTicket(1n, quickPick(), randomAddress()));
     sim.buyPackage(games, BUYER);
 
     let f = await feed();
@@ -517,7 +548,7 @@ describe('the Starfall site feed', () => {
     expect(game.price_star).toBe(1_200_000);
     expect(game.fee_star).toBe(200_000);
     expect(game.allocation_bp).toEqual([3350, 185, 230, 200, 150, 940, 730, 1550, 2665]);
-    expect(game.open).toMatchObject({ num: 1, games_sold: 30 });
+    expect(game.open).toMatchObject({ num: 1, games_sold: TWO_BATCHES });
     // the monitor warns before the reveal deadline
     expect(game.open!.reveal_deadline).toBe(new Date(Number(draw(sim, 1n).revealDeadline) * 1000).toISOString());
     expect(game.draws).toEqual([]);
@@ -541,7 +572,7 @@ describe('the Starfall site feed', () => {
     d1 = (await feed()).games.starfall.draws.find((d) => d.num === 1)!;
     expect(d1.status).toBe('settled');
     // The site's check: prizes and rollover by Powerball's rules from the games sold and the winners.
-    const pool = 30n * (PRICE - FEE);
+    const pool = BigInt(TWO_BATCHES) * (PRICE - FEE);
     const expected = Starfall.prizesByPowerballRules(pool, BigInt(d1.carried_in_star!), d1.winners!.map(BigInt));
     expect(d1.prizes_star).toEqual(expected.prizes.map(Number));
     expect(d1.carry_out_star).toBe(Number(expected.carry));

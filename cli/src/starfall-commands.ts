@@ -133,8 +133,9 @@ wallet's balances, its last pass, failures in a row) for \`./lunardraw monitor\`
 instead of a proof server: no Docker and no proving keys needed. It sees the tickets being bought, never
 the draw.
 buy buys tickets for the draw on sale, paid to --pay-to (default: your wallet), with refunds to your
-wallet if the draw is cancelled; it sends up to 18 tickets per transaction. A ticket is one entry:
-  --games <n> / --package <name>   that many random standard games (QuickPick), one ticket each;
+wallet if the draw is cancelled; it sends up to 13 tickets per transaction. A ticket is one entry,
+and standard games go 12 to a ticket (every QuickPick package is one transaction):
+  --games <n> / --package <name>   that many random standard games (QuickPick);
   --numbers "3 9 14 21 27 33 35"   your own standard game (7 numbers), or a System with 8 to 12;
   --system <8-12>                  a System: every 7 of your numbers (random unless --numbers);
   --pick <5|6>                     a Pick: your 5 or 6 numbers completed every way (random unless --numbers);
@@ -323,7 +324,23 @@ export const windDownStatus = (view: StarfallView): string => {
   return `Winding down: no new draws will open. Still in progress: ${busy.length ? `draw ${busy.join(', ')}` : 'payments or refunds'}.`;
 };
 
-/** A ticket's entry for the buy listing: "System 9: 3 5 9 ... + 7 (36 games)". */
+/**
+ * The buy listing: each ticket's entries, "  ticket 1: System 9: 3 5 9 ... + 7 (36 games)", or
+ * "  ticket 2, game 3: standard: ..." for a ticket of several standard games.
+ */
+export const describeTickets = (tickets: readonly Starfall.TicketPreimage[]): string =>
+  tickets
+    .flatMap((t, i) => {
+      const es = Starfall.entriesOf(t);
+      return es.map((e, j) => `  ticket ${i + 1}${es.length > 1 ? `, game ${j + 1}` : ''}: ${describeEntry(e)}`);
+    })
+    .join('\n');
+
+/** The games in the first `n` of a purchase's tickets: what a purchase stopped part way had bought. */
+export const entriesBought = (tickets: readonly Starfall.TicketPreimage[], n: number): Starfall.PlainEntry[] =>
+  tickets.slice(0, n).flatMap((t) => Starfall.entriesOf(t));
+
+/** An entry for the buy listing: "System 9: 3 5 9 ... + 7 (36 games)". */
 export const describeEntry = (e: Starfall.PlainEntry): string =>
   `${Starfall.entryName(e)}: ${[...e.numbers].sort((a, b) => a - b).join(' ')}` +
   `${e.sweep ? ' + every Moonball' : ` + ${e.moonball}`} (${Starfall.gamesOf(e)} game${Starfall.gamesOf(e) === 1 ? '' : 's'})`;
@@ -674,13 +691,13 @@ export const starfall = async (argv: string[]): Promise<number> => {
           if (night < cost) throw new Error(`${games} game(s) cost ${tn(cost)} but the wallet holds ${tn(night)}`);
           const mine = walletBytes(wallet);
           const payTo = values['pay-to'] ? parseUserAddress(values['pay-to']) : mine;
-          const tickets = entries.map((e) => Starfall.makeTicket(selling.id, e, payTo));
+          const tickets = Starfall.ticketsFor(selling.id, entries, payTo);
           const joined = await joinStarfall(providers, record.contractAddress, {});
           session.logger.info(
             `Buying ${tickets.length} ticket(s), ${games} game(s), for draw ${selling.id} (sales close ${iso(selling.salesClose)}) for ${tn(cost)}, ` +
               `${Math.ceil(tickets.length / Number(Starfall.pureCircuits.maxTickets()))} transaction(s), from ${walletAddress(wallet)}...`,
           );
-          const listing = (n: number) => entries.slice(0, n).map((e, i) => `  ticket ${i + 1}: ${describeEntry(e)}`).join('\n');
+          const listing = (n: number) => describeTickets(tickets.slice(0, n));
           try {
             // a collision with another purchase (it took the same ticket number) is built again
             await buyWithRetry(joined, providers, record.contractAddress, tickets, mine, selling.salesClose, {
@@ -693,7 +710,9 @@ export const starfall = async (argv: string[]): Promise<number> => {
               `Stopped after ${err.bought} of ${err.of} ticket(s): ${err.message}.\n` +
                 (err.bought > 0 ? `These ${err.bought} are bought for draw ${selling.id} (paid to ${hex(payTo)}):\n${listing(err.bought)}\n` : '') +
                 `Check with \`./lunardraw starfall status --network ${network}\`, then run buy again for the rest` +
-                (values.games !== undefined || values.package !== undefined ? ` (--games ${err.of - err.bought}).\n` : '.\n'),
+                (values.games !== undefined || values.package !== undefined
+                  ? ` (--games ${games - entriesBought(tickets, err.bought).reduce((a, e) => a + Starfall.gamesOf(e), 0)}).\n`
+                  : '.\n'),
             );
             return 1;
           }
@@ -814,10 +833,10 @@ export const starfall = async (argv: string[]): Promise<number> => {
                   const stagger = Math.floor(Math.random() * 90_000);
                   if (stagger > 0) await Promise.race([new Promise((r) => setTimeout(r, stagger)), stopped]);
                   if (stop) break;
-                  const tickets = plan.entries.map((e) => Starfall.makeTicket(plan.draw, e, mine));
+                  const tickets = Starfall.ticketsFor(plan.draw, plan.entries, mine);
                   log(
                     `draw ${plan.draw} (sales close ${iso(plan.salesClose)}): buying ${tickets.length} ticket(s), ${plan.games} game(s), ${tn(plan.cost)}:\n` +
-                      plan.entries.map((e, i) => `  ticket ${i + 1}: ${describeEntry(e)}`).join('\n'),
+                      describeTickets(tickets),
                   );
                   let bought = tickets.length;
                   let txs = 0;
@@ -844,7 +863,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
                     }
                   }
                   if (bought > 0) {
-                    const entries = plan.entries.slice(0, bought);
+                    const entries = entriesBought(tickets, bought);
                     const games = entries.reduce((a, e) => a + Starfall.gamesOf(e), 0);
                     state.purchases.push({ draw: plan.draw.toString(), at: new Date().toISOString(), entries, games, cost: (view.ticketPrice * BigInt(games)).toString(), txs });
                     saveAgentState(statePath, state);
