@@ -28,6 +28,7 @@ import { parseArgs } from 'node:util';
 import { buildFeed, type ChainView, DrawOracle, every, FileSeedStore, Keeper, STARFALL_WEEKLY, writeFeed } from '@lunardraw/keeper';
 import { compilerInfo, localFingerprints, NETWORKS, walletAddress, walletBalances } from '@nightcast/deploy';
 import { openWallet } from './wallet-lock.js';
+import { walletAddressesOf } from './wallet-address.js';
 import {
   hex,
   iso,
@@ -68,6 +69,8 @@ import {
 const USAGE = `usage:
   ./lunardraw keygen organiser --out <file>
   ./lunardraw wallet show  --network <network> --wallet <file>
+  ./lunardraw wallet address --network <network> --wallet <file>
+                           (the wallet's NIGHT address and DUST address, offline: both public)
   ./lunardraw deploy       --network <${NETWORKS.join('|')}> --organiser <file> --backup <file> --oracle <file> --wallet <file> [--accept]
                            [--price <STAR>] [--min-sales <s>] [--max-sales <s>] [--reveal <s>] [--draw <s>] [--claim <s>]
   ./lunardraw accept-key   --network <network> --oracle <oracle secret file> --wallet <file>
@@ -167,6 +170,15 @@ const main = async (argv: string[]): Promise<number> => {
     }
 
     case 'wallet': {
+      if (positionals[0] === 'address') {
+        const network = networkArg(values.network);
+        if (network === 'local') throw new Error('wallet address is for preprod or preview');
+        const seed = walletSeed(values.wallet);
+        if (!seed) throw new Error('--wallet <file> is needed');
+        const a = walletAddressesOf(network, seed);
+        process.stdout.write(`NIGHT address (send NIGHT here): ${a.night}\nDUST address (designate DUST generation here): ${a.dust}\n`);
+        return 0;
+      }
       if (positionals[0] !== 'show') throw new Error(USAGE);
       const network = networkArg(values.network);
       return withSession(network, async (session) => {

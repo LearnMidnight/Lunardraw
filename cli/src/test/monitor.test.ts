@@ -101,6 +101,15 @@ describe('the monitor', () => {
     const low = evaluate(inputs({ services: services({}, { wallet: { synced: true, night: '7000000', dust: String(DUST / 4n) } }) }), { ...emptyState(), lastVoid: 0 });
     expect(low.map((a) => [a.key, a.title])).toEqual([['dust:oracle', "The oracle's wallet is low on DUST: 0.25 left"]]);
     expect(keys(inputs({ services: services({ wallet: { synced: true, night: '0', dust: '0' } }) }))).toEqual(['night:keeper']);
+    // Fees outrunning what the wallet's tNIGHT generates: 7 tNIGHT makes 5 DUST a day; 24 DUST spent in 24 hours.
+    const fees = { circuits: { settleBatch: { count: 20, avg_dust: 1.2, last_dust: 1.2 } }, last_24h_dust: 24, last_24h_txs: 20 };
+    const hot = evaluate(inputs({ services: services({ wallet: { synced: true, night: '7000000', dust: String(38n * DUST) }, fees }) }), { ...emptyState(), lastVoid: 0 });
+    expect(hot.map((a) => a.key)).toEqual(['dustrate:keeper']);
+    expect(hot[0].title).toMatch(/spends DUST faster than its tNIGHT makes it: 24.00 a day against 5.00/);
+    expect(hot[0].detail).toMatch(/lasts about 2.00 days.*about 51 would cover/);
+    // Enough tNIGHT: no alert. Too few transactions to judge: no alert.
+    expect(keys(inputs({ services: services({ fees }) }))).toEqual([]);
+    expect(keys(inputs({ services: services({ wallet: { synced: true, night: '7000000', dust: String(19n * DUST) }, fees: { ...fees, last_24h_txs: 3 } }) }))).toEqual([]);
   });
 
   it('warns before a draw misses its reveal, its oracle answer or its settlement', () => {

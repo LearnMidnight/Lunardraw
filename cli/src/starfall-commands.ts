@@ -13,6 +13,7 @@ import { MidnightBech32m } from '@midnight-ntwrk/wallet-sdk-address-format';
 import { quickPick, Starfall } from '@lunardraw/contract';
 import { buildStarfallFeed, DerivedSeeds, DrawOracle, every, isStaleDustProof, PurchaseLog, STARFALL_WEEKLY, StarfallKeeper, type StarfallView, StepTimes, writeFeed } from '@lunardraw/keeper';
 import { declareFeesAtDustTime, type DustTimeWallet } from './dust-time.js';
+import { DustMeter, meterDustFees } from './dust-meter.js';
 import { withFreshFees } from './fresh-fees.js';
 import { compilerInfo, localFingerprints, NETWORKS, type Session, walletAddress, walletBalances } from '@nightcast/deploy';
 import { openWallet } from './wallet-lock.js';
@@ -173,6 +174,7 @@ const freshFees = <P extends ReturnType<typeof starfallProviders>>(
   providers: P,
   wallet: Parameters<typeof waitForTip>[0],
   logger: { info(msg: string): void; warn(msg: string): void; error(msg: string): void },
+  meter?: DustMeter,
 ): { providers: P; stuck: Promise<boolean> } => {
   let markStuck: (v: boolean) => void = () => undefined;
   const stuck = new Promise<boolean>((resolve) => (markStuck = resolve));
@@ -181,7 +183,8 @@ const freshFees = <P extends ReturnType<typeof starfallProviders>>(
     markStuck(true);
   };
   return {
-    providers: withFreshFees(providers, { beforeBalance: () => waitForTip(wallet, { logger, timeoutMs: 60_000 }), isStale: isStaleDustProof, logger, onStuck }),
+    // The meter wraps the node's side, so it measures each fee that was actually paid.
+    providers: withFreshFees(meter ? meterDustFees(providers, meter, logger) : providers, { beforeBalance: () => waitForTip(wallet, { logger, timeoutMs: 60_000 }), isStale: isStaleDustProof, logger, onStuck }),
     stuck,
   };
 };
@@ -516,7 +519,9 @@ export const starfall = async (argv: string[]): Promise<number> => {
         const wallet = await openServiceWallet(session, walletSeed(values.wallet), dustMinutes);
         if (!wallet) return RESTART;
         try {
-          const { providers, stuck } = freshFees(starfallProviders(session, wallet), wallet, session.logger);
+          // what each transaction costs in DUST, kept beside the status file (or in memory)
+          const meter = new DustMeter(values.status ? `${values.status}.fees.json` : undefined);
+          const { providers, stuck } = freshFees(starfallProviders(session, wallet), wallet, session.logger, meter);
           // The contract is the judge: its stored organiser must be this secret's Starfall commitment.
           const opens = organiserCheck(await readStarfallLedger(providers.publicDataProvider, record.contractAddress), organiserSecret);
           if (!opens.ok) throw new Error(`${values.organiser} can't run this deployment: ${opens.detail}`);
@@ -565,7 +570,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
           const silence = untilSilentFor(silentAfter(values['silent-after']), () => keeper.status().lastTickAt, session.logger);
           // health for `./lunardraw monitor` (its alerts)
           const health = values.status
-            ? statusWriter(values.status, { service: 'keeper', wallet, pass: () => keeper.status(), nightToken: unshieldedToken().raw, logger: session.logger })
+            ? statusWriter(values.status, { service: 'keeper', wallet, pass: () => keeper.status(), nightToken: unshieldedToken().raw, logger: session.logger, fees: () => meter.summary() })
             : undefined;
           const restart = await Promise.race([untilStopped().then(() => false), watchdog.done, sync.stalled, silence.done, stuck]);
           watchdog.cancel();
@@ -592,7 +597,9 @@ export const starfall = async (argv: string[]): Promise<number> => {
         const wallet = await openServiceWallet(session, walletSeed(values.wallet), dustMinutes);
         if (!wallet) return RESTART;
         try {
-          const { providers, stuck } = freshFees(starfallProviders(session, wallet), wallet, session.logger);
+          // what each transaction costs in DUST, kept beside the status file (or in memory)
+          const meter = new DustMeter(values.status ? `${values.status}.fees.json` : undefined);
+          const { providers, stuck } = freshFees(starfallProviders(session, wallet), wallet, session.logger, meter);
           const view = await readStarfallView(providers.publicDataProvider, record.contractAddress);
           if (!view.oracleKeyReady) throw new Error('the oracle key is not active yet: run `./lunardraw starfall accept-key` first');
           const joined = await joinStarfall(providers, record.contractAddress, { oracleSecretKey: sk });
@@ -604,7 +611,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
           const sync = watchSync(wallet, { stallMinutes: stallAfter(values['stall-after']), logger: session.logger });
           const silence = untilSilentFor(silentAfter(values['silent-after']), () => oracle.status().lastTickAt, session.logger);
           const health = values.status
-            ? statusWriter(values.status, { service: 'oracle', wallet, pass: () => oracle.status(), nightToken: unshieldedToken().raw, logger: session.logger })
+            ? statusWriter(values.status, { service: 'oracle', wallet, pass: () => oracle.status(), nightToken: unshieldedToken().raw, logger: session.logger, fees: () => meter.summary() })
             : undefined;
           const restart = await Promise.race([untilStopped().then(() => false), watchdog.done, sync.stalled, silence.done, stuck]);
           watchdog.cancel();

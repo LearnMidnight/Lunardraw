@@ -9,6 +9,7 @@
  */
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import type { FeeSummary } from './dust-meter.js';
 
 export type ServiceStatus = {
   schema: 'lunardraw-status/1';
@@ -30,6 +31,8 @@ export type ServiceStatus = {
     /** DUST available for fees now (the base unit, as a decimal string). */
     dust: string;
   };
+  /** What its transactions have cost in DUST (dust-meter.ts), when measured. */
+  fees?: FeeSummary;
 };
 
 type StateLike = {
@@ -49,6 +52,7 @@ export const serviceStatus = (
   pass: { lastTickAt?: number; streak: { since?: number; failures: number; lastSuccessAt?: number } },
   state: unknown,
   nightToken: string,
+  fees?: FeeSummary,
 ): ServiceStatus => {
   const s = state as StateLike | undefined;
   let wallet: ServiceStatus['wallet'];
@@ -72,6 +76,7 @@ export const serviceStatus = (
     failing_since: iso(pass.streak.since),
     last_success_at: iso(pass.streak.lastSuccessAt),
     wallet,
+    ...(fees ? { fees } : {}),
   };
 };
 
@@ -97,6 +102,7 @@ export const statusWriter = (
     nightToken: string;
     logger: { warn(msg: string): void };
     everyMs?: number;
+    fees?: () => FeeSummary;
   },
 ): { stop(): void } => {
   const startedAt = Date.now();
@@ -105,7 +111,7 @@ export const statusWriter = (
   let warned = false;
   const beat = () => {
     try {
-      writeStatus(path, serviceStatus(opts.service, startedAt, Date.now(), opts.pass(), latest, opts.nightToken));
+      writeStatus(path, serviceStatus(opts.service, startedAt, Date.now(), opts.pass(), latest, opts.nightToken, opts.fees?.()));
       warned = false;
     } catch (err) {
       if (!warned) opts.logger.warn(`could not write the status file ${path}: ${err instanceof Error ? err.message : String(err)}`);
