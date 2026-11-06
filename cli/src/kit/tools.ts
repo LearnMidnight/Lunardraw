@@ -173,7 +173,7 @@ export const mcpTools = (o: { answerMs?: number } = {}): Tool[] => {
         text: [
           'Starfall: a lottery on the Midnight Preprod test network (tNIGHT test tokens, no real value).',
           `A game: 7 numbers from 1-35 and a Moonball from 1-20. ${priceText()}.`,
-          'Draws close on the hour. Numbers come from Nightcast verifiable randomness; anyone can check every draw.',
+          'lunardraw_draw_on_sale says when the draw on sale closes. Numbers come from Nightcast verifiable randomness; anyone can check every draw.',
           `Prize divisions: ${DIVISIONS.map((d, i) => `${i + 1}: ${d}`).join('; ')}. Division 1 odds are about 1 in 134 million.`,
           'Entries: QuickPick games or packages (' + Object.entries(Starfall.QUICK_PICK_PACKAGES).map(([k, v]) => `${k} ${v}`).join(', ') + '), your own numbers, a System (8-12 numbers, every 7 of them), a Pick (5 or 6 numbers completed every way), and Moonball Sweep (every Moonball, 20 times the games).',
           'Prizes and refunds (if a draw is cancelled) are paid to the wallet automatically. Nothing to claim.',

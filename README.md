@@ -24,7 +24,7 @@ Where Starfall is heading: no claim button, and no ticket's numbers ever made pu
 
 - the game is Australian Powerball's: 7 from 35 plus a Moonball from 20, nine divisions, Powerball's prize-pool allocation, jackpot rollover and no-winner rules, a game costs 1.3 tNIGHT, of which 1 tNIGHT goes to the prize pool and 0.3 tNIGHT to the operator, per line (the Preprod contract deployed before 6 Nov 2026 charges 1.2 with a 0.2 fee);
 - every ticket is published as a commitment plus the ticket encrypted to a settlement key; up to 13 tickets per transaction, standard games 12 to a ticket (a System, Pick or Moonball Sweep entry is one ticket), so every QuickPick package from Single (1) to Maxi (50) is one transaction;
-- a settler works through every ticket in order, 25 per proof, and the contract checks that each one matches its commitment, so no ticket can be left out, counted twice or altered;
+- a settler works through every ticket in order, 14 per proof, and the contract checks that each one matches its commitment, so no ticket can be left out, counted twice or altered;
 - prizes are then paid automatically by anyone;
 - if settlement misses its deadline, every ticket is refunded.
 

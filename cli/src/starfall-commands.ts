@@ -12,7 +12,7 @@ import { encodeContractAddress } from '@midnight-ntwrk/compact-runtime';
 import { unshieldedToken } from '@midnight-ntwrk/midnight-js-protocol/ledger';
 import { MidnightBech32m } from '@midnight-ntwrk/wallet-sdk-address-format';
 import { quickPick, Starfall } from '@lunardraw/contract';
-import { buildStarfallFeed, DerivedSeeds, DrawOracle, every, isStaleDustProof, PurchaseLog, STARFALL_WEEKLY, StarfallKeeper, type StarfallView, StepTimes, woundDown, writeFeed } from '@lunardraw/keeper';
+import { buildStarfallFeed, DerivedSeeds, DrawOracle, every, isStaleDustProof, PurchaseLog, STARFALL_DAILY, STARFALL_WEEKLY, StarfallKeeper, type StarfallView, StepTimes, woundDown, writeFeed } from '@lunardraw/keeper';
 import { declareFeesAtDustTime, type DustTimeWallet } from './dust-time.js';
 import { DustMeter, meterDustFees } from './dust-meter.js';
 import { withFreshFees } from './fresh-fees.js';
@@ -83,9 +83,9 @@ export const STARFALL_USAGE = `usage: ./lunardraw starfall <command>
   keygen settlement --out <file>
   commitment   --organiser <file>      (an organiser's Starfall commitment: public; for --backup)
   deploy       --network <${NETWORKS.join('|')}> --organiser <file> --backup <file> --oracle <file> --settlement <file> --wallet <file> [--accept]
-               [--operator <address>] [--price <STAR>] [--fee <STAR>] [--min-sales <s>] [--max-sales <s>] [--reveal <s>] [--draw <s>] [--settle <s>]
+               [--operator <address>] [--price <STAR>] [--fee <STAR>] [--min-sales <s>] [--max-sales <s>] [--reveal <s>] [--draw <s>] [--settle <s>] [--max-tickets <n>]
   accept-key   --network <network> --oracle <file> --wallet <file>
-  keeper       --network <network> --organiser <file> --settlement <file> --wallet <file> [--every <seconds>] [--feed <file>]
+  keeper       --network <network> --organiser <file> --settlement <file> --wallet <file> [--daily | --every <seconds>] [--feed <file>]
                [--proof-server-port <port>] [--prove-lead <secs>] [--restart-after <min>] [--stall-after <min>] [--dust-wait <min>]
                [--silent-after <min>] [--status <file>]
   oracle       --network <network> --oracle <file> --wallet <file> [--proof-server-port <port>] [--restart-after <min>] [--stall-after <min>]
@@ -110,10 +110,12 @@ restart never buys twice. Styles: quickpick (--games random games), lucky (the s
 --moonball every draw), moonhit (7 random numbers with every Moonball), system (a System 8), mix
 (a random style each draw, mostly small QuickPicks). --budget caps one draw's spend (default 60).
 
-Defaults are a weekly Starfall: a game costs 1.3 tNIGHT (1 to the prize pool, 0.3 to the operator),
-draws close on Thursdays at 20:00 Brisbane, sales of 1 to 14 days, 1 hour to reveal, 2 hours for
-the oracle, 2 days to settle once the numbers are in. --every <seconds> runs draws on a fixed period
-instead (for test networks).
+Deploy defaults: a game costs 1.3 tNIGHT (1 to the prize pool, 0.3 to the operator), sales of
+6 hours to 14 days, 1 hour to reveal, 2 hours for the oracle, 1 day to settle once the numbers are
+in, at most 10,000 tickets a draw (--max-tickets: keep it below what can be settled within --settle,
+about 14 tickets a minute). The keeper closes draws on Thursdays at 20:00 Brisbane; --daily closes
+them every day at 20:00 Brisbane instead (the same contract can switch between the two with a
+keeper restart), and --every <seconds> on a fixed period (for short test deployments).
 
 last-draw winds a deployment down before a new one replaces it: the running keeper (it checks every
 pass, no restart needed) reveals the draw on sale without opening another, then settles, pays and
@@ -309,6 +311,10 @@ const randomMoonball = (): number => {
   return (r[0] % 20) + 1;
 };
 
+/** How many more tickets a draw can sell before the contract's maxTicketsPerDraw ("draw is full"). */
+export const drawRoom = (view: Pick<StarfallView, 'maxTicketsPerDraw'>, draw: { tickets: bigint }): bigint =>
+  view.maxTicketsPerDraw > draw.tickets ? view.maxTicketsPerDraw - draw.tickets : 0n;
+
 /**
  * The file that tells a running keeper to wind a deployment down
  * (`starfall last-draw`). Named after the contract, so it never touches the
@@ -419,6 +425,8 @@ export const starfall = async (argv: string[]): Promise<number> => {
       reveal: { type: 'string' },
       draw: { type: 'string' },
       settle: { type: 'string' },
+      'max-tickets': { type: 'string' },
+      daily: { type: 'boolean', default: false },
       games: { type: 'string' },
       package: { type: 'string' },
       system: { type: 'string' },
@@ -489,6 +497,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
             revealWindow: num(values.reveal, STARFALL_WEEKLY_DEFAULTS.revealWindow),
             drawWindow: num(values.draw, STARFALL_WEEKLY_DEFAULTS.drawWindow),
             settleWindow: num(values.settle, STARFALL_WEEKLY_DEFAULTS.settleWindow),
+            maxTicketsPerDraw: num(values['max-tickets'], STARFALL_WEEKLY_DEFAULTS.maxTicketsPerDraw),
           };
           const providers = starfallProviders(session, wallet);
           session.logger.info('Deploying Starfall, locked from the start (nobody can ever change its code)...');
@@ -552,7 +561,8 @@ export const starfall = async (argv: string[]): Promise<number> => {
       if (settlement.pk.x.toString() !== record.parameters.settlementKey.x || settlement.pk.y.toString() !== record.parameters.settlementKey.y) {
         throw new Error(`${values.settlement} is not this deployment's settlement key`);
       }
-      const schedule = values.every ? every(Number(values.every)) : STARFALL_WEEKLY;
+      if (values.daily && values.every) throw new Error('--daily and --every: choose one');
+      const schedule = values.every ? every(Number(values.every)) : values.daily ? STARFALL_DAILY : STARFALL_WEEKLY;
       const seeds = new DerivedSeeds(organiserSecret, encodeContractAddress(record.contractAddress));
       const dustMinutes = dustWait(values['dust-wait']);
       return withSession(network, async (session) => {
@@ -605,7 +615,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
           });
           keeper.start();
           session.logger.info(
-            `Starfall keeper running for ${record.contractAddress} (${values.every ? `draws every ${values.every} s` : 'weekly Starfall'}` +
+            `Starfall keeper running for ${record.contractAddress} (${values.every ? `draws every ${values.every} s` : values.daily ? 'daily Starfall, 20:00 Brisbane' : 'weekly Starfall'}` +
               `${feedPath ? `; site feed written to ${feedPath}` : ''}). Press Ctrl+C to stop. ` +
               `To wind it down: ./lunardraw starfall last-draw --network ${network} (it creates ${lastDraw}).`,
           );
@@ -692,6 +702,8 @@ export const starfall = async (argv: string[]): Promise<number> => {
           const mine = walletBytes(wallet);
           const payTo = values['pay-to'] ? parseUserAddress(values['pay-to']) : mine;
           const tickets = Starfall.ticketsFor(selling.id, entries, payTo);
+          const room = drawRoom(view, selling);
+          if (BigInt(tickets.length) > room) throw new Error(`draw ${selling.id} is full: room for ${room} more ticket(s), this needs ${tickets.length}`);
           const joined = await joinStarfall(providers, record.contractAddress, {});
           session.logger.info(
             `Buying ${tickets.length} ticket(s), ${games} game(s), for draw ${selling.id} (sales close ${iso(selling.salesClose)}) for ${tn(cost)}, ` +

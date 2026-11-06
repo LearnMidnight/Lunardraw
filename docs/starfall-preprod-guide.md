@@ -76,20 +76,23 @@ It prints `Starfall organiser commitment (public): ...` and 64 characters. Copy 
   --settlement ~/lunardraw-secrets/settlement.secret \
   --wallet ~/nightcast-secrets/requester-wallet.secret \
   --accept \
-  --min-sales 600 --max-sales 7200 --reveal 600 --draw 900 --settle 3600
+  --operator <the treasury's mn_addr_preprod1... address>
 ```
 
-The test timings, in seconds:
-- a draw sells for 10 minutes to 2 hours;
-- the keeper has 10 minutes to reveal the seed;
-- the oracle has 15 minutes to answer;
-- settlement must finish within an hour of the numbers.
+It uses the default settings, the real weekly game's, so the same contract runs **daily draws now and weekly draws later** (only the keeper's schedule changes):
+- a game costs 1.3 tNIGHT, 0.3 of it the operator's fee, which goes to `--operator` (the deploying wallet if you leave it out);
+- a draw sells for 6 hours to 14 days;
+- the keeper has 1 hour after sales close to reveal the seed, the oracle 2 hours to answer;
+- settlement must finish within 1 day of the numbers. Draws pay out in order, so a draw that can't be settled holds up the payouts of the draws after it until this deadline cancels it: a day keeps that to one daily draw. The monitor emails if a draw isn't settled 30 minutes after its numbers (it normally takes about 10);
+- at most 10,000 tickets a draw (a QuickPick ticket holds up to 12 games). That's below the roughly 15,000 the keeper can settle in a day, so a flood of purchases fills a draw (`draw is full`) instead of making it miss its deadline.
 
-The price (1.3 tNIGHT) and fee (0.3 tNIGHT) are the defaults. The fee goes to the deploying wallet unless you add `--operator <address>`.
+`--min-sales`, `--max-sales`, `--reveal`, `--draw`, `--settle` (seconds) and `--max-tickets` change them. Keep `--max-tickets` below what can be settled within `--settle`: about 14 tickets a minute.
 
 It ends with a checklist that should be all **PASS**, including `the organiser secret can open draws`, and writes `deployments/starfall-preprod.json`. Send me the output (it's all public).
 
 ## Part 6: Run it
+
+The keeper service runs with `--daily`: a draw closes every day at 20:00 Brisbane. For weekly draws (Thursdays, 20:00 Brisbane), remove `--daily` from `/etc/systemd/system/lunardraw-starfall-keeper.service`, then `systemctl daemon-reload && systemctl restart lunardraw-starfall-keeper`. The draw on sale keeps its close time; the next one opens on the new schedule.
 
 ```bash
 cp deploy/systemd/lunardraw-starfall-*.service /etc/systemd/system/

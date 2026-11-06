@@ -354,7 +354,7 @@ export const kit = async (argv: string[]): Promise<number> => {
       if (values.json) return json(overview), 0;
       const s = overview.onSale;
       const left = s ? (s.minutesLeft < 1 ? 'closing now' : `in ${s.minutesLeft} min`) : '';
-      say(s ? `Draw ${s.draw} is on sale: closes at ${clock(s.salesClose)} (${left}), ${s.tickets} ticket(s) so far, jackpot about ${whole(s.jackpotEstimate)}.` : 'No draw is on sale right now; the next opens on the hour.');
+      say(s ? `Draw ${s.draw} is on sale: closes at ${clock(s.salesClose)} (${left}), ${s.tickets} ticket(s) so far, jackpot about ${whole(s.jackpotEstimate)}.` : 'No draw is on sale right now; the next opens shortly after the last one closes.');
       say(`A game costs ${overview.gamePrice}. Rollover into the next Division 1: ${whole(overview.rollover)}.`);
       for (const r of overview.recent) say(r.status === 'void' ? `  draw ${r.draw}: cancelled, refunded` : `  draw ${r.draw}: ${r.numbers!.join(' ')} + ${r.moonball}, ${r.winningGames} winning game(s) of ${r.games}`);
       return 0;
@@ -386,7 +386,7 @@ export const kit = async (argv: string[]): Promise<number> => {
       const entries = buyEntries(values);
       const { readOverview, withPlayer } = await import('./player.js');
       const { overview } = await readOverview(config);
-      if (!overview.onSale) throw new Error('no draw is on sale right now; the next opens on the hour');
+      if (!overview.onSale) throw new Error('no draw is on sale right now; the next opens shortly after the last one closes');
       const running = await runningAgent(config);
       if (running) {
         // the agent running here has the wallet open: it buys (opening the wallet again would clash)

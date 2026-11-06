@@ -62,6 +62,8 @@ export type MonitorConfig = {
   oracleWaitMins: number;
   /** Warn when settlement is this many minutes from its deadline. */
   settleMins: number;
+  /** Warn when a draw isn't settled this many minutes after its numbers (one usually takes about 10). */
+  settleLateMins: number;
   /** Restarts within an hour that count as a restart loop. */
   restartsPerHour: number;
   /** Disk: alert below this fraction free, or this many bytes. */
@@ -86,6 +88,7 @@ export const DEFAULT_CONFIG: MonitorConfig = {
   deadlineMins: 5,
   oracleWaitMins: 10,
   settleMins: 60,
+  settleLateMins: 30,
   restartsPerHour: 3,
   minDiskFraction: 0.1,
   minDiskBytes: 5 * 2 ** 30,
@@ -355,12 +358,23 @@ export const drawAlerts = (feed: StarfallFeed, now: number, state: MonitorState,
     }
     if ((d.status === 'drawn' || d.status === 'settling' || (d.status === 'requested' && d.vrf_output)) && d.settle_deadline) {
       const l = left(d.settle_deadline);
-      if (l !== undefined && l > 0 && l <= cfg.settleMins) {
+      const drawn = ms(d.timeline?.drawn_at);
+      const since = drawn === undefined ? undefined : (now - drawn) / MIN;
+      // Late: settling usually takes about 10 minutes after the numbers. Draws
+      // finalise in order, so a draw left unsettled holds up the payouts of
+      // every draw after it until its deadline voids it: worth knowing early.
+      const late = since !== undefined && since >= cfg.settleLateMins;
+      if (l !== undefined && l > 0 && (l <= cfg.settleMins || late)) {
+        const batches = d.batches !== undefined ? `${d.batches_done ?? 0} of ${d.batches} settlement batches done.` : 'Its numbers aren\'t computed yet.';
+        const waiting =
+          d.batches !== undefined && (d.batches_done ?? 0) >= d.batches
+            ? ' Every batch is done: finalising waits for the draw before it to be settled or cancelled.'
+            : '';
         out.push({
           key: `settle:${d.num}`,
           kind: 'problem',
-          title: `Draw ${d.num} isn't settled yet: ${mins(l)} before it's cancelled`,
-          detail: d.batches !== undefined ? `${d.batches_done ?? 0} of ${d.batches} settlement batches done.` : 'Its numbers aren\'t computed yet.',
+          title: l <= cfg.settleMins ? `Draw ${d.num} isn't settled yet: ${mins(l)} before it's cancelled` : `Draw ${d.num} isn't settled ${mins(since!)} after its numbers`,
+          detail: `${batches}${waiting} It usually settles within about 10 minutes; ${mins(l)} are left before it is cancelled and refunded. The draws after it can't pay out until it is settled or cancelled.`,
           check: [journal('lunardraw-starfall-keeper')],
         });
       }

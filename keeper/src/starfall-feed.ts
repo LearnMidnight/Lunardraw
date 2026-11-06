@@ -48,6 +48,8 @@ export type StarfallFeed = {
     starfall: {
       price_star: number;
       fee_star: number;
+      /** Most tickets a draw may sell (the contract's maxTicketsPerDraw); absent for contracts without one. */
+      max_tickets_per_draw?: number;
       allocation_bp: number[];
       carry_star: number;
       open?: { num: number; sales_close: string; reveal_deadline?: string; seed_commitment: string; games_sold: number; tickets: number };
@@ -147,6 +149,7 @@ export const buildStarfallFeed = (
       starfall: {
         price_star: star(view.ticketPrice),
         fee_star: star(view.feePerGame),
+        ...(view.maxTicketsPerDraw !== undefined ? { max_tickets_per_draw: Number(view.maxTicketsPerDraw) } : {}),
         allocation_bp: [...Starfall.POWERBALL_SHARES_BP],
         carry_star: star(view.carry),
         open: selling

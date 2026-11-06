@@ -267,8 +267,8 @@ export sealed ledger backupOrganiser: Bytes<32>;
 export sealed ledger settlementKey: JubjubPoint;
 // Where the operator fee goes, and the fee per game, in STAR: a flat amount
 // out of each game's price, so a ticket of several games pays it once per game. The rest of the price is the prize pool's. Starfall's
-// numbers: a game costs 1.2 tNIGHT, 1 tNIGHT to the pool and 0.2 to the
-// operator.
+// numbers: a game costs 1.3 tNIGHT, 1 tNIGHT to the pool and 0.3 to the
+// operator (1.2 and 0.2 before 6 Nov 2026; both are deploy settings).
 export sealed ledger operator: UserAddress;
 export sealed ledger feePerGame: Uint<128>;
 // Price of one game, in STAR (1 tNIGHT = 1,000,000 STAR). A ticket costs its
@@ -281,6 +281,12 @@ export sealed ledger maxSales: Uint<64>;
 export sealed ledger revealWindow: Uint<64>;
 export sealed ledger drawWindow: Uint<64>;
 export sealed ledger settleWindow: Uint<64>;
+// Most tickets a draw may sell. Settlement goes through a draw's tickets one
+// batch at a time and must finish within settleWindow, or the draw is void and
+// every ticket refunded; capping the tickets below what can be settled in time
+// means a flood of purchases fills a draw (its tickets are real bets) instead
+// of voiding it.
+export sealed ledger maxTicketsPerDraw: Uint<64>;
 
 // -------------------------------------------------------------- witnesses
 //
@@ -297,13 +303,14 @@ witness divModWide(n: Field, d: Uint<128>): [Uint<128>, Uint<128>];
 constructor(key: JubjubPoint, organiserCommitment: Bytes<32>, backupCommitment: Bytes<32>,
             sealingKey: JubjubPoint, operatorAddress: UserAddress, fee: Uint<128>, price: Uint<128>,
             salesMin: Uint<64>, salesMax: Uint<64>,
-            reveal: Uint<64>, draw: Uint<64>, settle: Uint<64>) {
+            reveal: Uint<64>, draw: Uint<64>, settle: Uint<64>, ticketLimit: Uint<64>) {
   assert(price > 0, "ticket price must be positive");
   assert(fee < price, "operator fee per game must be below the ticket price");
   assert(!isIdentity(sealingKey), "identity settlement key not allowed");
   assert(salesMin >= 60 && salesMin < salesMax && salesMax <= 7776000, "sales period must be 60 seconds to 90 days");
   assert(reveal >= 60 && draw >= 60, "reveal and draw windows must be at least 60 seconds");
   assert(settle >= 3600, "settlement window must be at least an hour");
+  assert(ticketLimit >= 1 && ticketLimit <= 4294967295, "tickets per draw must be 1 to 4294967295");
   assert(organiserCommitment != backupCommitment, "the backup organiser must differ from the organiser");
   proposedOracleKey = some<JubjubPoint>(disclose(key));
   oracleKeyChangeAt = 0;
@@ -322,6 +329,7 @@ constructor(key: JubjubPoint, organiserCommitment: Bytes<32>, backupCommitment: 
   revealWindow = disclose(reveal);
   drawWindow = disclose(draw);
   settleWindow = disclose(settle);
+  maxTicketsPerDraw = disclose(ticketLimit);
 }
 
 // ------------------------------------------------------- pure functions
@@ -764,7 +772,7 @@ export circuit buyTickets(count: Uint<8>, refundTo: UserAddress): Uint<64> {
   assert(d.status == DrawStatus.open, "draw is not open");
   assert(blockTimeLt(d.salesClose), "sales have closed");
   const first = ticketCount.lookup(id);
-  assert(first + (n as Uint<64>) <= 4294967295, "draw is full");
+  assert(first + (n as Uint<64>) <= maxTicketsPerDraw, "draw is full");
   // Games per ticket (0 for an unused slot), and so the price of the purchase.
   const games = map((t: TicketPreimage, j: Uint<8>): Uint<32> => j < n ? ticketGames(t) : 0, ts, ticketSlots());
   const bought = disclose(fold((acc: Uint<64>, g: Uint<32>): Uint<64> => (acc + g) as Uint<64>, 0, games));

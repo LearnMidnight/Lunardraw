@@ -206,6 +206,8 @@ export const withPlayer = async <T>(config: KitConfig, seed: string, fn: (p: Pla
             if (dust <= 0n) throw new Error('the wallet has no DUST yet to pay the fee (it builds up a few minutes after tNIGHT arrives)');
             joined ??= await joinStarfall(providers, record.contractAddress, {});
             const tickets = Starfall.ticketsFor(selling.id, entries, payTo);
+            const room = view.maxTicketsPerDraw > selling.tickets ? view.maxTicketsPerDraw - selling.tickets : 0n;
+            if (BigInt(tickets.length) > room) throw new Error(`draw ${selling.id} is full: room for ${room} more ticket(s), this needs ${tickets.length}; try the next draw`);
             log?.(`buying ${tickets.length} ticket(s), ${games} game(s), for draw ${selling.id} (sales close ${iso(selling.salesClose)}) for ${tNight(cost)}`);
             let bought = tickets.length;
             let message: string | undefined;

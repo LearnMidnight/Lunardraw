@@ -40,6 +40,8 @@ export type SettlementSimulatorOptions = {
   revealWindow?: bigint;
   drawWindow?: bigint;
   settleWindow?: bigint;
+  /** Most tickets a draw may sell (default 4,294,967,295: no practical limit). */
+  maxTicketsPerDraw?: bigint;
   /** Starting block time, seconds since the epoch. */
   now?: number;
   /** Activate the oracle key right after deployment (default true). */
@@ -156,6 +158,7 @@ export class SettlementSimulator {
       opts.revealWindow ?? 3_600n,
       opts.drawWindow ?? 3_600n,
       opts.settleWindow ?? 86_400n,
+      opts.maxTicketsPerDraw ?? 4_294_967_295n,
     );
     this.state = result.currentContractState;
     if (opts.acceptKey ?? true) this.acceptOracleKey();

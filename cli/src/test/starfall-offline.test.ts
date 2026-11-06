@@ -6,7 +6,7 @@ import { generateOperatorSecret, generateOracleSecretKey, oraclePublicKey } from
 import { onChainFingerprints } from '@nightcast/deploy';
 import { MidnightBech32m, UnshieldedAddress } from '@midnight-ntwrk/wallet-sdk-address-format';
 import { pureCircuits as v0 } from '@lunardraw/contract';
-import { buyEntries, describeEntry, describeTickets, entriesBought, lastDrawMarker, organiserCheck, parseUserAddress, starfallOrganiserCommitment, windDownStatus } from '../starfall-commands.js';
+import { buyEntries, describeEntry, describeTickets, drawRoom, entriesBought, lastDrawMarker, organiserCheck, parseUserAddress, starfallOrganiserCommitment, windDownStatus } from '../starfall-commands.js';
 import {
   buyGames,
   BuyStopped,
@@ -174,6 +174,7 @@ describe('verifyStarfall', () => {
         revealWindow: 1_800n,
         drawWindow: 1_800n,
         settleWindow: 7_200n,
+        maxTicketsPerDraw: 4_294_967_295n,
       }),
       transactions: {},
       verifierKeys: fps,
@@ -197,9 +198,19 @@ describe('verifyStarfall', () => {
     ]);
     const other = { ...record, parameters: { ...p, operator: '00'.repeat(32), feePerGame: '100000' } };
     const checks = verifyStarfall(other, state);
-    expect(failing(checks)).toEqual(['price, fee and windows match']);
+    expect(failing(checks)).toEqual(['price, fee, windows and ticket limit match']);
     expect(checks.find((c) => !c.ok)!.detail).toMatch(/operator .*feePerGame 200000/);
+    const capped = verifyStarfall({ ...record, parameters: { ...p, maxTicketsPerDraw: '10000' } }, state);
+    expect(capped.find((c) => !c.ok)!.detail).toBe('maxTicketsPerDraw 4294967295 (record 10000)');
     expect(failing(verifyStarfall(record, null))).toEqual(['contract exists']);
+  });
+});
+
+describe('drawRoom', () => {
+  it('is what a draw can still sell before "draw is full"', () => {
+    expect(drawRoom({ maxTicketsPerDraw: 10_000n }, { tickets: 9_990n })).toBe(10n);
+    expect(drawRoom({ maxTicketsPerDraw: 10_000n }, { tickets: 10_000n })).toBe(0n);
+    expect(drawRoom({ maxTicketsPerDraw: 5n }, { tickets: 7n })).toBe(0n);
   });
 });
 

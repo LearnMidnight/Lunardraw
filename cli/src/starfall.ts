@@ -373,22 +373,34 @@ export type StarfallDeployParams = {
   revealWindow: bigint;
   drawWindow: bigint;
   settleWindow: bigint;
+  /** Most tickets a draw may sell: below what can be settled within settleWindow. */
+  maxTicketsPerDraw: bigint;
 };
 
 /**
- * Weekly Starfall: a game costs 1.3 tNIGHT (1 to the pool, 0.3 to the
- * operator, which pays the running costs and the creator's cut); about a week
- * of sales; an hour to reveal; two hours for the oracle; two days to settle
- * once the numbers are in.
+ * Starfall's deploy settings: a game costs 1.3 tNIGHT (1 to the pool, 0.3 to
+ * the operator, which pays the running costs and the creator's cut); sales of
+ * 6 hours to 14 days, so the same contract runs daily draws (the keeper's
+ * --daily) or weekly ones (its default); an hour to reveal; two hours for the
+ * oracle; a day to settle once the numbers are in; at most 10,000 tickets a
+ * draw.
+ *
+ * Why those last two (Jack, 7 Nov 2026): draws finalise in order, so a draw
+ * that can't be settled holds up the payouts of the draws after it until its
+ * settlement deadline voids it: a day keeps that to one daily draw. A batch of
+ * 14 tickets takes about 70-90 s (proof, transaction and the keeper's 30 s
+ * pause), so a day settles about 15,000 tickets; 10,000 leaves a third spare,
+ * and a flood of purchases then fills a draw rather than voiding it.
  */
 export const STARFALL_WEEKLY_DEFAULTS = {
   ticketPrice: 1_300_000n,
   feePerGame: 300_000n,
-  minSales: 86_400n,
+  minSales: 21_600n,
   maxSales: 14n * 86_400n,
   revealWindow: 3_600n,
   drawWindow: 7_200n,
-  settleWindow: 2n * 86_400n,
+  settleWindow: 86_400n,
+  maxTicketsPerDraw: 10_000n,
 } as const;
 
 export const deployStarfall = (providers: StarfallProviders, p: StarfallDeployParams) =>
@@ -409,6 +421,7 @@ export const deployStarfall = (providers: StarfallProviders, p: StarfallDeployPa
       p.revealWindow,
       p.drawWindow,
       p.settleWindow,
+      p.maxTicketsPerDraw,
     ],
   });
 
@@ -446,6 +459,7 @@ export type StarfallDeploymentRecord = {
     revealWindow: string;
     drawWindow: string;
     settleWindow: string;
+    maxTicketsPerDraw: string;
   };
   transactions: { deploy?: string; acceptOracleKey?: string };
   verifierKeys: Fingerprints;
@@ -464,6 +478,7 @@ export const starfallRecordParameters = (p: StarfallDeployParams): StarfallDeplo
   revealWindow: p.revealWindow.toString(),
   drawWindow: p.drawWindow.toString(),
   settleWindow: p.settleWindow.toString(),
+  maxTicketsPerDraw: p.maxTicketsPerDraw.toString(),
 });
 
 export const starfallRecordPath = (network: string): string => join(deploymentsDir(), `starfall-${network}.json`);
@@ -548,14 +563,15 @@ export const verifyStarfall = (
     revealWindow: l.revealWindow,
     drawWindow: l.drawWindow,
     settleWindow: l.settleWindow,
+    maxTicketsPerDraw: l.maxTicketsPerDraw,
   };
   const differ = Object.entries(actual).filter(([k, v]) => v.toString() !== p[k as keyof typeof p]);
   checks.push({
-    name: 'price, fee and windows match',
+    name: 'price, fee, windows and ticket limit match',
     ok: differ.length === 0,
     detail:
       differ.length === 0
-        ? `${Number(l.ticketPrice) / 1e6} tNIGHT a game (${Number(l.feePerGame) / 1e6} to the operator); sales ${l.minSales}-${l.maxSales} s; reveal ${l.revealWindow} s, draw ${l.drawWindow} s, settle ${l.settleWindow} s`
+        ? `${Number(l.ticketPrice) / 1e6} tNIGHT a game (${Number(l.feePerGame) / 1e6} to the operator); sales ${l.minSales}-${l.maxSales} s; reveal ${l.revealWindow} s, draw ${l.drawWindow} s, settle ${l.settleWindow} s; at most ${l.maxTicketsPerDraw} tickets a draw`
         : differ.map(([k, v]) => `${k} ${v} (record ${String(p[k as keyof typeof p])})`).join('; '),
   });
   return checks;

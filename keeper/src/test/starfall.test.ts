@@ -456,6 +456,7 @@ describe('the Starfall plan', () => {
     revealWindow: 600n,
     drawWindow: 600n,
     settleWindow: 3_600n,
+    maxTicketsPerDraw: 10_000n,
     carry: 0n,
     oracleKeyReady: true,
     settlementKey: { x: 0n, y: 0n },

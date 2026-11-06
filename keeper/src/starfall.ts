@@ -81,6 +81,8 @@ export type StarfallView = {
   revealWindow: bigint;
   drawWindow: bigint;
   settleWindow: bigint;
+  /** Most tickets a draw may sell (purchases past it fail with "draw is full"). */
+  maxTicketsPerDraw: bigint;
   /** Rollover waiting for the next draw to be finalised, in STAR. */
   carry: bigint;
   oracleKeyReady: boolean;
@@ -104,6 +106,7 @@ export const starfallViewOf = (l: Starfall.Ledger): StarfallView => ({
   revealWindow: l.revealWindow,
   drawWindow: l.drawWindow,
   settleWindow: l.settleWindow,
+  maxTicketsPerDraw: l.maxTicketsPerDraw,
   carry: l.carry,
   oracleKeyReady: l.oracleKeyReady,
   oracleKeyChange: l.proposedOracleKey.is_some

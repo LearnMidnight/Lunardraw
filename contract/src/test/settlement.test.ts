@@ -59,7 +59,7 @@ const SALES = 3_600;
 const BATCH = Number(pureCircuits.batchSize());
 const OPERATOR = bytes('operator wallet');
 
-const setup = (opts: { feePerGame?: bigint; acceptKey?: boolean } = {}) => {
+const setup = (opts: { feePerGame?: bigint; acceptKey?: boolean; maxTicketsPerDraw?: bigint } = {}) => {
   const oracleSecretKey = generateOracleSecretKey();
   const settlementSecret = randomScalar();
   const sim = new SettlementSimulator({
@@ -74,6 +74,7 @@ const setup = (opts: { feePerGame?: bigint; acceptKey?: boolean } = {}) => {
     revealWindow: REVEAL,
     drawWindow: 3_600n,
     settleWindow: SETTLE,
+    maxTicketsPerDraw: opts.maxTicketsPerDraw,
     acceptKey: opts.acceptKey,
   });
   return { sim, oracleSecretKey, settlementSecret };
@@ -253,6 +254,27 @@ describe('multi-ticket purchases', () => {
     expect(() => sim.buyTickets(mixed, me)).toThrow(/invalid ticket/);
     expect(sim.ticketsSold(n)).toBe(0n);
     expect(Object.keys(QUICK_PICK_PACKAGES)).toEqual(['single', 'starter', 'mini', 'regular', 'super', 'mega', 'jumbo', 'maxi']);
+  });
+
+  it('sells a draw up to maxTicketsPerDraw tickets and no more, then the next draw has room again', () => {
+    expect(() => setup({ maxTicketsPerDraw: 0n })).toThrow(/tickets per draw must be 1 to 4294967295/);
+    expect(() => setup({ maxTicketsPerDraw: 4_294_967_296n })).toThrow(/tickets per draw must be 1 to 4294967295/);
+    const { sim, oracleSecretKey } = setup({ maxTicketsPerDraw: 5n });
+    expect(sim.getLedger().maxTicketsPerDraw).toBe(5n);
+    const { n, seed } = openWithSeed(sim, oracleSecretKey);
+    const me = randomAddress();
+    const some = (k: number) => Array.from({ length: k }, () => makeTicket(n, quickPick(), me));
+    sim.buyTickets(some(3), me);
+    expect(() => sim.buyTickets(some(3), me)).toThrow(/draw is full/); // all or nothing: 3 + 3 > 5
+    // A ticket of 12 games is still one ticket against the limit.
+    sim.buyTickets(ticketsFor(n, Array.from({ length: 24 }, () => quickPick()), me), me);
+    expect(sim.ticketsSold(n)).toBe(5n);
+    expect(() => sim.buyTickets(some(1), me)).toThrow(/draw is full/);
+    // The limit is per draw.
+    drawIt(sim, n, seed);
+    const next = openWithSeed(sim, oracleSecretKey, 'second');
+    sim.buyTickets(Array.from({ length: 5 }, () => makeTicket(next.n, quickPick(), me)), me);
+    expect(sim.ticketsSold(next.n)).toBe(5n);
   });
 });
 
