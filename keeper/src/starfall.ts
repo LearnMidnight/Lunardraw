@@ -269,6 +269,20 @@ export const decryptTickets = (stored: readonly StoredTicket[], n: bigint, secre
 
 // ------------------------------------------------------------------ plan
 
+/**
+ * Whether a deployment has nothing left in progress: every draw settled or
+ * void, every entitlement of a settled draw paid (one recorded before a void
+ * never is) and every ticket of a void draw refunded. With no draw open,
+ * nobody can buy into it either.
+ */
+export const woundDown = (view: StarfallView): boolean => {
+  const settled = new Set(view.draws.filter((d) => d.status === DrawStatus.settled).map((d) => d.id));
+  return (
+    view.draws.every((d) => (d.status === DrawStatus.settled || d.status === DrawStatus.voided) && d.unrefunded.length === 0) &&
+    view.entitlements.every((e) => e.paid || !settled.has(e.drawId))
+  );
+};
+
 export type StarfallStep =
   | { kind: 'open' }
   | { kind: 'reveal'; draw: bigint; openNext: boolean }
@@ -444,7 +458,13 @@ export type StarfallKeeperOptions = EngineTiming & {
   /** Payments and refunds sent in one pass at most, so urgent steps aren't kept waiting. Default 5. */
   paymentsPerPass?: number;
   marginSecs?: number;
-  openNew?: boolean;
+  /**
+   * Open a new draw when the last one closes (default true). A function is
+   * asked every pass, so a running keeper can be told to wind down: it then
+   * reveals the draw on sale without opening another, and carries on settling,
+   * paying and refunding until nothing is left (see `woundDown`).
+   */
+  openNew?: boolean | (() => boolean);
   onView?: (view: StarfallView, nowSecs: number) => void;
   /** Called with the id of each draw step this keeper sends (the feed's `tx`). */
   onTx?: (draw: bigint, step: StarfallTxStep, txId: string) => void;
@@ -475,7 +495,10 @@ export class StarfallKeeper {
       throw new Error('split: index must be 0 to of-1');
     }
     const marginSecs = options.marginSecs ?? 30;
-    const openNew = options.openNew ?? true;
+    const openNew = (): boolean => {
+      const o = options.openNew ?? true;
+      return typeof o === 'function' ? o() : o;
+    };
     this.engine = new StepEngine<StarfallView, StarfallStep>({
       ...options,
       read: () => Promise.all([options.chain.view(), options.chain.now()]),
@@ -483,7 +506,7 @@ export class StarfallKeeper {
       plan: (view, now) =>
         starfallSteps(view, now, {
           marginSecs,
-          openNew,
+          openNew: openNew(),
           organise: options.seeds !== undefined,
           settle: options.settlementSecret !== undefined && this.settleKeyOk,
         }),
@@ -510,7 +533,7 @@ export class StarfallKeeper {
     }
   }
 
-  private warnOnce(key: string, level: 'warn' | 'error', msg: string): void {
+  private warnOnce(key: string, level: 'info' | 'warn' | 'error', msg: string): void {
     if (this.warned.has(key)) return;
     this.warned.add(key);
     this.logger[level](msg);
@@ -556,6 +579,17 @@ export class StarfallKeeper {
       if (!this.settleKeyOk) {
         this.warnOnce('settlement key', 'error', "the settlement secret given isn't this deployment's (its public key differs), so this keeper won't settle");
       }
+    }
+    const o = this.options.openNew ?? true;
+    if (!(typeof o === 'function' ? o() : o)) {
+      if (woundDown(view)) {
+        this.warnOnce(
+          'wound down',
+          'info',
+          `wound down: no draw is open and nothing is left to settle, pay or refund (${view.draws.length} draw(s), the last ${view.lastDraw}). ` +
+            'Nothing more will happen on this deployment: it is safe to switch to a new one.',
+        );
+      } else this.warnOnce('winding down', 'info', 'winding down: no new draws will be opened; finishing the draws in progress');
     }
     // Keep decrypted tickets only while their draw is still being settled.
     for (const id of this.decrypted.keys()) {

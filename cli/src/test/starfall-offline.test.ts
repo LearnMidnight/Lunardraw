@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { webcrypto } from 'node:crypto';
 import { quickPick, Starfall } from '@lunardraw/contract';
-import { DerivedSeeds, every, StarfallKeeper } from '@lunardraw/keeper';
+import { DerivedSeeds, every, StarfallKeeper, type StarfallView } from '@lunardraw/keeper';
 import { generateOperatorSecret, generateOracleSecretKey, oraclePublicKey } from '@nightcast/contract';
 import { onChainFingerprints } from '@nightcast/deploy';
 import { MidnightBech32m, UnshieldedAddress } from '@midnight-ntwrk/wallet-sdk-address-format';
 import { pureCircuits as v0 } from '@lunardraw/contract';
-import { buyEntries, describeEntry, organiserCheck, parseUserAddress, starfallOrganiserCommitment } from '../starfall-commands.js';
+import { buyEntries, describeEntry, lastDrawMarker, organiserCheck, parseUserAddress, starfallOrganiserCommitment, windDownStatus } from '../starfall-commands.js';
 import {
   buyGames,
   BuyStopped,
@@ -221,6 +221,29 @@ describe("Starfall's organiser commitment", () => {
     const other = organiserCheck(sim.getLedger(), generateOperatorSecret());
     expect(other.ok).toBe(false);
     expect(other.detail).toMatch(/the contract's organiser is/);
+  });
+});
+
+describe('winding a deployment down', () => {
+  const view = (draws: { id: bigint; status: Starfall.DrawStatus; unrefunded?: bigint[] }[], paid = true) =>
+    ({
+      draws: draws.map((d) => ({ unrefunded: [], ...d })),
+      entitlements: [{ id: new Uint8Array(32), drawId: 1n, games: [], paid }],
+    }) as unknown as StarfallView;
+
+  it('names the marker after the contract, so a new deployment is never wound down by an old one', () => {
+    expect(lastDrawMarker('abc123')).toMatch(/lunardraw-state[/\\]starfall-abc123\.last-draw$/);
+    expect(lastDrawMarker('abc123')).not.toBe(lastDrawMarker('def456'));
+  });
+
+  it('says safe to switch only when every draw is finished, paid and refunded', () => {
+    const { settled, voided, drawn } = { settled: Starfall.DrawStatus.settled, voided: Starfall.DrawStatus.voided, drawn: Starfall.DrawStatus.drawn };
+    expect(windDownStatus(view([{ id: 1n, status: settled }, { id: 2n, status: voided }]))).toMatch(/^Wound down: .* Safe to switch/);
+    expect(windDownStatus(view([{ id: 1n, status: settled }, { id: 2n, status: drawn }]))).toBe(
+      'Winding down: no new draws will open. Still in progress: draw 2.',
+    );
+    expect(windDownStatus(view([{ id: 1n, status: settled }], false))).toMatch(/in progress: payments or refunds/);
+    expect(windDownStatus(view([{ id: 1n, status: voided, unrefunded: [0n] }]))).toMatch(/in progress: payments or refunds/);
   });
 });
 
