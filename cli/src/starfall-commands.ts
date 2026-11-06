@@ -5,13 +5,14 @@
  * encrypted to.
  */
 import { webcrypto } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { encodeContractAddress } from '@midnight-ntwrk/compact-runtime';
 import { unshieldedToken } from '@midnight-ntwrk/midnight-js-protocol/ledger';
 import { MidnightBech32m } from '@midnight-ntwrk/wallet-sdk-address-format';
 import { quickPick, Starfall } from '@lunardraw/contract';
-import { buildStarfallFeed, DerivedSeeds, DrawOracle, every, isStaleDustProof, PurchaseLog, STARFALL_WEEKLY, StarfallKeeper, type StarfallView, StepTimes, writeFeed } from '@lunardraw/keeper';
+import { buildStarfallFeed, DerivedSeeds, DrawOracle, every, isStaleDustProof, PurchaseLog, STARFALL_WEEKLY, StarfallKeeper, type StarfallView, StepTimes, woundDown, writeFeed } from '@lunardraw/keeper';
 import { declareFeesAtDustTime, type DustTimeWallet } from './dust-time.js';
 import { DustMeter, meterDustFees } from './dust-meter.js';
 import { withFreshFees } from './fresh-fees.js';
@@ -96,6 +97,7 @@ export const STARFALL_USAGE = `usage: ./lunardraw starfall <command>
                [--games <n>] [--numbers "<7 numbers>" --moonball <1-20>] [--budget <tNIGHT a draw>] [--max-draws <n>]
                [--daily-limit <tNIGHT a day>] [--state <file>] [--proof-server-port <port> | --prover <url|hosted>] [--dust-wait <min>]
   status       --network <network>
+  last-draw    --network <network> [--undo]   (the keeper opens no more draws on this deployment: see below)
   verify       --network <network>
   backfill-tx  --network <network> --feed <file>
                (the transaction ids of draws from before the keeper kept them, read back from the
@@ -112,6 +114,11 @@ Defaults are a weekly Starfall: a game costs 1.2 tNIGHT (1 to the prize pool, 0.
 draws close on Thursdays at 20:00 Brisbane, sales of 1 to 14 days, 1 hour to reveal, 2 hours for
 the oracle, 2 days to settle once the numbers are in. --every <seconds> runs draws on a fixed period
 instead (for test networks).
+
+last-draw winds a deployment down before a new one replaces it: the running keeper (it checks every
+pass, no restart needed) reveals the draw on sale without opening another, then settles, pays and
+refunds as usual. \`status\` says when nothing is left ("wound down: safe to switch"); with no draw on
+sale, nobody (an old agent kit, say) can buy into it. --undo lets the keeper open draws again.
 
 The settlement key (keygen settlement) decrypts every ticket so the keeper can settle the draw:
 keep its file private, like the organiser's. Its public half goes into the contract at deploy.
@@ -301,6 +308,21 @@ const randomMoonball = (): number => {
   return (r[0] % 20) + 1;
 };
 
+/**
+ * The file that tells a running keeper to wind a deployment down
+ * (`starfall last-draw`). Named after the contract, so it never touches the
+ * deployment that replaces it.
+ */
+export const lastDrawMarker = (contractAddress: string): string =>
+  join(homedir(), 'lunardraw-state', `starfall-${contractAddress}.last-draw`);
+
+/** What `status` says about a deployment winding down. */
+export const windDownStatus = (view: StarfallView): string => {
+  if (woundDown(view)) return 'Wound down: no draw is open and nothing is left to settle, pay or refund. Safe to switch to a new deployment.';
+  const busy = view.draws.filter((d) => d.status !== Starfall.DrawStatus.settled && d.status !== Starfall.DrawStatus.voided).map((d) => d.id);
+  return `Winding down: no new draws will open. Still in progress: ${busy.length ? `draw ${busy.join(', ')}` : 'payments or refunds'}.`;
+};
+
 /** A ticket's entry for the buy listing: "System 9: 3 5 9 ... + 7 (36 games)". */
 export const describeEntry = (e: Starfall.PlainEntry): string =>
   `${Starfall.entryName(e)}: ${[...e.numbers].sort((a, b) => a - b).join(' ')}` +
@@ -394,6 +416,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
       'daily-limit': { type: 'string' },
       'max-draws': { type: 'string' },
       state: { type: 'string' },
+      undo: { type: 'boolean', default: false },
     },
   });
 
@@ -547,11 +570,14 @@ export const starfall = async (argv: string[]): Promise<number> => {
           // reveals and new draws never wait for them, one at a time, with a
           // pause after each so the proof server can be restarted to free its
           // memory (see proof-server.ts).
+          // `starfall last-draw` winds this deployment down: checked every pass, so no restart.
+          const lastDraw = lastDrawMarker(record.contractAddress);
           const keeper = new StarfallKeeper({
             chain,
             seeds,
             settlementSecret: settlement.sk,
             schedule,
+            openNew: () => !existsSync(lastDraw),
             logger: session.logger,
             onView,
             // each step's transaction id, for the feed's tx (the site's verification links to them)
@@ -563,7 +589,8 @@ export const starfall = async (argv: string[]): Promise<number> => {
           keeper.start();
           session.logger.info(
             `Starfall keeper running for ${record.contractAddress} (${values.every ? `draws every ${values.every} s` : 'weekly Starfall'}` +
-              `${feedPath ? `; site feed written to ${feedPath}` : ''}). Press Ctrl+C to stop.`,
+              `${feedPath ? `; site feed written to ${feedPath}` : ''}). Press Ctrl+C to stop. ` +
+              `To wind it down: ./lunardraw starfall last-draw --network ${network} (it creates ${lastDraw}).`,
           );
           const watchdog = untilFailingFor(restartAfter(values['restart-after']), () => keeper.status().streak, session.logger);
           const sync = watchSync(wallet, { stallMinutes: stallAfter(values['stall-after']), logger: session.logger });
@@ -853,6 +880,28 @@ export const starfall = async (argv: string[]): Promise<number> => {
       const record = readStarfallRecord(network);
       const view = await readStarfallView(publicDataFor(network), record.contractAddress);
       process.stdout.write(`Starfall on ${network} at ${record.contractAddress}\n${describeView(view, Date.now() / 1000)}\n`);
+      if (existsSync(lastDrawMarker(record.contractAddress))) process.stdout.write(windDownStatus(view) + '\n');
+      return 0;
+    }
+
+    case 'last-draw': {
+      const network = networkArg(values.network);
+      const record = readStarfallRecord(network);
+      const marker = lastDrawMarker(record.contractAddress);
+      if (values.undo) {
+        rmSync(marker, { force: true });
+        process.stdout.write(`The keeper opens draws on ${record.contractAddress} again (within a minute).\n`);
+        return 0;
+      }
+      mkdirSync(join(homedir(), 'lunardraw-state'), { recursive: true });
+      writeFileSync(marker, `last-draw set ${new Date().toISOString()}\n`);
+      process.stdout.write(
+        `Winding down ${record.contractAddress} on ${network}: the keeper opens no more draws (it checks every minute; its log says\n` +
+          `"winding down"). The draw on sale closes, is drawn, settled and paid as usual. Check with\n` +
+          `  ./lunardraw starfall status --network ${network}\n` +
+          `until it says "Wound down ... Safe to switch". To undo: ./lunardraw starfall last-draw --network ${network} --undo\n` +
+          `(marker: ${marker})\n`,
+      );
       return 0;
     }
 

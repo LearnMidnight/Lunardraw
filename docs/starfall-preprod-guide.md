@@ -195,3 +195,21 @@ A draw that misses a deadline is voided, then `refund ticket i of void draw N` f
 | `this wallet is already open in another program` | Another `buy` (or a keeper, oracle or agent) is using that wallet: two at once fight over the same coins and one gets stuck. Let the other finish, or stop it. Buy from one window at a time. A lock left by a program that has stopped is taken over by itself. |
 | `Stopped after N of M ticket(s)` | `buy` checks the chain before saying this, so N is what really went in. Run buy again for the rest. |
 | Anything with `Custom error: 170` | Stale wallet sync: the watchdog restarts the service after 3 minutes; for `buy`, run it again (a fresh start resyncs the wallet). |
+
+## Switching to a new deployment (wind the old one down first)
+
+Before a new Starfall deployment replaces this one, let this one finish cleanly, so no player is left holding a ticket in a draw nobody settles:
+
+```bash
+./lunardraw starfall last-draw --network preprod
+```
+
+The running keeper sees it within a minute (no restart; its log says "winding down"). The draw on sale closes, is drawn, settled and paid as usual, but **no new draw opens**. With nothing on sale, nobody can buy into the old deployment, an agent kit that still points at it included (it is told "no draw is on sale"). Check:
+
+```bash
+./lunardraw starfall status --network preprod
+```
+
+until it ends with **"Wound down: … Safe to switch to a new deployment."** Then deploy the new contract and switch the services over. `--undo` lets the keeper open draws again. The marker (`~/lunardraw-state/starfall-<contract>.last-draw`) is named after the contract, so it never affects the new one.
+
+If a draw is cancelled while winding down, the keeper refunds every ticket before it counts as wound down; anyone can also void a draw past its deadline and refund it, so no stake can be stranded.

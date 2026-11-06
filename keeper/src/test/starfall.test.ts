@@ -21,6 +21,7 @@ import {
   starfallSteps,
   type StarfallView,
   storedTicketsOf,
+  woundDown,
 } from '../starfall.js';
 
 const { DrawStatus, SettlementSimulator, makeTicket, randomScalar } = Starfall;
@@ -142,6 +143,56 @@ describe('the Starfall keeper', () => {
     if (sim.payments) expect(sim.payments.some((p) => p.to === hex(winner) && p.amount > 0n)).toBe(true);
     expect((await keeper.tick()).done).toEqual([]);
   }, 120_000);
+
+  it('winds down when told to: reveals the draw on sale without opening another, then finishes it and says so', async () => {
+    const ctx = setup();
+    const { sim } = ctx;
+    let last = false;
+    const said: string[] = [];
+    const log = (m: string) => said.push(m);
+    const keeper = ctx.keeper({ openNew: () => !last, logger: { info: log, warn: log, error: log } });
+    expect((await keeper.tick()).done).toEqual(['open after 0']);
+    const { numbers, moonball } = numbersOf(ctx, 1n);
+    sim.buyTickets([makeTicket(1n, lineHitting(numbers, moonball, 3), randomAddress()), makeTicket(1n, quickPick(), randomAddress())], BUYER);
+    // Told to wind down while draw 1 is selling.
+    last = true;
+    await keeper.tick();
+    expect(said.some((m) => /winding down: no new draws/.test(m))).toBe(true);
+    passing(sim, draw(sim, 1n).salesClose);
+    expect((await keeper.tick()).done).toEqual(['reveal 1']);
+    expect(sim.getLedger().lastDraw).toBe(1n); // no draw 2
+    oracleAnswers(sim);
+    for (let pass = 0; pass < 10; pass++) await keeper.tick();
+    expect(draw(sim, 1n).status).toBe(DrawStatus.settled);
+    for (const id of sim.entitlementsOf(1n)) expect(sim.getLedger().entitlements.lookup(id).paid).toBe(true);
+    // Nothing on sale, nothing owed: it says so once, and never opens a draw.
+    sim.advance(5 * SALES);
+    for (let pass = 0; pass < 3; pass++) expect((await keeper.tick()).done).toEqual([]);
+    expect(sim.getLedger().lastDraw).toBe(1n);
+    expect(said.filter((m) => /^wound down: .*safe to switch/.test(m))).toHaveLength(1);
+    expect(woundDown(await ctx.chain.view())).toBe(true);
+    // Told to carry on again, it opens the next draw.
+    last = false;
+    expect((await keeper.tick()).done).toEqual(['open after 1']);
+  }, 120_000);
+
+  it('counts a void draw as wound down only once every ticket is refunded', async () => {
+    const ctx = setup();
+    const { sim } = ctx;
+    const keeper = ctx.keeper({ openNew: false, paymentsPerPass: 1 });
+    openFirst(ctx);
+    sim.buyTickets([makeTicket(1n, quickPick(), randomAddress())], BUYER);
+    sim.buyTickets([makeTicket(1n, quickPick(), randomAddress())], BUYER);
+    expect(woundDown(await ctx.chain.view())).toBe(false);
+    // Nobody reveals it: void, then refunds one a pass.
+    passing(sim, draw(sim, 1n).revealDeadline);
+    sim.voidDraw(1n);
+    expect(woundDown(await ctx.chain.view())).toBe(false);
+    await keeper.tick();
+    expect(woundDown(await ctx.chain.view())).toBe(false);
+    await keeper.tick();
+    expect(woundDown(await ctx.chain.view())).toBe(true);
+  }, 60_000);
 
   it('finalises an unsold draw straight away, and draws in order', async () => {
     const ctx = setup();
