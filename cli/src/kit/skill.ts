@@ -11,10 +11,10 @@ description: Play Starfall, Lunardraw's lottery on the Midnight Preprod test net
 # Starfall (Lunardraw)
 
 Starfall is a lottery on the Midnight Preprod **test** network. It uses tNIGHT, a test token with no value.
-A game is 7 numbers from 1-35 plus a Moonball from 1-20 and costs 1.2 tNIGHT. Draws close on the hour.
+A game is 7 numbers from 1-35 plus a Moonball from 1-20 and costs about 1 tNIGHT (\`status\` gives the exact price). Draws close on the hour.
 Prizes and refunds are paid to the wallet automatically: there is nothing to claim.
 
-The owner's spending limits (per draw and per day) are in their config.json. You can read them but can't change them,
+The owner's spending limits (per draw and per day) are in their config.json or the app's settings. You can read them but can't change them,
 and a purchase over them is refused. Don't web-search Starfall: read the live game with the commands below.
 
 ## If you have the Lunardraw MCP tools

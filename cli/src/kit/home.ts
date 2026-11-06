@@ -39,6 +39,11 @@ export type KitConfig = {
   remote?: boolean;
   /** The relay (default: Lunardraw's). */
   relay?: string;
+  /**
+   * config.json's own limits, when the extension's settings override them (loadConfig):
+   * saveConfig writes these back, so settings never end up in the file.
+   */
+  fileLimits?: { perDraw: number; perDay: number };
 };
 
 /** Lunardraw's agent registry (the agent directory on lunardraw.io reads it). */
@@ -103,13 +108,51 @@ export const parseConfig = (raw: unknown): KitConfig => {
   };
 };
 
-export const loadConfig = (home = kitHome()): KitConfig => {
-  const path = kitPaths(home).config;
-  if (!existsSync(path)) throw new Error(`no agent set up in ${home} yet: run \`lunardraw-agent init\` first`);
-  return parseConfig(JSON.parse(readFileSync(path, 'utf8')));
+/**
+ * Limits set in the app's settings for the kit: Claude's extension passes its "tNIGHT a draw"
+ * and "tNIGHT a day" settings as LUNARDRAW_LIMIT_PER_DRAW and LUNARDRAW_LIMIT_PER_DAY. Only the
+ * owner can change them there; an AI using the kit can't. An empty or unset value (or one that
+ * isn't a number of tNIGHT) leaves config.json's limit in force.
+ */
+export const settingsLimits = (env: NodeJS.ProcessEnv = process.env): Partial<KitConfig['limits']> => {
+  const read = (v: string | undefined): number | undefined => {
+    const t = (v ?? '').trim();
+    return /^\d+(\.\d+)?$/.test(t) && Number.isFinite(Number(t)) ? Number(t) : undefined;
+  };
+  const perDraw = read(env.LUNARDRAW_LIMIT_PER_DRAW);
+  const perDay = read(env.LUNARDRAW_LIMIT_PER_DAY);
+  return { ...(perDraw !== undefined ? { perDraw } : {}), ...(perDay !== undefined ? { perDay } : {}) };
 };
 
-export const saveConfig = (config: KitConfig, home = kitHome()): void => writePrivate(kitPaths(home).config, JSON.stringify(config, null, 2) + '\n');
+/** The config, with any limits from the app's settings (settingsLimits) in force over config.json's. */
+export const loadConfig = (home = kitHome(), env: NodeJS.ProcessEnv = process.env): KitConfig => {
+  const path = kitPaths(home).config;
+  if (!existsSync(path)) throw new Error(`no agent set up in ${home} yet: run \`lunardraw-agent init\` first`);
+  const config = parseConfig(JSON.parse(readFileSync(path, 'utf8')));
+  const set = settingsLimits(env);
+  if (set.perDraw === undefined && set.perDay === undefined) return config;
+  return { ...config, limits: { ...config.limits, ...set }, fileLimits: config.limits };
+};
+
+/** The limits in force now: re-read, so a change takes effect without restarting the agent. */
+export const limitsNow = (fallback: KitConfig, home = kitHome()): KitConfig['limits'] => {
+  try {
+    return loadConfig(home).limits;
+  } catch {
+    return fallback.limits;
+  }
+};
+
+/** Where the owner changes the limits, for messages. */
+export const limitsWhere = (config: KitConfig, home = kitHome()): string =>
+  config.fileLimits
+    ? "in the Lunardraw extension's settings in Claude (Settings, Extensions, Lunardraw (Starfall), Configure)"
+    : `in ${kitPaths(home).config}, or with \`lunardraw-agent limits --per-draw <tNIGHT> --per-day <tNIGHT>\``;
+
+export const saveConfig = (config: KitConfig, home = kitHome()): void => {
+  const { fileLimits, ...rest } = config;
+  writePrivate(kitPaths(home).config, JSON.stringify({ ...rest, limits: fileLimits ?? rest.limits }, null, 2) + '\n');
+};
 
 /** Create the wallet seed if there isn't one; returns the seed and whether it was new. */
 export const ensureWallet = (home = kitHome()): { seed: string; created: boolean } => {

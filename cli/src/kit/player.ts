@@ -16,7 +16,7 @@ import { openWallet } from '../wallet-lock.js';
 import { declareFeesAtDustTime, type DustTimeWallet } from '../dust-time.js';
 import { withFreshFees } from '../fresh-fees.js';
 import { waitForTip } from '../sync-watch.js';
-import { type KitConfig, kitPaths, star, tNight } from './home.js';
+import { type KitConfig, kitPaths, limitsWhere, loadConfig, star, tNight } from './home.js';
 
 const { DrawStatus } = Starfall;
 const iso = (secs: bigint) => new Date(Number(secs) * 1000).toISOString();
@@ -191,8 +191,16 @@ export const withPlayer = async <T>(config: KitConfig, seed: string, fn: (p: Pla
             const games = entries.reduce((a, e) => a + Starfall.gamesOf(e), 0);
             const cost = view.ticketPrice * BigInt(games);
             const state = loadAgentState(statePath);
-            const over = checkLimits(state, config, selling.id, cost, Date.now());
-            if (over) throw new Error(`not buying: ${over}. The owner can change the limits in ${kitPaths(home, config.network).config}.`);
+            // the limits as they are now: the owner may have changed them since the wallet opened
+            const current = (() => {
+              try {
+                return loadConfig(home);
+              } catch {
+                return config;
+              }
+            })();
+            const over = checkLimits(state, current, selling.id, cost, Date.now());
+            if (over) throw new Error(`not buying: ${over}. The owner can change the limits ${limitsWhere(current, home)}.`);
             const { night, dust } = await walletBalances(wallet);
             if (night < cost) throw new Error(`${games} game(s) cost ${tNight(cost)} but the wallet holds ${tNight(night)}: get more from the faucet`);
             if (dust <= 0n) throw new Error('the wallet has no DUST yet to pay the fee (it builds up a few minutes after tNIGHT arrives)');

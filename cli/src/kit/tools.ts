@@ -5,7 +5,9 @@
 import { Starfall } from '@lunardraw/contract';
 import { loadAgentState } from '../starfall-agent.js';
 import { buyEntries } from '../starfall-commands.js';
-import { ensureWallet, hasBlockfrost, kitHome, kitPaths, loadConfig, useHome } from './home.js';
+import { ensureWallet, hasBlockfrost, kitHome, kitPaths, limitsWhere, loadConfig, tNight, useHome } from './home.js';
+import { readStarfallRecord } from '../starfall.js';
+import { deploymentWatch, outdatedText } from './freshness.js';
 import { buyArgs, type Tool } from './mcp.js';
 import { toolDef } from './tool-defs.js';
 import { refreshListing } from './directory.js';
@@ -23,6 +25,28 @@ const DIVISIONS = ['7 + Moonball', '7', '6 + Moonball', '6', '5 + Moonball', '4 
 export const mcpTools = (o: { answerMs?: number } = {}): Tool[] => {
   const config = loadConfig();
   useHome(config);
+  /** The config as it is now: the owner may change the limits while the agent runs. */
+  const current = () => {
+    try {
+      return loadConfig();
+    } catch {
+      return config;
+    }
+  };
+  // whether the contract packed in this kit is still Starfall's (freshness.ts)
+  const fresh = deploymentWatch(() => readStarfallRecord(config.network).contractAddress, config.network);
+  /** The price of a game and its split, from the packed deployment record. */
+  const priceText = (): string => {
+    try {
+      const p = (readStarfallRecord(config.network) as unknown as { parameters?: { ticketPrice?: string; feePerGame?: string } }).parameters ?? {};
+      const price = BigInt(p.ticketPrice ?? '0');
+      const fee = BigInt(p.feePerGame ?? '0');
+      if (price > 0n) return `${tNight(price)} a game (${tNight(price - fee)} to the prize pool, ${tNight(fee)} operator fee)`;
+    } catch {
+      /* no record: say it without the number */
+    }
+    return 'about 1 tNIGHT a game (lunardraw_draw_on_sale gives the exact price)';
+  };
   const ready = () => {
     if (!hasBlockfrost(kitHome(), config.network)) {
       throw new Error(
@@ -148,12 +172,12 @@ export const mcpTools = (o: { answerMs?: number } = {}): Tool[] => {
       run: async () => ({
         text: [
           'Starfall: a lottery on the Midnight Preprod test network (tNIGHT test tokens, no real value).',
-          'A game: 7 numbers from 1-35 and a Moonball from 1-20. 1.2 tNIGHT a game (1 to the prize pool, 0.2 operator fee).',
+          `A game: 7 numbers from 1-35 and a Moonball from 1-20. ${priceText()}.`,
           'Draws close on the hour. Numbers come from Nightcast verifiable randomness; anyone can check every draw.',
           `Prize divisions: ${DIVISIONS.map((d, i) => `${i + 1}: ${d}`).join('; ')}. Division 1 odds are about 1 in 134 million.`,
           'Entries: QuickPick games or packages (' + Object.entries(Starfall.QUICK_PICK_PACKAGES).map(([k, v]) => `${k} ${v}`).join(', ') + '), your own numbers, a System (8-12 numbers, every 7 of them), a Pick (5 or 6 numbers completed every way), and Moonball Sweep (every Moonball, 20 times the games).',
           'Prizes and refunds (if a draw is cancelled) are paid to the wallet automatically. Nothing to claim.',
-          `Spending limits set by the owner: ${config.limits.perDraw} tNIGHT a draw, ${config.limits.perDay} tNIGHT in any 24 hours. They can't be changed from here.`,
+          `Spending limits set by the owner: ${current().limits.perDraw} tNIGHT a draw, ${current().limits.perDay} tNIGHT in any 24 hours. They can't be changed from here; the owner sets them ${limitsWhere(current())}.`,
         ].join('\n'),
       }),
     },
@@ -161,8 +185,9 @@ export const mcpTools = (o: { answerMs?: number } = {}): Tool[] => {
       ...toolDef('lunardraw_draw_on_sale'),
       run: async () => {
         ready();
-        const { overview } = await readOverview(config);
-        return { text: JSON.stringify({ game: "Starfall, Lunardraw's lottery on the Midnight Preprod test network", ...overview }, null, 2) };
+        const [{ overview }, f] = await Promise.all([readOverview(config), fresh()]);
+        const notice = f.state === 'outdated' ? { notice: outdatedText(f) } : {};
+        return { text: JSON.stringify({ game: "Starfall, Lunardraw's lottery on the Midnight Preprod test network", ...notice, ...overview }, null, 2) };
       },
     },
     {
@@ -172,10 +197,10 @@ export const mcpTools = (o: { answerMs?: number } = {}): Tool[] => {
         const opening = openPlayer(progress);
         const late = Symbol('late');
         const first = await ticking(progress, 'opening the wallet', Promise.race([opening, lateAfter(late)]));
-        if (first === late) return { text: JSON.stringify({ ...notReady(), limits: config.limits }, null, 2) };
+        if (first === late) return { text: JSON.stringify({ ...notReady(), limits: current().limits }, null, 2) };
         const p = first;
         const { night, dust } = await p.balances();
-        return { text: JSON.stringify({ address: p.address, tNight: Number(night) / 1e6, dust: (Number(dust) / 1e15).toFixed(2), limits: config.limits }, null, 2) };
+        return { text: JSON.stringify({ address: p.address, tNight: Number(night) / 1e6, dust: (Number(dust) / 1e15).toFixed(2), limits: current().limits }, null, 2) };
       },
     },
     {
@@ -183,6 +208,10 @@ export const mcpTools = (o: { answerMs?: number } = {}): Tool[] => {
       run: async (args, progress) => {
         const entries = buyEntries(buyArgs(args));
         ready();
+        const f = await fresh();
+        if (f.state === 'outdated') {
+          return { text: JSON.stringify({ status: 'not bought: this agent plays an old Starfall contract', note: outdatedText(f) }, null, 2), isError: true };
+        }
         if (farFromReady()) {
           return { text: JSON.stringify({ status: 'not ready to buy yet: nothing was bought', ...notReady() }, null, 2), isError: true };
         }
