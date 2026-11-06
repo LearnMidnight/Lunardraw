@@ -37,7 +37,8 @@ export const KIT_USAGE = `lunardraw-agent: play Starfall, Lunardraw's lottery on
   lunardraw-agent tickets                            what this agent bought and how each draw went
   lunardraw-agent play [--style mix|quickpick|lucky|moonhit|system] [--games <n>] [--numbers ... --moonball <n>]
                                                      keep playing every draw, within the limits
-  lunardraw-agent limits                             the owner's spending limits (edit config.json to change)
+  lunardraw-agent limits [--per-draw <tNIGHT>] [--per-day <tNIGHT>]
+                                                     the owner's spending limits, or set them
   lunardraw-agent list --name <name> [--style "<few words>"] [--via claude|chatgpt|gemini|openclaw|hermes|mcp|cli|...]
                                                      show this agent in lunardraw.io's agent directory (its name, style
                                                      and totals, signed by its wallet; never its numbers)
@@ -172,6 +173,8 @@ export const kit = async (argv: string[]): Promise<number> => {
       log: { type: 'string' },
       'no-autostart': { type: 'boolean', default: false },
       'stop-at-login': { type: 'boolean', default: false },
+      'per-draw': { type: 'string' },
+      'per-day': { type: 'string' },
       help: { type: 'boolean', default: false },
     },
   });
@@ -263,7 +266,22 @@ export const kit = async (argv: string[]): Promise<number> => {
           fix.push('Run `lunardraw-agent setup`: it asks for the key.');
         }
         line(true, config.listing ? `in the agent directory as ${config.listing.name}` : 'not in the agent directory (optional: `lunardraw-agent list --name <name>`)');
-        line(true, `spending limits: ${config.limits.perDraw} tNIGHT a draw, ${config.limits.perDay} a day`);
+        line(true, `spending limits: ${config.limits.perDraw} tNIGHT a draw, ${config.limits.perDay} a day${config.fileLimits ? " (from the extension's settings)" : ''}`);
+        // still the current Starfall contract? (freshness.ts)
+        try {
+          const { checkDeployment, outdatedText } = await import('./freshness.js');
+          const { readStarfallRecord } = await import('../starfall.js');
+          useHome(config);
+          const f = await checkDeployment(readStarfallRecord(config.network).contractAddress, config.network);
+          if (f.state === 'outdated') {
+            line(false, 'this kit plays an old Starfall contract');
+            fix.push(outdatedText(f).replace(/^.*?so nothing was bought\. /, ''));
+          } else {
+            line(true, f.state === 'current' ? `plays the current Starfall contract (${f.contract.slice(0, 8)}…)` : `couldn't check for a newer Starfall contract (${f.reason})`);
+          }
+        } catch (err) {
+          line(true, `couldn't check for a newer Starfall contract (${err instanceof Error ? err.message : String(err)})`);
+        }
       }
       if (config) {
         const { findHost } = await import('./host.js');
@@ -302,9 +320,30 @@ export const kit = async (argv: string[]): Promise<number> => {
     }
 
     case 'limits': {
-      const config = loadConfig();
+      let config = loadConfig();
+      const amount = (v: string | undefined, what: string): number | undefined => {
+        if (v === undefined) return undefined;
+        const n = Number(v.trim());
+        if (!/^\d+(\.\d+)?$/.test(v.trim()) || !Number.isFinite(n)) throw new Error(`--${what} takes a number of tNIGHT, 0 or more (not ${v})`);
+        return n;
+      };
+      const perDraw = amount(values['per-draw'], 'per-draw');
+      const perDay = amount(values['per-day'], 'per-day');
+      if (perDraw !== undefined || perDay !== undefined) {
+        const file = config.fileLimits ?? config.limits;
+        saveConfig({ ...config, fileLimits: undefined, limits: { perDraw: perDraw ?? file.perDraw, perDay: perDay ?? file.perDay } });
+        config = loadConfig();
+        say(`Saved in ${kitPaths().config}. A running agent uses them from its next purchase.`);
+      }
       say(`${config.limits.perDraw} tNIGHT a draw, ${config.limits.perDay} tNIGHT in any 24 hours.`);
-      say(`Change them in ${kitPaths().config} ("limits": { "perDraw": ..., "perDay": ... }). An AI using the MCP server can't change them.`);
+      if (config.fileLimits) {
+        say(
+          `These come from the Lunardraw extension's settings in Claude, which win over config.json's (${config.fileLimits.perDraw} a draw, ${config.fileLimits.perDay} a day): ` +
+            'change them there (Settings, Extensions, Lunardraw (Starfall), Configure).',
+        );
+      } else {
+        say(`Change them with \`lunardraw-agent limits --per-draw <tNIGHT> --per-day <tNIGHT>\` (kept in ${kitPaths().config}). An AI using the MCP server can't change them.`);
+      }
       return 0;
     }
 

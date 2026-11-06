@@ -5,7 +5,8 @@ import { describe, expect, it } from 'vitest';
 import { Starfall } from '@lunardraw/contract';
 import type { StarfallView } from '@lunardraw/keeper';
 import { buyWithRetry, isCollision, isNotSent, timedMethod } from '../buyer.js';
-import { DEFAULT_CONFIG, ensureWallet, findDeployments, parseConfig, saveBlockfrost } from '../kit/home.js';
+import { DEFAULT_CONFIG, ensureWallet, findDeployments, limitsWhere, loadConfig, parseConfig, saveBlockfrost, saveConfig, settingsLimits } from '../kit/home.js';
+import { checkDeployment, deploymentWatch, outdatedText, recordUrl } from '../kit/freshness.js';
 import { BUY_SCHEMA, buyArgs, handle, type Tool } from '../kit/mcp.js';
 import { checkLimits, overviewOf, requireLocalProvingKey, ticketsReport } from '../kit/player.js';
 import { type AgentState, planPurchase } from '../starfall-agent.js';
@@ -446,5 +447,61 @@ describe('the guided setup', () => {
     expect(await checkBlockfrost('good', 'preprod', answer(200))).toEqual({ ok: true });
     expect((await checkBlockfrost('bad', 'preprod', answer(403))).why).toMatch(/doesn't accept that key/);
     expect((await checkBlockfrost('x', 'preprod', (async () => { throw new Error('offline'); }) as unknown as typeof fetch)).why).toMatch(/couldn't reach Blockfrost \(offline\)/);
+  });
+});
+
+describe('spending limits from the app\'s settings', () => {
+  it('win over config.json while set, are never written into it, and are ignored when empty or not a number', () => {
+    const home = mkdtempSync(join(tmpdir(), 'kit-limits-'));
+    saveConfig({ ...DEFAULT_CONFIG, limits: { perDraw: 30, perDay: 600 } }, home);
+    expect(loadConfig(home, {}).limits).toEqual({ perDraw: 30, perDay: 600 });
+    expect(loadConfig(home, {}).fileLimits).toBeUndefined();
+    // Claude's extension passes its settings; an unset one may arrive empty or as its placeholder
+    const env = { LUNARDRAW_LIMIT_PER_DAY: ' 520 ', LUNARDRAW_LIMIT_PER_DRAW: '${user_config.per_draw}' };
+    const c = loadConfig(home, env);
+    expect(c.limits).toEqual({ perDraw: 30, perDay: 520 });
+    expect(c.fileLimits).toEqual({ perDraw: 30, perDay: 600 });
+    expect(limitsWhere(c, home)).toMatch(/extension's settings/);
+    expect(limitsWhere(loadConfig(home, {}), home)).toMatch(/lunardraw-agent limits/);
+    saveConfig({ ...c, remote: true }, home);
+    expect(JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')).limits).toEqual({ perDraw: 30, perDay: 600 });
+    expect(settingsLimits({ LUNARDRAW_LIMIT_PER_DRAW: '', LUNARDRAW_LIMIT_PER_DAY: '-5' })).toEqual({});
+    expect(settingsLimits({ LUNARDRAW_LIMIT_PER_DRAW: '0', LUNARDRAW_LIMIT_PER_DAY: '12.5' })).toEqual({ perDraw: 0, perDay: 12.5 });
+  });
+});
+
+describe('an old Starfall contract', () => {
+  const OLD = 'f868fc99557fd9194d1126d143774d060aeafe077f0dca5c11435fe6c1e374f6';
+  const NEW = 'a'.repeat(64);
+  const answering = (body: unknown, status = 200) => (async () => new Response(JSON.stringify(body), { status })) as unknown as typeof fetch;
+  it('is noticed by comparing the packed record with the published one, and never guessed', async () => {
+    expect((await checkDeployment(OLD, 'preprod', { fetchFn: answering({ network: 'preprod', contractAddress: OLD }) })).state).toBe('current');
+    const moved = await checkDeployment(OLD, 'preprod', { fetchFn: answering({ network: 'preprod', contractAddress: NEW }) });
+    expect(moved).toEqual({ state: 'outdated', contract: OLD, current: NEW });
+    if (moved.state === 'outdated') expect(outdatedText(moved)).toMatch(/nothing was bought.*Uninstall.*npm install -g @lunardraw\/agent/s);
+    // offline, a broken record, another network: unknown, so buying goes on as before
+    expect((await checkDeployment(OLD, 'preprod', { fetchFn: (async () => { throw new Error('offline'); }) as unknown as typeof fetch })).state).toBe('unknown');
+    expect((await checkDeployment(OLD, 'preprod', { fetchFn: answering({}, 404) })).state).toBe('unknown');
+    expect((await checkDeployment(OLD, 'preprod', { fetchFn: answering({ network: 'preprod', contractAddress: 'nope' }) })).state).toBe('unknown');
+    expect((await checkDeployment(OLD, 'preprod', { fetchFn: answering({ network: 'preview', contractAddress: NEW }) })).state).toBe('unknown');
+    expect(recordUrl('preprod', {})).toBe('https://raw.githubusercontent.com/LearnMidnight/Lunardraw/main/deployments/starfall-preprod.json');
+  });
+  it('is checked at most once an hour (an unknown answer again after 5 minutes)', async () => {
+    let calls = 0;
+    let t = 0;
+    let body: unknown = { contractAddress: OLD };
+    const fetchFn = (async () => {
+      calls++;
+      return new Response(JSON.stringify(body));
+    }) as unknown as typeof fetch;
+    const watch = deploymentWatch(() => OLD, 'preprod', { fetchFn, now: () => t });
+    expect((await Promise.all([watch(), watch()])).map((f) => f.state)).toEqual(['current', 'current']);
+    expect(calls).toBe(1);
+    body = { contractAddress: NEW };
+    t = 59 * 60_000;
+    expect((await watch()).state).toBe('current');
+    t = 61 * 60_000;
+    expect((await watch()).state).toBe('outdated');
+    expect(calls).toBe(2);
   });
 });

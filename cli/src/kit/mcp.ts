@@ -25,14 +25,14 @@ export type Tool = {
   run(args: Record<string, unknown>, progress: (message: string) => void): Promise<ToolText>;
 };
 
-export const SERVER_INFO = { name: 'lunardraw', title: 'Lunardraw', version: '0.1.7' };
+export const SERVER_INFO = { name: 'lunardraw', title: 'Lunardraw', version: '0.1.8' };
 const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 
 export const INSTRUCTIONS =
   'Lunardraw runs Starfall, a lottery on the Midnight Preprod test network (tNIGHT test tokens with no value). ' +
   'When the user mentions Starfall or Lunardraw, use these tools, not a web search: they read the live game and act for the user. ' +
   "Buying is what this server is for: when the user asks you to buy or play, call lunardraw_buy_tickets (it pays from this agent's own test wallet). " +
-  'Draws close on the hour on Preprod. A game is 7 numbers from 1-35 plus a Moonball from 1-20 and costs 1.2 tNIGHT; prizes and refunds ' +
+  'Draws close on the hour on Preprod. A game is 7 numbers from 1-35 plus a Moonball from 1-20 and costs about 1 tNIGHT (lunardraw_draw_on_sale gives the exact price); prizes and refunds ' +
   "are paid to the agent's wallet automatically (no claiming). Check lunardraw_draw_on_sale before buying. Purchases are limited by the owner's " +
   'spending limits, which you cannot change. Opening the wallet takes a few minutes the first time in a session; a purchase takes 2-3 minutes. ' +
   "If the agent isn't ready (no Blockfrost key, a new wallet still syncing, no tNIGHT yet), the tools say what the owner should do: pass that on, step by step.";

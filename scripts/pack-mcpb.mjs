@@ -85,7 +85,7 @@ const manifest = {
     '2. Ask Claude: *"Set me up for Starfall."* It shows your wallet\'s address and the faucet that sends free tNIGHT.',
     "3. The first sync of a new wallet takes a few hours; Claude tells you how far along it is. Then ask: *\"What's on in Starfall? Buy me two QuickPick games.\"*",
     '',
-    'Your AI can spend at most 25 tNIGHT a draw and 100 a day unless you change the limits in `.lunardraw-agent/config.json` in your home folder; it can read them but never change them. Prizes are paid to the wallet automatically.',
+    "Your AI can spend at most 25 tNIGHT a draw and 100 a day unless you change the limits in this extension's settings; it can read them but never change them. Prizes are paid to the wallet automatically.",
     '',
     'Also on ChatGPT, Gemini, Cursor, VS Code and more, and on the web or your phone: see lunardraw.io/play-with-ai.',
   ].join('\n'),
@@ -102,7 +102,12 @@ const manifest = {
       command: 'node',
       // the script first: Claude may start it with its own Node, which takes the first argument as the script
       args: ['${__dirname}/server/index.mjs'],
-      env: { LUNARDRAW_BLOCKFROST: '${user_config.blockfrost}' },
+      env: {
+        LUNARDRAW_BLOCKFROST: '${user_config.blockfrost}',
+        // empty unless the owner sets them: then config.json's limits apply (home.ts settingsLimits)
+        LUNARDRAW_LIMIT_PER_DRAW: '${user_config.per_draw}',
+        LUNARDRAW_LIMIT_PER_DAY: '${user_config.per_day}',
+      },
     },
   },
   tools: tools.map(([name, description]) => ({ name, description })),
@@ -116,6 +121,21 @@ const manifest = {
       description: 'Free at blockfrost.io: Add project, choose the network "Midnight Preprod", and copy the Project ID. Leave it empty if you already set up the Lunardraw kit in a terminal.',
       sensitive: true,
       required: false,
+    },
+    // Only the owner can change these (an AI using the tools can't): the extension's settings are theirs.
+    per_draw: {
+      type: 'number',
+      title: 'Spending limit: tNIGHT a draw',
+      description: 'The most the agent may spend on one draw. Leave it empty to keep the limit in .lunardraw-agent/config.json (25 unless you changed it).',
+      required: false,
+      min: 0,
+    },
+    per_day: {
+      type: 'number',
+      title: 'Spending limit: tNIGHT a day',
+      description: 'The most the agent may spend in any 24 hours. Leave it empty to keep the limit in .lunardraw-agent/config.json (100 unless you changed it).',
+      required: false,
+      min: 0,
     },
   },
 };

@@ -315,7 +315,7 @@ export const setup = async (): Promise<number> => {
     }
     say('\nThen try: "Buy me two QuickPick games." or "Did any of my tickets win?"');
     say('Something not working? Run `lunardraw-agent doctor`.');
-    say(`Spending limits: ${config.limits.perDraw} tNIGHT a draw, ${config.limits.perDay} a day (change them in ${paths.config}).`);
+    say(`Spending limits: ${config.limits.perDraw} tNIGHT a draw, ${config.limits.perDay} a day (change them with \`lunardraw-agent limits --per-draw <tNIGHT> --per-day <tNIGHT>\`, kept in ${paths.config}).`);
     return 0;
   } finally {
     rl.close();

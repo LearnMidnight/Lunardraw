@@ -31,7 +31,7 @@ node -e '
   const byId = Object.fromEntries(msgs.map((m) => [m.id, m]));
   const tools = byId[2].result.tools.map((t) => t.name);
   const want = ["lunardraw_how_to_play", "lunardraw_draw_on_sale", "lunardraw_wallet", "lunardraw_buy_tickets", "lunardraw_my_tickets"];
-  if (byId[1].result.serverInfo.name !== "lunardraw" || want.some((w) => !tools.includes(w)) || !/1.2 tNIGHT a game/.test(byId[3].result.content[0].text)) {
+  if (byId[1].result.serverInfo.name !== "lunardraw" || want.some((w) => !tools.includes(w)) || !/[0-9.]+ tNIGHT a game/.test(byId[3].result.content[0].text)) {
     console.log("::error title=mcp::" + JSON.stringify(msgs).slice(0, 1500)); process.exit(1);
   }
   console.log(`::notice title=mcp::${lines.length} JSON-RPC lines on stdout, tools: ${tools.join(", ")}`);
@@ -46,7 +46,7 @@ for _ in $(seq 1 60); do curl -fsS http://127.0.0.1:6338/health > /dev/null 2>&1
 curl -fsS http://127.0.0.1:6338/health
 token="$(cat "$LUNARDRAW_AGENT_HOME/agent-token.secret")"
 curl -fsS -H "Authorization: Bearer $token" http://127.0.0.1:6338/api/rules > rules.json
-grep -q '1.2 tNIGHT a game' rules.json
+grep -Eq '[0-9.]+ tNIGHT a game' rules.json
 test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:6338/api/rules)" = 401
 curl -fsS http://127.0.0.1:6338/openapi.json > openapi.json
 grep -q '/api/buy' openapi.json
@@ -55,7 +55,7 @@ printf '%s\n' \
   '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"lunardraw_how_to_play","arguments":{}}}' \
   | lunardraw-agent mcp > mcp2.out 2> mcp2.err
 grep -q 'passing requests to the agent already running' mcp2.err || { cat mcp2.err; exit 1; }
-grep -q '1.2 tNIGHT a game' mcp2.out
+grep -Eq '[0-9.]+ tNIGHT a game' mcp2.out
 echo "::notice title=one agent::serve answered on 127.0.0.1:6338 and a second MCP server passed its requests to it"
 kill $serve
 lunardraw-agent skill > skill.md
