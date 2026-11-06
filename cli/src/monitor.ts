@@ -130,6 +130,24 @@ export const dustOf = (raw: string | bigint) => Number(BigInt(raw)) / 1e15;
 export const nightOf = (raw: string | bigint) => Number(BigInt(raw)) / 1e6;
 const amount = (n: number) => (n >= 100 ? n.toFixed(0) : n >= 1 ? n.toFixed(2) : n.toPrecision(2));
 
+/** DUST a NIGHT generates in a day at Midnight's rate (5 DUST per NIGHT, filled in 604,815 s). */
+export const DUST_PER_NIGHT_DAY = (5 * 86_400) / 604_815;
+
+/**
+ * Whether fees outrun generation: DUST spent in a day against what the
+ * wallet's NIGHT generates in a day, and the NIGHT that would cover the
+ * spending (with `margin`, default 1.5).
+ */
+export const dustBudget = (night: number, spentPerDay: number, margin = 1.5) => {
+  const generatedPerDay = night * DUST_PER_NIGHT_DAY;
+  return {
+    generatedPerDay,
+    spentPerDay,
+    outrunning: spentPerDay > generatedPerDay,
+    nightNeeded: (spentPerDay * margin) / DUST_PER_NIGHT_DAY,
+  };
+};
+
 const journal = (unit: string) => `journalctl -u ${unit} --since "30 min ago" --no-pager | tail -40`;
 
 /** Restarts of `unit` within the last hour, from the samples plus the count now. */
@@ -243,6 +261,22 @@ export const evaluate = (inp: Inputs, state: MonitorState, cfg: MonitorConfig = 
           title: `${name}'s wallet is low on DUST: ${amount(dust)} left`,
           detail: `Alert threshold ${cfg.minDust} DUST. It holds ${amount(night)} tNIGHT, which generates more DUST over time; if fees keep outrunning it, send the wallet more tNIGHT from the faucet.`,
         });
+      }
+      // Spending faster than the wallet's NIGHT generates: it will run dry, sooner or later.
+      const f = st.fees;
+      if (f && f.last_24h_txs >= 5 && night > 0) {
+        const b = dustBudget(night, f.last_24h_dust);
+        if (b.outrunning) {
+          const daysLeft = dust / (b.spentPerDay - b.generatedPerDay);
+          out.push({
+            key: `dustrate:${s.service}`,
+            kind: 'problem',
+            title: `${name} spends DUST faster than its tNIGHT makes it: ${amount(b.spentPerDay)} a day against ${amount(b.generatedPerDay)}`,
+            detail:
+              `At this rate its ${amount(dust)} DUST lasts about ${daysLeft < 1 ? mins(daysLeft * 24 * 60) : `${amount(daysLeft)} days`}. ` +
+              `It holds ${amount(night)} tNIGHT; about ${Math.ceil(b.nightNeeded)} would cover this spending with room to spare. Send it the difference (from the treasury).`,
+          });
+        }
       }
     }
   }
@@ -447,6 +481,19 @@ export const digest = (inp: Inputs, state: MonitorState, cfg: MonitorConfig = DE
     for (const s of wallets) {
       const w = s.status!.wallet!;
       lines.push(`  ${s.service}: ${amount(dustOf(w.dust))} DUST, ${amount(nightOf(w.night))} tNIGHT${w.synced ? '' : ' (not synced)'}`);
+      const f = s.status!.fees;
+      if (f && f.last_24h_txs > 0) {
+        const b = dustBudget(nightOf(w.night), f.last_24h_dust);
+        lines.push(
+          `    fees in 24 h: ${amount(f.last_24h_dust)} DUST over ${f.last_24h_txs} transaction(s); its tNIGHT makes ${amount(b.generatedPerDay)} a day` +
+            `${b.outrunning ? ' (not enough)' : ''}; ${Math.ceil(b.nightNeeded)} tNIGHT would cover it`,
+        );
+        const each = Object.entries(f.circuits)
+          .sort((a, b2) => b2[1].count - a[1].count)
+          .map(([c, v]) => `${c} ${v.avg_dust.toPrecision(2)}`)
+          .join(', ');
+        if (each) lines.push(`    typical fee per transaction (DUST): ${each}`);
+      }
     }
   }
   if (inp.feed) {
