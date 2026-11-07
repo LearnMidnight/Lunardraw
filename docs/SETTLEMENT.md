@@ -113,11 +113,11 @@ Jack's decision, from the lottery comparison (`claude/lottery-comparison-nov-202
 - **Resetting.** A jackpot won, or given out to a lower division, sets the count back to 0. A must-be-won draw that found no winner anywhere keeps the count, so the next one must be won too.
 - **Records.** `Draw.mustBeWon` records it when the draw is finalised.
 - **Players know before they buy.** The feed's open draw says `must_be_won: "yes"`, or `"possible"` while the draw before it is still settling (its own result decides). Status and the agent kit say so too. With daily draws, an unwon jackpot is given out every 6th day.
-- **Cost.** No new circuit: `finaliseDraw` is 4,809 rows (k=13).
+- **Cost.** No new circuit: `finaliseDraw` is 12,171 rows (k=14) as deployed.
 
 ### Tickets per purchase: 7 (7 Nov 2026)
 
-`maxTickets()` went from 13 to 7 (`gen-batch.py 14 7`), so `buyTickets` is in the k=16 class (63,394 rows; it was k=17 at 117,475). That's about half the proving key and proving time for every purchase. The largest QuickPick package (Maxi, 50 games) is 5 tickets, so every package is still one transaction. Only 8 or more Systems, Picks or Sweeps at once take a second. The margin to k=16's 65,536 rows is about 2,100 rows, so a later change to `buyTickets` that crosses it goes back to k=17.
+`maxTickets()` went from 13 to 7 (`gen-batch.py 14 7`), so `buyTickets` is in the k=16 class: **64,808 rows** as compiled with keys for the deployment `8d9f297f…` (it was k=17). That's about half the proving key and proving time for every purchase. The largest QuickPick package (Maxi, 50 games) is 5 tickets, so every package is still one transaction. Only 8 or more Systems, Picks or Sweeps at once take a second. **The margin to k=16's 65,536 rows is only 728 rows**, so almost any change to `buyTickets` goes back to k=17; measure with `compact compile` (the key build), not `zkir mock-compile`, which counted about 1,400 fewer.
 
 ### The final draw: the jackpot must be won (7 Nov 2026)
 
@@ -129,7 +129,7 @@ A contract can't send its rollover anywhere, so a game that just stopped would l
 - **Nothing is kept back.** What no division takes (an unwon Division 9 with whatever fell into it, rounding remainders, or everything if nobody won anything) is shared equally by every game sold: `Draw.finalShare` per game, paid to each ticket's refund address by `refundTicket` (which pays a void draw's refunds too). The last fraction of a STAR per game goes with the operator fee. The contract then holds no rollover, `ended` is set, and no draw opens again.
 - **Edge cases.** A final draw that sold nothing keeps the rollover, and another final draw may follow. A void final draw is refunded at the ticket price as usual, and another final draw may follow. While a final draw runs, nothing else opens.
 - **Why the notice period.** With few games in the final draw, its players share a large rollover. A week's notice on the site, the feed and in the kit lets anyone take part, so the operator can't quietly take it.
-- **No new circuit.** It changes `requestDraw` (the flag), `finaliseDraw` (the rolldown and the share) and `refundTicket` (paying shares). `settleBatch` and `buyTickets` are unchanged in what they do and slightly smaller (116,716 and 117,475 rows); `finaliseDraw` is 4,509 rows (k=13).
+- **No new circuit.** It changes `requestDraw` (the flag), `finaliseDraw` (the rolldown and the share) and `refundTicket` (paying shares). `settleBatch` and `buyTickets` are unchanged in what they do.
 - **The keeper.** `./lunardraw starfall last-draw` now makes the keeper's next draw the final draw (at the reveal of the draw on sale, or directly if nothing is selling and there's a rollover to give out). It pays every share like a refund, then reports "wound down". `status` says so too.
 
 A redeploy still starts the next game's jackpot at zero. Redeploying rarely, and testing on Preprod first, keeps that rare. A treasury top-up of a new game's first jackpot needs a circuit slot (`seedJackpot`). Moving a rollover to a successor contract, possible with ledger 9's contract-to-contract calls, would mean trusting whoever names the successor, so it isn't done.
@@ -228,6 +228,8 @@ The settler recovers `S = k·R`. Both directions are pure circuits in the contra
 
 ## Circuit sizes (Compact 0.31.1)
 
+**As deployed (`8d9f297f…`, 7 Nov 2026, `compact compile` with keys):** acceptOracleKey k=10 (916 rows), buyTickets k=16 (64,808), changeOrganiser k=13 (4,790), computeNumbers k=19 (323,759), finaliseDraw k=14 (12,171), fulfilDraw k=13 (5,819), payEntitlement k=16 (65,382: 154 rows to spare), proposeOracleKey k=13 (4,481), refundTicket k=9 (496), requestDraw k=16 (62,595), settleBatch k=17 (125,233: about 5,800 to spare), voidDraw k=9 (255). The figures below are older measurements, some from `zkir mock-compile`, which counts fewer rows than the key build.
+
 Mock-compiled with the zkir tool (27 Oct 2026, after the changes below; this tool version counts rows a little differently from the one used before). CI's `starfall-e2e` job builds the real keys and reports their sizes.
 
 | Circuit | k | Rows |
@@ -277,7 +279,7 @@ For comparison, 2 lighter tickets are k=14 (13,702), 10 are k=16 and 20 are k=17
 
 | Circuit | One game a ticket | 11 lines a ticket |
 |---|---|---|
-| `buyTickets` | 18 tickets, k=17, 113,126 | **7 tickets, k=16, 63,421** (13 tickets were k=17, 117,629) |
+| `buyTickets` | 18 tickets, k=17, 113,126 | **7 tickets, k=16, 64,808** (13 tickets were k=17) |
 | `settleBatch` | 22 tickets, k=17, 110,154 | **14 tickets, k=17, 116,826** |
 | `payEntitlement` | | k=16, 50,285 |
 | `refundTicket` | | k=10, 222 |
