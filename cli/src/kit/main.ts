@@ -438,7 +438,8 @@ export const kit = async (argv: string[]): Promise<number> => {
       const { config } = setup();
       const { loadAgentState } = await import('../starfall-agent.js');
       const { readOverview, ticketsReport } = await import('./player.js');
-      const state = loadAgentState(kitPaths(kitHome(), config.network).state);
+      const { readStarfallRecord } = await import('../starfall.js');
+      const state = loadAgentState(kitPaths(kitHome(), config.network).state, readStarfallRecord(config.network).contractAddress);
       const view = state.purchases.length ? (await readOverview(config)).view : undefined;
       const report = ticketsReport(state, view, Date.now());
       if (values.json) return json(report), 0;

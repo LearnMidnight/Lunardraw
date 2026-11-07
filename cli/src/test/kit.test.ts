@@ -9,7 +9,7 @@ import { DEFAULT_CONFIG, ensureWallet, findDeployments, limitsWhere, loadConfig,
 import { checkDeployment, deploymentWatch, outdatedText, recordUrl } from '../kit/freshness.js';
 import { BUY_SCHEMA, buyArgs, handle, type Tool } from '../kit/mcp.js';
 import { checkLimits, overviewOf, requireLocalProvingKey, ticketsReport } from '../kit/player.js';
-import { type AgentState, planPurchase } from '../starfall-agent.js';
+import { type AgentState, loadAgentState, planPurchase, saveAgentState } from '../starfall-agent.js';
 import { buyEntries } from '../starfall-commands.js';
 
 const { DrawStatus } = Starfall;
@@ -65,6 +65,21 @@ describe('the agent kit', () => {
   it('finds the published deployment record next to the kit', () => {
     expect(findDeployments('preprod')).toMatch(/deployments$/);
     expect(() => findDeployments('preview', tmpdir())).toThrow(/wasn't found/);
+  });
+
+  it('keeps a state per deployment: one from another (or an unnamed earlier one) is moved aside', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kit-state-'));
+    const path = join(dir, 'state.json');
+    writeFileSync(path, JSON.stringify({ purchases: [purchase(3, 6, 10)], reported: ['2'] }));
+    // An earlier state without a contract: aside, and a fresh one for the new deployment.
+    expect(loadAgentState(path, '8d9f297f')).toEqual({ purchases: [], reported: [], contract: '8d9f297f' });
+    expect(JSON.parse(readFileSync(join(dir, 'state.json.earlier.json'), 'utf8')).purchases).toHaveLength(1);
+    saveAgentState(path, { purchases: [purchase(1, 2, 5)], reported: [], contract: '8d9f297f' });
+    expect(loadAgentState(path, '8D9F297F').purchases).toHaveLength(1);
+    expect(loadAgentState(path).purchases).toHaveLength(1);
+    // Another deployment's: aside too.
+    expect(loadAgentState(path, 'aaaa1111').purchases).toHaveLength(0);
+    expect(JSON.parse(readFileSync(join(dir, 'state.json.8d9f297f.json'), 'utf8')).contract).toBe('8d9f297f');
   });
 
   it("keeps purchases inside the owner's limits, per draw and per 24 hours", () => {

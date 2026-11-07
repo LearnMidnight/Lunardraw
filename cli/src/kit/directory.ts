@@ -7,6 +7,7 @@ import { Starfall } from '@lunardraw/contract';
 import type { StarfallView } from '@lunardraw/keeper';
 import { agentReport, type DrawOutcome, signedListing, type Via, VIAS, walletSigner } from '../listing.js';
 import { loadAgentState } from '../starfall-agent.js';
+import { readStarfallRecord } from '../starfall.js';
 import { DEFAULT_REGISTRY, type KitConfig, kitPaths } from './home.js';
 
 const { DrawStatus } = Starfall;
@@ -39,7 +40,7 @@ export const sendListing = async (
 ): Promise<string> => {
   const listing = o.listing ?? config.listing;
   if (!listing) throw new Error('this agent isn\'t listed: run `lunardraw-agent list --name <name>` first');
-  const state = loadAgentState(kitPaths(o.home, config.network).state);
+  const state = loadAgentState(kitPaths(o.home, config.network).state, readStarfallRecord(config.network).contractAddress);
   const report = agentReport(state, o.view ? outcomesOf(o.view) : [], Date.now());
   const signer = await walletSigner(seed, config.network);
   const body = signedListing(signer, { network: config.network, action, name: listing.name, style: listing.style, via: viaOf(listing.via), ...report });

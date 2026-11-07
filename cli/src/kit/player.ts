@@ -227,7 +227,7 @@ export const withPlayer = async <T>(config: KitConfig, seed: string, fn: (p: Pla
             if (!selling) throw new Error('no draw is on sale right now (or sales close within 3 minutes): try again when the next one opens');
             const games = entries.reduce((a, e) => a + Starfall.gamesOf(e), 0);
             const cost = view.ticketPrice * BigInt(games);
-            const state = loadAgentState(statePath);
+            const state = loadAgentState(statePath, record.contractAddress);
             // the limits as they are now: the owner may have changed them since the wallet opened
             const current = (() => {
               try {
@@ -264,7 +264,7 @@ export const withPlayer = async <T>(config: KitConfig, seed: string, fn: (p: Pla
             const done = entriesBought(tickets, bought);
             const doneGames = done.reduce((a, e) => a + Starfall.gamesOf(e), 0);
             if (bought > 0) {
-              const fresh = loadAgentState(statePath); // re-read: another command may have written it meanwhile
+              const fresh = loadAgentState(statePath, record.contractAddress); // re-read: another command may have written it meanwhile
               fresh.purchases.push({ draw: selling.id.toString(), at: new Date().toISOString(), entries: done, games: doneGames, cost: (view.ticketPrice * BigInt(doneGames)).toString(), txs });
               saveAgentState(statePath, fresh);
             }

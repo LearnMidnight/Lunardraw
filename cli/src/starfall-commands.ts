@@ -800,7 +800,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
         try {
           const providers = buyerProviders(session, wallet, prover);
           const joined = await joinStarfall(providers, record.contractAddress, {});
-          const state = loadAgentState(statePath);
+          const state = loadAgentState(statePath, record.contractAddress);
           const mine = walletBytes(wallet);
           const log = (msg: string) => session.logger.info(`[${name}] ${msg}`);
           log(`playing Starfall on ${network} in the ${style} style from ${walletAddress(wallet)}; ${state.purchases.length} draw(s) played so far; state in ${statePath}`);
