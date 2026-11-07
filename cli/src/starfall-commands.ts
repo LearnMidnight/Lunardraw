@@ -110,7 +110,7 @@ restart never buys twice. Styles: quickpick (--games random games), lucky (the s
 --moonball every draw), moonhit (7 random numbers with every Moonball), system (a System 8), mix
 (a random style each draw, mostly small QuickPicks). --budget caps one draw's spend (default 60).
 
-Defaults are a weekly Starfall: a game costs 1.2 tNIGHT (1 to the prize pool, 0.2 to the operator),
+Defaults are a weekly Starfall: a game costs 1.3 tNIGHT (1 to the prize pool, 0.3 to the operator),
 draws close on Thursdays at 20:00 Brisbane, sales of 1 to 14 days, 1 hour to reveal, 2 hours for
 the oracle, 2 days to settle once the numbers are in. --every <seconds> runs draws on a fixed period
 instead (for test networks).
@@ -124,7 +124,7 @@ The settlement key (keygen settlement) decrypts every ticket so the keeper can s
 keep its file private, like the organiser's. Its public half goes into the contract at deploy.
 --backup takes the backup organiser's secret file, or its Starfall commitment (64 hex characters, from
 \`./lunardraw starfall commitment --organiser <file>\` run where the backup's secret is), so its secret can
-stay offline. Starfall's commitments differ from v0's: a v0 deployment record's backupCommitment won't do. --operator is where the 0.2 tNIGHT fee per game goes (default:
+stay offline. Starfall's commitments differ from v0's: a v0 deployment record's backupCommitment won't do. --operator is where the 0.3 tNIGHT fee per game goes (default:
 the deploying wallet).
 The keeper works out each draw's seed from the organiser secret, so there is no seeds file.
 --status <file> makes the keeper or the oracle rewrite a small health file there every minute (its
