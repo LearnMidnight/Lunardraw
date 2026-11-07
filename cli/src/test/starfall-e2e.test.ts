@@ -202,6 +202,9 @@ describe.runIf(enabled)('Starfall on a local Midnight network', () => {
     // transaction, the most a purchase holds.
     const room = Number(Starfall.pureCircuits.maxTickets()) - games.length;
     games.push(...Starfall.ticketsFor(1n, Array.from({ length: room * Starfall.GAMES_PER_TICKET }, () => quickPick()), mine));
+    const ticketCount = BigInt(Starfall.pureCircuits.maxTickets());
+    const gameCount = BigInt(games.reduce((a, t) => a + Starfall.ticketGames(t), 0));
+    expect(gameCount).toBe(70n + BigInt(room * Starfall.GAMES_PER_TICKET));
     const buyer = await joinStarfall(buyerProviders, address, {});
     const started = Date.now();
     await proofServer.freshen();
@@ -211,8 +214,8 @@ describe.runIf(enabled)('Starfall on a local Midnight network', () => {
       throw new Error(`purchase rejected: ${explain(err)}`);
     });
     expect(txs).toBe(1);
-    expect((await drawOf(1n))!.tickets).toBe(13n);
-    expect((await drawOf(1n))!.games).toBe(166n);
+    expect((await drawOf(1n))!.tickets).toBe(ticketCount);
+    expect((await drawOf(1n))!.games).toBe(gameCount);
 
     // Sales close: reveal (and open draw 2), the oracle answers, the numbers come out.
     while (Date.now() / 1000 < Number(first.salesClose) + 25) await sleep(5_000);
@@ -231,8 +234,8 @@ describe.runIf(enabled)('Starfall on a local Midnight network', () => {
     // Settle the one batch, finalise, pay.
     await until('draw 1 is settled', (v) => v.draws.find((d) => d.id === 1n)!.status === DrawStatus.settled);
     const settled = (await drawOf(1n))!;
-    expect(settled.settled).toBe(13n);
-    expect(settled.fee).toBe(166n * params.feePerGame);
+    expect(settled.settled).toBe(ticketCount);
+    expect(settled.fee).toBe(gameCount * params.feePerGame);
     expect(settled.winners[7]).toBeGreaterThanOrEqual(1n);
     // The Pick 6 holds the 6 drawn numbers it was given: one of its games has all 7, with the Moonball.
     expect(settled.winners[0]).toBeGreaterThanOrEqual(1n);
