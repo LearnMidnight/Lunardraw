@@ -1,0 +1,47 @@
+name: LunaSpin
+
+on:
+  push:
+    branches: [main]
+    paths: ['lunaspin/**', '.github/workflows/lunaspin.yml']
+  pull_request:
+    paths: ['lunaspin/**', '.github/workflows/lunaspin.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: lunaspin
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      - name: JS rules match @nightcast/sdk and the compiled contract
+        run: npm test
+
+      - name: Test values are up to date
+        run: |
+          npm run vectors
+          git diff --exit-code test/vectors.json || { echo "::error title=LunaSpin::test/vectors.json is out of date: run npm run vectors"; exit 1; }
+
+      - name: PHP twin gives the same answers
+        run: |
+          php --version | head -1
+          php test/php-vectors.php
+
+      - name: Browser bundle is up to date
+        run: |
+          npm run build
+          git diff --exit-code dist/lunaspin-core.js || { echo "::error title=LunaSpin::dist/lunaspin-core.js is out of date: run npm run build"; exit 1; }

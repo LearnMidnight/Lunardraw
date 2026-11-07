@@ -1,0 +1,29 @@
+{
+  "name": "@lunardraw/lunaspin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "LunaSpin core rules: list and rules fingerprints, the Nightcast seed, private-list entry hashes and picking, in JS (browser and Node) with a PHP twin.",
+  "license": "MIT",
+  "type": "module",
+  "main": "src/core.js",
+  "exports": {
+    ".": "./src/core.js"
+  },
+  "scripts": {
+    "test": "node --test test/core.test.mjs",
+    "vectors": "node test/make-vectors.mjs",
+    "build": "esbuild src/browser.js --bundle --minify --format=iife --global-name=LunaSpinCore --target=es2020 --outfile=dist/lunaspin-core.js --legal-comments=eof",
+    "test:php": "php test/php-vectors.php"
+  },
+  "dependencies": {
+    "@noble/hashes": "2.4.0"
+  },
+  "devDependencies": {
+    "@nightcast/contract": "0.1.0",
+    "@nightcast/sdk": "0.1.0",
+    "esbuild": "0.28.2"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
