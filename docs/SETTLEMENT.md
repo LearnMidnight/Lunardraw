@@ -104,6 +104,21 @@ The fee is a constructor parameter. A flat fee per game (decided 22 Oct 2026, re
 
 **Site note:** the theme's `lunardraw_settle()` mirrors `finaliseDraw`; it must also add `pool − Σ floor(pool × bp / 10000)` to the carry (the rounding fix above).
 
+### The final draw: the jackpot must be won (7 Nov 2026)
+
+A contract can't send its rollover anywhere, so a game that just stopped would leave its unwon jackpot locked in it for good (the first Preprod deployment, `f868fc99…`, kept 17,729.5 tNIGHT that way). Starfall's last draw is therefore a **final draw** (Jack's decision, 7 Nov 2026):
+
+- **Normal draws are unchanged:** an unwon jackpot rolls over, so it grows for the life of the game.
+- **The final draw is marked before it sells.** `NextDraw.final` sets `Draw.final` when the draw opens, so the draw on sale is never changed mid-sale. It must sell for at least `finalSales` (sealed at deploy; 7 days by default), so everyone can see it coming and buy in. The feed (`final: true`), the site and the agent kit say so.
+- **Its jackpot must be won.** In `finaliseDraw` an unwon Division 1 (its share plus all the rollover) falls to the next division with a winner, as unwon Divisions 2–8 already do.
+- **Nothing is kept back.** What no division takes (an unwon Division 9 with whatever fell into it, rounding remainders, or everything if nobody won anything) is shared equally by every game sold: `Draw.finalShare` per game, paid to each ticket's refund address by `refundTicket` (which pays a void draw's refunds too). The last fraction of a STAR per game goes with the operator fee. The contract then holds no rollover, `ended` is set, and no draw opens again.
+- **Edge cases.** A final draw that sold nothing keeps the rollover, and another final draw may follow. A void final draw is refunded at the ticket price as usual, and another final draw may follow. While a final draw runs, nothing else opens.
+- **Why the notice period.** With few games in the final draw, its players share a large rollover. A week's notice on the site, the feed and in the kit lets anyone take part, so the operator can't quietly take it.
+- **No new circuit.** It changes `requestDraw` (the flag), `finaliseDraw` (the rolldown and the share) and `refundTicket` (paying shares). `settleBatch` and `buyTickets` are unchanged in what they do and slightly smaller (116,716 and 117,475 rows); `finaliseDraw` is 4,509 rows (k=13).
+- **The keeper.** `./lunardraw starfall last-draw` now makes the keeper's next draw the final draw (at the reveal of the draw on sale, or directly if nothing is selling and there's a rollover to give out). It pays every share like a refund, then reports "wound down". `status` says so too.
+
+A redeploy still starts the next game's jackpot at zero. Redeploying rarely, and testing on Preprod first, keeps that rare. A treasury top-up of a new game's first jackpot needs a circuit slot (`seedJackpot`). Moving a rollover to a successor contract, possible with ledger 9's contract-to-contract calls, would mean trusting whoever names the successor, so it isn't done.
+
 ## The oracle key and the organiser
 
 v0's security-review fixes (Lunardraw #15, #16; merged for v0 in #20) apply here unchanged:

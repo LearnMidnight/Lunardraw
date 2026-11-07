@@ -97,6 +97,15 @@ describe('the agent kit', () => {
     expect(overviewOf(view([{ salesClose: secs(NOW - 60_000) }]), 'preprod', 'f868', NOW / 1000).onSale).toBeNull();
   });
 
+  it('says when the draw on sale is the final draw, and when the game has ended', () => {
+    const o = overviewOf(view([{ id: 30n, final: true }]), 'preprod', 'f868', NOW / 1000);
+    expect(o.onSale?.final?.note).toMatch(/final draw of this game: its jackpot must be won/);
+    expect(o.ended).toBeUndefined();
+    expect(overviewOf(view([{ id: 12n }]), 'preprod', 'f868', NOW / 1000).onSale?.final).toBeUndefined();
+    const over = { ...view([{ id: 30n, status: DrawStatus.settled, final: true }]), ended: true } as StarfallView;
+    expect(overviewOf(over, 'preprod', 'f868', NOW / 1000)).toMatchObject({ onSale: null, ended: true });
+  });
+
   it("reports the agent's tickets with each draw's result", () => {
     const won: Starfall.PlainEntry = { numbers: [3, 5, 9, 14, 30, 31, 32], moonball: 7 }; // 4 + Moonball: Division 6
     const state: AgentState = { purchases: [purchase(11, 1.2, 70, [won]), purchase(10, 1.2, 130), purchase(12, 1.2, 5)], reported: [] };

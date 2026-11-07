@@ -84,6 +84,7 @@ export const STARFALL_USAGE = `usage: ./lunardraw starfall <command>
   commitment   --organiser <file>      (an organiser's Starfall commitment: public; for --backup)
   deploy       --network <${NETWORKS.join('|')}> --organiser <file> --backup <file> --oracle <file> --settlement <file> --wallet <file> [--accept]
                [--operator <address>] [--price <STAR>] [--fee <STAR>] [--min-sales <s>] [--max-sales <s>] [--reveal <s>] [--draw <s>] [--settle <s>] [--max-tickets <n>]
+               [--final-sales <s>]
   accept-key   --network <network> --oracle <file> --wallet <file>
   keeper       --network <network> --organiser <file> --settlement <file> --wallet <file> [--daily | --every <seconds>] [--feed <file>]
                [--proof-server-port <port>] [--prove-lead <secs>] [--restart-after <min>] [--stall-after <min>] [--dust-wait <min>]
@@ -97,7 +98,7 @@ export const STARFALL_USAGE = `usage: ./lunardraw starfall <command>
                [--games <n>] [--numbers "<7 numbers>" --moonball <1-20>] [--budget <tNIGHT a draw>] [--max-draws <n>]
                [--daily-limit <tNIGHT a day>] [--state <file>] [--proof-server-port <port> | --prover <url|hosted>] [--dust-wait <min>]
   status       --network <network>
-  last-draw    --network <network> [--undo]   (the keeper opens no more draws on this deployment: see below)
+  last-draw    --network <network> [--undo]   (the next draw is the final draw, then nothing more opens: see below)
   verify       --network <network>
   backfill-tx  --network <network> --feed <file>
                (the transaction ids of draws from before the keeper kept them, read back from the
@@ -113,14 +114,18 @@ restart never buys twice. Styles: quickpick (--games random games), lucky (the s
 Deploy defaults: a game costs 1.3 tNIGHT (1 to the prize pool, 0.3 to the operator), sales of
 6 hours to 14 days, 1 hour to reveal, 2 hours for the oracle, 1 day to settle once the numbers are
 in, at most 10,000 tickets a draw (--max-tickets: keep it below what can be settled within --settle,
-about 14 tickets a minute). The keeper closes draws on Thursdays at 20:00 Brisbane; --daily closes
+about 14 tickets a minute), and a final draw sells for at least a week (--final-sales). The keeper closes draws on Thursdays at 20:00 Brisbane; --daily closes
 them every day at 20:00 Brisbane instead (the same contract can switch between the two with a
 keeper restart), and --every <seconds> on a fixed period (for short test deployments).
 
 last-draw winds a deployment down before a new one replaces it: the running keeper (it checks every
-pass, no restart needed) reveals the draw on sale without opening another, then settles, pays and
-refunds as usual. \`status\` says when nothing is left ("wound down: safe to switch"); with no draw on
-sale, nobody (an old agent kit, say) can buy into it. --undo lets the keeper open draws again.
+pass, no restart needed) opens the next draw as the final draw, selling for at least --final-sales.
+The draw on sale finishes as usual. The final draw's jackpot must be won: an unwon one falls to the
+next prize division with a winner, and what no division takes is shared by every game in it (paid to
+each ticket's refund address), so no rollover is left in the contract. Nothing opens after it.
+\`status\` says when nothing is left ("wound down: safe to switch"); with no draw on sale, nobody (an
+old agent kit, say) can buy into it. --undo, before the final draw opens, lets the keeper carry on
+as normal; once it's open, it runs to the end.
 
 The settlement key (keygen settlement) decrypts every ticket so the keeper can settle the draw:
 keep its file private, like the organiser's. Its public half goes into the contract at deploy.
@@ -284,13 +289,18 @@ const describeView = (view: StarfallView, nowSecs: number): string => {
       const unpaid = view.entitlements.filter((e) => e.drawId === d.id && !e.paid).length;
       const won = d.winners.reduce((a, b) => a + b, 0n);
       extra = `  ${won} winning game(s)${unpaid > 0 ? `, ${unpaid} not paid yet` : ''}; fee ${tn(d.fee)}`;
+      if (d.finalShare > 0n) {
+        extra += `; ${tn(d.finalShare)} a game to every game${d.unrefunded.length > 0 ? ` (${d.unrefunded.length} ticket(s) still to pay)` : ' (all paid)'}`;
+      }
     } else if (d.status === Starfall.DrawStatus.voided) {
       extra = d.unrefunded.length > 0 ? `  ${d.unrefunded.length} ticket(s) still to refund` : '  refunded';
     }
     const numbers = d.status === Starfall.DrawStatus.drawn || d.status === Starfall.DrawStatus.settled ? `  ${d.numbers.join(' ')} + ${d.moonball}` : '';
+    if (d.final) stage = `${stage} (final draw)`;
     lines.push(`draw ${d.id}  ${stage}  sales close ${iso(d.salesClose)}  ${d.games} game(s) in ${d.tickets} ticket(s)${numbers}${extra}`);
   }
-  lines.push(`Rollover into the next draw: ${tn(view.carry)}`);
+  if (view.ended) lines.push('The final draw has given out the rollover: the game has ended, and no draw will open again.');
+  else lines.push(`Rollover into the next draw: ${tn(view.carry)}`);
   return lines.join('\n');
 };
 
@@ -327,7 +337,13 @@ export const lastDrawMarker = (contractAddress: string): string =>
 export const windDownStatus = (view: StarfallView): string => {
   if (woundDown(view)) return 'Wound down: no draw is open and nothing is left to settle, pay or refund. Safe to switch to a new deployment.';
   const busy = view.draws.filter((d) => d.status !== Starfall.DrawStatus.settled && d.status !== Starfall.DrawStatus.voided).map((d) => d.id);
-  return `Winding down: no new draws will open. Still in progress: ${busy.length ? `draw ${busy.join(', ')}` : 'payments or refunds'}.`;
+  const final = view.draws.find((d) => d.final && d.status !== Starfall.DrawStatus.voided && !(d.status === Starfall.DrawStatus.settled && d.games === 0n));
+  const lead = view.ended
+    ? 'Winding down: the final draw has given out the rollover.'
+    : final
+      ? `Winding down: draw ${final.id} is the final draw (its jackpot must be won); nothing opens after it.`
+      : 'Winding down: the next draw to open is the final draw (its jackpot must be won).';
+  return `${lead} Still in progress: ${busy.length ? `draw ${busy.join(', ')}` : 'payments or refunds'}.`;
 };
 
 /**
@@ -426,6 +442,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
       draw: { type: 'string' },
       settle: { type: 'string' },
       'max-tickets': { type: 'string' },
+      'final-sales': { type: 'string' },
       daily: { type: 'boolean', default: false },
       games: { type: 'string' },
       package: { type: 'string' },
@@ -498,6 +515,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
             drawWindow: num(values.draw, STARFALL_WEEKLY_DEFAULTS.drawWindow),
             settleWindow: num(values.settle, STARFALL_WEEKLY_DEFAULTS.settleWindow),
             maxTicketsPerDraw: num(values['max-tickets'], STARFALL_WEEKLY_DEFAULTS.maxTicketsPerDraw),
+            finalSales: num(values['final-sales'], STARFALL_WEEKLY_DEFAULTS.finalSales),
           };
           const providers = starfallProviders(session, wallet);
           session.logger.info('Deploying Starfall, locked from the start (nobody can ever change its code)...');
@@ -604,7 +622,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
             seeds,
             settlementSecret: settlement.sk,
             schedule,
-            openNew: () => !existsSync(lastDraw),
+            finalDraw: () => existsSync(lastDraw),
             logger: session.logger,
             onView,
             // each step's transaction id, for the feed's tx (the site's verification links to them)
@@ -921,16 +939,19 @@ export const starfall = async (argv: string[]): Promise<number> => {
       const marker = lastDrawMarker(record.contractAddress);
       if (values.undo) {
         rmSync(marker, { force: true });
-        process.stdout.write(`The keeper opens draws on ${record.contractAddress} again (within a minute).\n`);
+        process.stdout.write(
+          `The keeper opens normal draws on ${record.contractAddress} again (within a minute). A final draw already open runs to the end.\n`,
+        );
         return 0;
       }
       mkdirSync(join(homedir(), 'lunardraw-state'), { recursive: true });
       writeFileSync(marker, `last-draw set ${new Date().toISOString()}\n`);
       process.stdout.write(
-        `Winding down ${record.contractAddress} on ${network}: the keeper opens no more draws (it checks every minute; its log says\n` +
-          `"winding down"). The draw on sale closes, is drawn, settled and paid as usual. Check with\n` +
+        `Winding down ${record.contractAddress} on ${network}: the keeper's next draw is the final draw (it checks every minute;\n` +
+          `its log says "winding down"). The draw on sale finishes as usual. The final draw sells for at least its notice period and\n` +
+          `its jackpot must be won, so the rollover goes to its players; nothing opens after it. Check with\n` +
           `  ./lunardraw starfall status --network ${network}\n` +
-          `until it says "Wound down ... Safe to switch". To undo: ./lunardraw starfall last-draw --network ${network} --undo\n` +
+          `until it says "Wound down ... Safe to switch". To undo (before the final draw opens): ./lunardraw starfall last-draw --network ${network} --undo\n` +
           `(marker: ${marker})\n`,
       );
       return 0;

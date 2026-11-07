@@ -20,8 +20,12 @@ export type StarfallFeedDraw = Omit<FeedDraw, 'status' | 'claim_deadline'> & {
   batches_done?: number;
   /** After this the draw voids and refunds (numbers, then settlement). */
   settle_deadline?: string;
-  /** Void draws: games refunded so far. */
+  /** Void draws: games refunded so far. A final draw: games whose share is paid so far. */
   refunded?: number;
+  /** The final draw: its jackpot must be won (an unwon one falls to the next division with a winner). */
+  final?: true;
+  /** A settled final draw: what each game sold gets of the money no division took (paid to its refund address). */
+  final_share_star?: number;
   /** Tickets sold: entries, each a standard game, a System or a Pick (games_sold counts their games). */
   tickets?: number;
   /**
@@ -50,9 +54,13 @@ export type StarfallFeed = {
       fee_star: number;
       /** Most tickets a draw may sell (the contract's maxTicketsPerDraw); absent for contracts without one. */
       max_tickets_per_draw?: number;
+      /** Shortest sales period of a final draw, in seconds (the contract's finalSales). */
+      final_sales_secs?: number;
+      /** The final draw has given everything out: no draw will open again. */
+      ended?: true;
       allocation_bp: number[];
       carry_star: number;
-      open?: { num: number; sales_close: string; reveal_deadline?: string; seed_commitment: string; games_sold: number; tickets: number };
+      open?: { num: number; sales_close: string; reveal_deadline?: string; seed_commitment: string; games_sold: number; tickets: number; final?: true };
       /** Recent purchases, newest first, as the keeper saw them (PurchaseLog): draw, games and tickets only. */
       purchases?: Purchase[];
       draws: StarfallFeedDraw[];
@@ -124,7 +132,12 @@ export const buildStarfallFeed = (
       out.prizes_star = d.prizes.map(star);
       out.carry_out_star = star(carryOut.get(d.id) ?? 0n);
     }
+    if (d.final) out.final = true;
     if (d.status === DrawStatus.voided) out.refunded = Number(d.refundedGames);
+    if (d.status === DrawStatus.settled && d.finalShare > 0n) {
+      out.final_share_star = star(d.finalShare);
+      out.refunded = Number(d.refundedGames);
+    }
     const t = opts.steps?.(d.id);
     if (t) {
       const at = (s: number | undefined) => (s === undefined ? undefined : iso(BigInt(s)));
@@ -150,6 +163,8 @@ export const buildStarfallFeed = (
         price_star: star(view.ticketPrice),
         fee_star: star(view.feePerGame),
         ...(view.maxTicketsPerDraw !== undefined ? { max_tickets_per_draw: Number(view.maxTicketsPerDraw) } : {}),
+        ...(view.finalSales !== undefined ? { final_sales_secs: Number(view.finalSales) } : {}),
+        ...(view.ended ? { ended: true as const } : {}),
         allocation_bp: [...Starfall.POWERBALL_SHARES_BP],
         carry_star: star(view.carry),
         open: selling
@@ -161,6 +176,7 @@ export const buildStarfallFeed = (
               seed_commitment: hex(selling.seedCommitment),
               games_sold: Number(selling.games),
               tickets: Number(selling.tickets),
+              ...(selling.final ? { final: true as const } : {}),
             }
           : undefined,
         ...(opts.purchases ? { purchases: opts.purchases } : {}),

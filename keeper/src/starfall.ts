@@ -8,6 +8,9 @@
  *             ──▶ finalise (prizes fixed, operator fee paid; draws in order)
  *   settled   ──▶ pay every winning ticket's entitlement
  *   a deadline missed ──▶ void the draw, then refund every ticket
+ *   told to wind down ──▶ the next draw opens as the final draw: its jackpot
+ *             must be won, and what no division takes is paid to every game
+ *             in it (refundTicket); then the game has ended
  *
  * Like v0's keeper it keeps no state of its own: seeds are worked out from the
  * organiser secret (DerivedSeeds), tickets are decrypted from the chain with
@@ -22,7 +25,7 @@
  */
 import { Starfall } from '@lunardraw/contract';
 import { type EngineTiming, type KeeperStatus, reasonOf, StepEngine, type TickReport } from './engine.js';
-import type { Schedule } from './schedule.js';
+import { OPENING_MARGIN_SECS, type Schedule } from './schedule.js';
 import type { DrawSeeds } from './seeds.js';
 
 const { DrawStatus } = Starfall;
@@ -64,7 +67,14 @@ export type StarfallDrawView = {
   carried: bigint;
   fee: bigint;
   prizes: bigint[];
-  /** For a void draw: the indexes of tickets not refunded yet, and the games refunded so far. */
+  /** The final draw: its jackpot must be won. */
+  final: boolean;
+  /** A finalised final draw's share per game of what no division took (0 otherwise). */
+  finalShare: bigint;
+  /**
+   * Tickets owed money back (a void draw's refunds, a final draw's shares):
+   * the indexes not paid yet, and the games paid so far.
+   */
   unrefunded: bigint[];
   refundedGames: bigint;
 };
@@ -85,6 +95,10 @@ export type StarfallView = {
   maxTicketsPerDraw: bigint;
   /** Rollover waiting for the next draw to be finalised, in STAR. */
   carry: bigint;
+  /** Shortest sales period of a final draw. */
+  finalSales: bigint;
+  /** A final draw has given everything out: no draw can open again. */
+  ended: boolean;
   oracleKeyReady: boolean;
   oracleKeyChange?: { key: { x: bigint; y: bigint }; at: bigint; approved: boolean };
   /** The key tickets are encrypted to. */
@@ -108,6 +122,8 @@ export const starfallViewOf = (l: Starfall.Ledger): StarfallView => ({
   settleWindow: l.settleWindow,
   maxTicketsPerDraw: l.maxTicketsPerDraw,
   carry: l.carry,
+  finalSales: l.finalSales,
+  ended: l.ended,
   oracleKeyReady: l.oracleKeyReady,
   oracleKeyChange: l.proposedOracleKey.is_some
     ? { key: { x: l.proposedOracleKey.value.x, y: l.proposedOracleKey.value.y }, at: l.oracleKeyChangeAt, approved: l.oracleKeyApproved }
@@ -118,7 +134,7 @@ export const starfallViewOf = (l: Starfall.Ledger): StarfallView => ({
     const p = l.progress.member(id) ? l.progress.lookup(id) : undefined;
     const unrefunded: bigint[] = [];
     let refundedGames = 0n;
-    if (d.status === DrawStatus.voided) {
+    if (d.status === DrawStatus.voided || (d.status === DrawStatus.settled && d.finalShare > 0n)) {
       for (let i = 0n; i < tickets; i++) {
         const key = ticketKeyOf(id, i);
         if (!l.tickets.member(key)) continue;
@@ -147,6 +163,8 @@ export const starfallViewOf = (l: Starfall.Ledger): StarfallView => ({
       carried: d.carried,
       fee: d.fee,
       prizes: [...d.prizes],
+      final: d.final,
+      finalShare: d.finalShare,
       unrefunded,
       refundedGames,
     };
@@ -170,7 +188,7 @@ export interface StarfallChain {
    * Organiser only. Each resolves once the transaction is on chain, with its
    * transaction id when the chain knows it (the site's feed links to it).
    */
-  openDraw(salesClose: bigint, seedCommitment: Uint8Array): Promise<string | void>;
+  openDraw(salesClose: bigint, seedCommitment: Uint8Array, final?: boolean): Promise<string | void>;
   requestDraw(n: bigint, seed: Uint8Array, next?: NextDraw): Promise<string | void>;
   /** Anyone. */
   computeNumbers(n: bigint): Promise<string | void>;
@@ -179,6 +197,7 @@ export interface StarfallChain {
   finaliseDraw(n: bigint): Promise<string | void>;
   payEntitlement(id: Uint8Array): Promise<void>;
   voidDraw(n: bigint): Promise<string | void>;
+  /** Anyone: a void draw's refund, or a final draw's share. */
   refundTicket(n: bigint, index: bigint): Promise<void>;
 }
 
@@ -202,8 +221,8 @@ export class StarfallSimulatorChain implements StarfallChain {
     return storedTicketsOf(this.sim.getLedger(), n);
   }
 
-  async openDraw(salesClose: bigint, seedCommitment: Uint8Array): Promise<string | void> {
-    this.sim.openDraw(salesClose, seedCommitment);
+  async openDraw(salesClose: bigint, seedCommitment: Uint8Array, final = false): Promise<string | void> {
+    this.sim.openDraw(salesClose, seedCommitment, this.sim.organiser, final);
   }
 
   async requestDraw(n: bigint, seed: Uint8Array, next?: NextDraw): Promise<string | void> {
@@ -273,12 +292,12 @@ export const decryptTickets = (stored: readonly StoredTicket[], n: bigint, secre
 // ------------------------------------------------------------------ plan
 
 /**
- * Whether a deployment has nothing left in progress: every draw settled or
- * void, every entitlement of a settled draw paid (one recorded before a void
- * never is) and every ticket of a void draw refunded. With no draw open,
- * nobody can buy into it either.
+ * Whether a deployment has nothing in progress: every draw settled or void,
+ * every entitlement of a settled draw paid (one recorded before a void never
+ * is), and every ticket owed money back (a void draw's refunds, a final
+ * draw's shares) paid. With no draw open, nobody can buy into it either.
  */
-export const woundDown = (view: StarfallView): boolean => {
+export const idle = (view: StarfallView): boolean => {
   const settled = new Set(view.draws.filter((d) => d.status === DrawStatus.settled).map((d) => d.id));
   return (
     view.draws.every((d) => (d.status === DrawStatus.settled || d.status === DrawStatus.voided) && d.unrefunded.length === 0) &&
@@ -286,21 +305,37 @@ export const woundDown = (view: StarfallView): boolean => {
   );
 };
 
+/**
+ * Whether a deployment is finished with and safe to replace: idle, and
+ * holding no rollover for a later draw (a final draw has given it out, or
+ * there was none).
+ */
+export const woundDown = (view: StarfallView): boolean => idle(view) && (view.ended || view.carry === 0n);
+
+/** The draw under way that is final (opened as final, not yet settled or void), if any. */
+const finalUnderway = (view: StarfallView): StarfallDrawView | undefined =>
+  view.draws.find((d) => d.final && d.status !== DrawStatus.settled && d.status !== DrawStatus.voided);
+
 export type StarfallStep =
-  | { kind: 'open' }
-  | { kind: 'reveal'; draw: bigint; openNext: boolean }
+  | { kind: 'open'; final: boolean }
+  | { kind: 'reveal'; draw: bigint; openNext: boolean; final: boolean }
   | { kind: 'compute'; draw: bigint }
   | { kind: 'settle'; draw: bigint; from: bigint; of: bigint }
   | { kind: 'finalise'; draw: bigint }
   | { kind: 'pay'; draw: bigint; id: Uint8Array }
   | { kind: 'void'; draw: bigint; reason: string }
-  | { kind: 'refund'; draw: bigint; index: bigint };
+  | { kind: 'refund'; draw: bigint; index: bigint; share?: boolean };
 
 export type StarfallPlanOptions = {
   /** Seconds to wait after a boundary before acting on it, so block time has passed it too. Default 30. */
   marginSecs: number;
-  /** Open a new draw when the last one closes. Turn off to wind down. */
+  /** Open a new draw when the last one closes. Off: open nothing (the final draw included). */
   openNew: boolean;
+  /**
+   * Wind down: the next draw opens as the final draw. Once it has given
+   * everything out (or if there's no rollover to give), nothing more opens.
+   */
+  final?: boolean;
   /** This keeper holds the organiser secret (it may open and reveal). */
   organise: boolean;
   /** This keeper holds the settlement secret (it may settle). */
@@ -317,15 +352,19 @@ export const starfallSteps = (view: StarfallView, now: number, opts: StarfallPla
   const byId = new Map(view.draws.map((d) => [d.id, d] as const));
   const steps: StarfallStep[] = [];
   let opensNext = false;
+  const final = opts.final ?? false;
+  // Nothing opens once the game has ended or while a final draw runs. Winding
+  // down with no rollover left, nothing needs a final draw: nothing opens.
+  const canOpen = opts.openNew && !view.ended && finalUnderway(view) === undefined;
 
   for (const d of view.draws) {
     switch (d.status) {
       case DrawStatus.open:
         if (past(d.revealDeadline)) steps.push({ kind: 'void', draw: d.id, reason: 'its seed was not revealed in time' });
         else if (opts.organise && past(d.salesClose) && t < d.revealDeadline) {
-          const openNext = opts.openNew && d.id === view.lastDraw;
+          const openNext = canOpen && !d.final && d.id === view.lastDraw;
           opensNext ||= openNext;
-          steps.push({ kind: 'reveal', draw: d.id, openNext });
+          steps.push({ kind: 'reveal', draw: d.id, openNext, final: openNext && final });
         }
         break;
       case DrawStatus.requested:
@@ -348,6 +387,7 @@ export const starfallSteps = (view: StarfallView, now: number, opts: StarfallPla
         break;
       case DrawStatus.settled:
         for (const e of view.entitlements) if (e.drawId === d.id && !e.paid) steps.push({ kind: 'pay', draw: d.id, id: e.id });
+        for (const index of d.unrefunded) steps.push({ kind: 'refund', draw: d.id, index, share: true });
         break;
       case DrawStatus.voided:
         for (const index of d.unrefunded) steps.push({ kind: 'refund', draw: d.id, index });
@@ -364,8 +404,15 @@ export const starfallSteps = (view: StarfallView, now: number, opts: StarfallPla
   // than a pass of refunds later.
   const last = byId.get(view.lastDraw);
   const lastMissedReveal = last !== undefined && last.status === DrawStatus.open && past(last.revealDeadline);
-  if (opts.organise && opts.openNew && !opensNext && (view.lastDraw === 0n || (last !== undefined && last.status !== DrawStatus.open) || lastMissedReveal)) {
-    steps.push({ kind: 'open' });
+  // Winding down, a final draw opens only once the rollover is known and isn't
+  // zero (every draw finished, so it's final); one already announced by a
+  // reveal (above) opens regardless.
+  const needsFinal = !final || (view.draws.every((d) => finished(d) || (d.id === view.lastDraw && lastMissedReveal)) && view.carry > 0n);
+  if (
+    opts.organise && canOpen && !opensNext && needsFinal &&
+    (view.lastDraw === 0n || (last !== undefined && last.status !== DrawStatus.open) || lastMissedReveal)
+  ) {
+    steps.push({ kind: 'open', final });
   }
   // Most urgent first: reveals have the shortest deadline and only the
   // organiser can send them; voids come before opening (a missed reveal's void
@@ -396,9 +443,9 @@ export const starfallStepKey = (s: StarfallStep, lastDraw: bigint): string => {
 export const describeStarfallStep = (s: StarfallStep, batchSize = 25n): string => {
   switch (s.kind) {
     case 'open':
-      return 'open a new draw';
+      return s.final ? 'open the final draw' : 'open a new draw';
     case 'reveal':
-      return `reveal draw ${s.draw}'s seed${s.openNext ? ' and open the next draw' : ''}`;
+      return `reveal draw ${s.draw}'s seed${s.openNext ? (s.final ? ' and open the final draw' : ' and open the next draw') : ''}`;
     case 'compute':
       return `compute draw ${s.draw}'s numbers`;
     case 'settle': {
@@ -412,7 +459,7 @@ export const describeStarfallStep = (s: StarfallStep, batchSize = 25n): string =
     case 'void':
       return `void draw ${s.draw}: ${s.reason}`;
     case 'refund':
-      return `refund ticket ${s.index} of void draw ${s.draw}`;
+      return s.share ? `pay ticket ${s.index}'s share of final draw ${s.draw}` : `refund ticket ${s.index} of void draw ${s.draw}`;
   }
 };
 
@@ -468,6 +515,13 @@ export type StarfallKeeperOptions = EngineTiming & {
    * paying and refunding until nothing is left (see `woundDown`).
    */
   openNew?: boolean | (() => boolean);
+  /**
+   * Wind down with a final draw (default false): the next draw opens as the
+   * final draw, selling for at least the contract's finalSales, and its jackpot
+   * must be won. Asked every pass. Once it has given everything out the game
+   * has ended. Without a rollover to give out, nothing more opens.
+   */
+  finalDraw?: boolean | (() => boolean);
   onView?: (view: StarfallView, nowSecs: number) => void;
   /** Called with the id of each draw step this keeper sends (the feed's `tx`). */
   onTx?: (draw: bigint, step: StarfallTxStep, txId: string) => void;
@@ -487,6 +541,8 @@ export class StarfallKeeper {
   private readonly decrypted = new Map<bigint, TicketPreimage[]>();
   private readonly batchSize = Starfall.pureCircuits.batchSize();
   private settleKeyOk = true;
+  private readonly finalDraw: () => boolean;
+  private readonly openNew: () => boolean;
   readonly role: StarfallRole;
   readonly split: Split;
 
@@ -502,6 +558,12 @@ export class StarfallKeeper {
       const o = options.openNew ?? true;
       return typeof o === 'function' ? o() : o;
     };
+    const finalDraw = (): boolean => {
+      const f = options.finalDraw ?? false;
+      return typeof f === 'function' ? f() : f;
+    };
+    this.finalDraw = finalDraw;
+    this.openNew = openNew;
     this.engine = new StepEngine<StarfallView, StarfallStep>({
       ...options,
       read: () => Promise.all([options.chain.view(), options.chain.now()]),
@@ -510,6 +572,7 @@ export class StarfallKeeper {
         starfallSteps(view, now, {
           marginSecs,
           openNew: openNew(),
+          final: finalDraw(),
           organise: options.seeds !== undefined,
           settle: options.settlementSecret !== undefined && this.settleKeyOk,
         }),
@@ -583,16 +646,21 @@ export class StarfallKeeper {
         this.warnOnce('settlement key', 'error', "the settlement secret given isn't this deployment's (its public key differs), so this keeper won't settle");
       }
     }
-    const o = this.options.openNew ?? true;
-    if (!(typeof o === 'function' ? o() : o)) {
-      if (woundDown(view)) {
-        this.warnOnce(
-          'wound down',
-          'info',
-          `wound down: no draw is open and nothing is left to settle, pay or refund (${view.draws.length} draw(s), the last ${view.lastDraw}). ` +
-            'Nothing more will happen on this deployment: it is safe to switch to a new one.',
-        );
-      } else this.warnOnce('winding down', 'info', 'winding down: no new draws will be opened; finishing the draws in progress');
+    const stopping = !this.openNew();
+    const final = this.finalDraw();
+    if (woundDown(view) && (stopping || final || view.ended)) {
+      this.warnOnce(
+        'wound down',
+        'info',
+        `wound down: no draw is open and nothing is left to settle, pay or refund (${view.draws.length} draw(s), the last ${view.lastDraw}` +
+          `${view.ended ? '; the final draw gave out the rollover' : ''}). Nothing more will happen on this deployment: it is safe to switch to a new one.`,
+      );
+    } else if (final && !view.ended) {
+      const f = finalUnderway(view);
+      if (f) this.warnOnce(`final ${f.id}`, 'info', `winding down: draw ${f.id} is the final draw (its jackpot must be won); nothing opens after it`);
+      else this.warnOnce('winding down', 'info', 'winding down: the next draw to open will be the final draw; its jackpot must be won');
+    } else if (stopping) {
+      this.warnOnce('stopping', 'info', 'not opening draws; finishing the draws in progress');
     }
     // Keep decrypted tickets only while their draw is still being settled.
     for (const id of this.decrypted.keys()) {
@@ -614,11 +682,21 @@ export class StarfallKeeper {
 
   private async run(step: StarfallStep, view: StarfallView, now: number): Promise<boolean> {
     const { chain, schedule } = this.options;
-    const nextClose = () => {
-      const close = schedule(now, Number(view.minSales));
-      if (close - BigInt(Math.floor(now)) > view.maxSales) {
-        throw new Error(`the schedule's next close (${new Date(Number(close) * 1000).toISOString()}) is beyond the contract's longest sales period`);
+    const nextClose = (final: boolean) => {
+      const nowSecs = Math.floor(now);
+      if (!final) {
+        const close = schedule(now, Number(view.minSales));
+        if (close - BigInt(nowSecs) > view.maxSales) {
+          throw new Error(`the schedule's next close (${new Date(Number(close) * 1000).toISOString()}) is beyond the contract's longest sales period`);
+        }
+        return close;
       }
+      // A final draw sells for at least finalSales: the schedule's first close
+      // after that, or else the first hour after it.
+      const min = Number(view.finalSales > view.minSales ? view.finalSales : view.minSales);
+      const scheduled = schedule(now, min);
+      const close = scheduled - BigInt(nowSecs) <= view.maxSales ? scheduled : BigInt(Math.ceil((nowSecs + min + OPENING_MARGIN_SECS) / 3600) * 3600);
+      if (close - BigInt(nowSecs) > view.maxSales) throw new Error("the final draw's shortest sales period leaves no close time within the longest one");
       return close;
     };
     const keyReady = (): boolean => {
@@ -629,10 +707,10 @@ export class StarfallKeeper {
     switch (step.kind) {
       case 'open': {
         if (!keyReady()) return false;
-        const close = nextClose();
+        const close = nextClose(step.final);
         const sealed = await this.options.seeds!.forDraw(view.lastDraw + 1n);
-        this.noteTx(view.lastDraw + 1n, 'open', await chain.openDraw(close, sealed.commitment));
-        this.logger.info(`opened draw ${view.lastDraw + 1n}, selling until ${new Date(Number(close) * 1000).toISOString()}`);
+        this.noteTx(view.lastDraw + 1n, 'open', await chain.openDraw(close, sealed.commitment, step.final));
+        this.logger.info(`opened ${step.final ? 'the final draw, ' : ''}draw ${view.lastDraw + 1n}, selling until ${new Date(Number(close) * 1000).toISOString()}`);
         return true;
       }
       case 'reveal': {
@@ -648,12 +726,12 @@ export class StarfallKeeper {
           return false;
         }
         if (step.openNext && keyReady()) {
-          const close = nextClose();
+          const close = nextClose(step.final);
           const sealed = await this.options.seeds!.forDraw(view.lastDraw + 1n);
-          const id = await chain.requestDraw(step.draw, seed, { salesClose: close, seedCommitment: sealed.commitment });
+          const id = await chain.requestDraw(step.draw, seed, { salesClose: close, seedCommitment: sealed.commitment, final: step.final });
           this.noteTx(step.draw, 'reveal', id);
           this.noteTx(view.lastDraw + 1n, 'open', id); // the same transaction opens the next draw
-          this.logger.info(`opened draw ${view.lastDraw + 1n}, selling until ${new Date(Number(close) * 1000).toISOString()}`);
+          this.logger.info(`opened ${step.final ? 'the final draw, ' : ''}draw ${view.lastDraw + 1n}, selling until ${new Date(Number(close) * 1000).toISOString()}`);
         } else {
           this.noteTx(step.draw, 'reveal', await chain.requestDraw(step.draw, seed));
         }

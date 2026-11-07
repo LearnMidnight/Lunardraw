@@ -106,7 +106,7 @@ export interface PrivateStateStore {
   set(id: typeof STARFALL_PRIVATE_STATE_ID, state: PrivateState): Promise<void>;
 }
 
-const NO_NEXT = { is_some: false, value: { salesClose: 0n, seedCommitment: new Uint8Array(32) } };
+const NO_NEXT = { is_some: false, value: { salesClose: 0n, seedCommitment: new Uint8Array(32), final: false } };
 
 export const readStarfallLedger = async (publicData: ContractStateSource, contractAddress: string): Promise<Starfall.Ledger> => {
   const state = await publicData.queryContractState(contractAddress);
@@ -162,8 +162,8 @@ export class MidnightStarfallChain implements StarfallChain, DrawOracleChain {
     return storedTicketsOf(await readStarfallLedger(this.publicData, this.contractAddress), n);
   }
 
-  async openDraw(salesClose: bigint, seedCommitment: Uint8Array): Promise<string | undefined> {
-    return this.tx(() => this.contract.callTx.requestDraw(0n, new Uint8Array(32), { is_some: true, value: { salesClose, seedCommitment } }));
+  async openDraw(salesClose: bigint, seedCommitment: Uint8Array, final = false): Promise<string | undefined> {
+    return this.tx(() => this.contract.callTx.requestDraw(0n, new Uint8Array(32), { is_some: true, value: { salesClose, seedCommitment, final } }));
   }
 
   async requestDraw(n: bigint, seed: Uint8Array, next?: NextDraw): Promise<string | undefined> {
@@ -375,6 +375,8 @@ export type StarfallDeployParams = {
   settleWindow: bigint;
   /** Most tickets a draw may sell: below what can be settled within settleWindow. */
   maxTicketsPerDraw: bigint;
+  /** Shortest sales period of the final draw (minSales to maxSales). */
+  finalSales: bigint;
 };
 
 /**
@@ -383,7 +385,7 @@ export type StarfallDeployParams = {
  * 6 hours to 14 days, so the same contract runs daily draws (the keeper's
  * --daily) or weekly ones (its default); an hour to reveal; two hours for the
  * oracle; a day to settle once the numbers are in; at most 10,000 tickets a
- * draw.
+ * draw; a final draw sells for at least a week.
  *
  * Why those last two (Jack, 7 Nov 2026): draws finalise in order, so a draw
  * that can't be settled holds up the payouts of the draws after it until its
@@ -391,6 +393,11 @@ export type StarfallDeployParams = {
  * 14 tickets takes about 70-90 s (proof, transaction and the keeper's 30 s
  * pause), so a day settles about 15,000 tickets; 10,000 leaves a third spare,
  * and a flood of purchases then fills a draw rather than voiding it.
+ *
+ * The final draw (Jack, 7 Nov 2026): when the game is wound down, its last
+ * draw's jackpot must be won, and what no division takes is shared by every
+ * game in it, so no rollover is left locked in the contract. Its players get
+ * the rollover, so it is announced a week ahead for anyone to buy in.
  */
 export const STARFALL_WEEKLY_DEFAULTS = {
   ticketPrice: 1_300_000n,
@@ -401,6 +408,7 @@ export const STARFALL_WEEKLY_DEFAULTS = {
   drawWindow: 7_200n,
   settleWindow: 86_400n,
   maxTicketsPerDraw: 10_000n,
+  finalSales: 7n * 86_400n,
 } as const;
 
 export const deployStarfall = (providers: StarfallProviders, p: StarfallDeployParams) =>
@@ -422,6 +430,7 @@ export const deployStarfall = (providers: StarfallProviders, p: StarfallDeployPa
       p.drawWindow,
       p.settleWindow,
       p.maxTicketsPerDraw,
+      p.finalSales,
     ],
   });
 
@@ -460,6 +469,7 @@ export type StarfallDeploymentRecord = {
     drawWindow: string;
     settleWindow: string;
     maxTicketsPerDraw: string;
+    finalSales: string;
   };
   transactions: { deploy?: string; acceptOracleKey?: string };
   verifierKeys: Fingerprints;
@@ -479,6 +489,7 @@ export const starfallRecordParameters = (p: StarfallDeployParams): StarfallDeplo
   drawWindow: p.drawWindow.toString(),
   settleWindow: p.settleWindow.toString(),
   maxTicketsPerDraw: p.maxTicketsPerDraw.toString(),
+  finalSales: p.finalSales.toString(),
 });
 
 export const starfallRecordPath = (network: string): string => join(deploymentsDir(), `starfall-${network}.json`);
@@ -564,6 +575,7 @@ export const verifyStarfall = (
     drawWindow: l.drawWindow,
     settleWindow: l.settleWindow,
     maxTicketsPerDraw: l.maxTicketsPerDraw,
+    finalSales: l.finalSales,
   };
   const differ = Object.entries(actual).filter(([k, v]) => v.toString() !== p[k as keyof typeof p]);
   checks.push({
@@ -571,7 +583,7 @@ export const verifyStarfall = (
     ok: differ.length === 0,
     detail:
       differ.length === 0
-        ? `${Number(l.ticketPrice) / 1e6} tNIGHT a game (${Number(l.feePerGame) / 1e6} to the operator); sales ${l.minSales}-${l.maxSales} s; reveal ${l.revealWindow} s, draw ${l.drawWindow} s, settle ${l.settleWindow} s; at most ${l.maxTicketsPerDraw} tickets a draw`
+        ? `${Number(l.ticketPrice) / 1e6} tNIGHT a game (${Number(l.feePerGame) / 1e6} to the operator); sales ${l.minSales}-${l.maxSales} s; reveal ${l.revealWindow} s, draw ${l.drawWindow} s, settle ${l.settleWindow} s; at most ${l.maxTicketsPerDraw} tickets a draw; a final draw sells ${l.finalSales} s or more`
         : differ.map(([k, v]) => `${k} ${v} (record ${String(p[k as keyof typeof p])})`).join('; '),
   });
   return checks;

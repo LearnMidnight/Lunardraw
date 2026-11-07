@@ -175,6 +175,7 @@ describe('verifyStarfall', () => {
         drawWindow: 1_800n,
         settleWindow: 7_200n,
         maxTicketsPerDraw: 4_294_967_295n,
+        finalSales: 600n,
       }),
       transactions: {},
       verifierKeys: fps,
@@ -202,6 +203,8 @@ describe('verifyStarfall', () => {
     expect(checks.find((c) => !c.ok)!.detail).toMatch(/operator .*feePerGame 200000/);
     const capped = verifyStarfall({ ...record, parameters: { ...p, maxTicketsPerDraw: '10000' } }, state);
     expect(capped.find((c) => !c.ok)!.detail).toBe('maxTicketsPerDraw 4294967295 (record 10000)');
+    const notice = verifyStarfall({ ...record, parameters: { ...p, finalSales: '604800' } }, state);
+    expect(notice.find((c) => !c.ok)!.detail).toBe('finalSales 600 (record 604800)');
     expect(failing(verifyStarfall(record, null))).toEqual(['contract exists']);
   });
 });
@@ -238,10 +241,14 @@ describe("Starfall's organiser commitment", () => {
 });
 
 describe('winding a deployment down', () => {
-  const view = (draws: { id: bigint; status: Starfall.DrawStatus; unrefunded?: bigint[] }[], paid = true) =>
+  type D = { id: bigint; status: Starfall.DrawStatus; unrefunded?: bigint[]; final?: boolean; games?: bigint };
+  const view = (draws: D[], paid = true, more: Partial<StarfallView> = {}) =>
     ({
-      draws: draws.map((d) => ({ unrefunded: [], ...d })),
+      carry: 0n,
+      ended: false,
+      draws: draws.map((d) => ({ unrefunded: [], final: false, games: 1n, ...d })),
       entitlements: [{ id: new Uint8Array(32), drawId: 1n, games: [], paid }],
+      ...more,
     }) as unknown as StarfallView;
 
   it('names the marker after the contract, so a new deployment is never wound down by an old one', () => {
@@ -249,14 +256,30 @@ describe('winding a deployment down', () => {
     expect(lastDrawMarker('abc123')).not.toBe(lastDrawMarker('def456'));
   });
 
-  it('says safe to switch only when every draw is finished, paid and refunded', () => {
-    const { settled, voided, drawn } = { settled: Starfall.DrawStatus.settled, voided: Starfall.DrawStatus.voided, drawn: Starfall.DrawStatus.drawn };
+  it('says safe to switch only when every draw is finished, paid and refunded, and no rollover is left', () => {
+    const { settled, voided, drawn, open } = {
+      settled: Starfall.DrawStatus.settled,
+      voided: Starfall.DrawStatus.voided,
+      drawn: Starfall.DrawStatus.drawn,
+      open: Starfall.DrawStatus.open,
+    };
     expect(windDownStatus(view([{ id: 1n, status: settled }, { id: 2n, status: voided }]))).toMatch(/^Wound down: .* Safe to switch/);
     expect(windDownStatus(view([{ id: 1n, status: settled }, { id: 2n, status: drawn }]))).toBe(
-      'Winding down: no new draws will open. Still in progress: draw 2.',
+      'Winding down: the next draw to open is the final draw (its jackpot must be won). Still in progress: draw 2.',
     );
     expect(windDownStatus(view([{ id: 1n, status: settled }], false))).toMatch(/in progress: payments or refunds/);
     expect(windDownStatus(view([{ id: 1n, status: voided, unrefunded: [0n] }]))).toMatch(/in progress: payments or refunds/);
+    // A rollover still waiting: not until a final draw has given it out.
+    expect(windDownStatus(view([{ id: 1n, status: settled }], true, { carry: 5n }))).toMatch(/^Winding down: the next draw to open is the final draw/);
+    expect(windDownStatus(view([{ id: 1n, status: settled }, { id: 2n, status: open, final: true }], true, { carry: 5n }))).toBe(
+      'Winding down: draw 2 is the final draw (its jackpot must be won); nothing opens after it. Still in progress: draw 2.',
+    );
+    expect(
+      windDownStatus(view([{ id: 1n, status: settled }, { id: 2n, status: settled, final: true, unrefunded: [3n] }], true, { ended: true })),
+    ).toBe('Winding down: the final draw has given out the rollover. Still in progress: payments or refunds.');
+    expect(windDownStatus(view([{ id: 1n, status: settled }, { id: 2n, status: settled, final: true }], true, { ended: true }))).toMatch(
+      /^Wound down: .* Safe to switch/,
+    );
   });
 });
 

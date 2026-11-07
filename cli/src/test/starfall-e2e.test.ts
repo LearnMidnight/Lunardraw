@@ -87,6 +87,7 @@ describe.runIf(enabled)('Starfall on a local Midnight network', () => {
     drawWindow: 300n,
     settleWindow: 3_600n,
     maxTicketsPerDraw: 1_000n,
+    finalSales: 60n,
   };
   // Draw 1 closes 15 minutes after it opens (time for two purchases); later
   // draws 20 minutes after, so draw 2 is still selling once draw 1 is drawn.

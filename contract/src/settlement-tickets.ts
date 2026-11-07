@@ -328,12 +328,15 @@ export const splitPrize = (prize: bigint, shares: readonly bigint[]): bigint[] =
  * share of the pool; the rollover joins division 1; an unwon division 2..8
  * falls to the next lower division with a winner; an unwon division 1 or 9,
  * rounding remainders, and what the floored shares leave of the pool (at
- * most 8 STAR) roll over.
+ * most 8 STAR) roll over. In a final draw (`final`) an unwon division 1 falls
+ * too, like 2..8; what's left over (`carry`) is then shared by every game
+ * sold (`finalDrawShare`) instead of rolling over.
  */
 export const prizesByPowerballRules = (
   pool: bigint,
   carryIn: bigint,
   winners: readonly bigint[],
+  final = false,
 ): { prizes: bigint[]; carry: bigint } => {
   const prizes: bigint[] = [];
   let cascade = 0n;
@@ -351,7 +354,7 @@ export const prizesByPowerballRules = (
       cascade = 0n;
     } else {
       prizes.push(0n);
-      if (j === 0 || j === 8) {
+      if ((j === 0 && !final) || j === 8) {
         carry += amount;
         cascade = 0n;
       } else cascade = amount;
@@ -359,6 +362,14 @@ export const prizesByPowerballRules = (
   });
   return { prizes, carry: carry + (pool - allocated) };
 };
+
+/**
+ * How a final draw gives out what no division took (`left`): an equal share
+ * per game sold, and the last fraction of a STAR per game to the operator. A
+ * final draw that sold nothing keeps it as rollover.
+ */
+export const finalDrawShare = (left: bigint, games: bigint): { share: bigint; dust: bigint; carry: bigint } =>
+  games === 0n ? { share: 0n, dust: 0n, carry: left } : { share: left / games, dust: left % games, carry: 0n };
 
 /** What a draw's settlement must come to, worked out off-chain from the plain tickets. */
 export type ExpectedSettlement = {
@@ -378,6 +389,9 @@ export type ExpectedSettlement = {
   payouts: Map<string, bigint>;
   /** Each ticket's winning games per division, in index order. */
   won: bigint[][];
+  /** A final draw's share per game of what no division took, and the fraction of a STAR per game left over (to the operator). */
+  finalShare: bigint;
+  dust: bigint;
 };
 
 /**
@@ -392,6 +406,7 @@ export const expectedSettlement = (
   price: bigint,
   feePerGame: bigint,
   carryIn: bigint,
+  final = false,
 ): ExpectedSettlement => {
   const won = tickets.map((t) => ticketDivisionsFor(t, numbers, moonball));
   const winners = [0, 1, 2, 3, 4, 5, 6, 7, 8].map((j) => won.reduce((a, w) => a + w[j], 0n));
@@ -399,7 +414,9 @@ export const expectedSettlement = (
   const sales = price * games;
   const fee = feePerGame * games;
   const pool = sales - fee;
-  const { prizes, carry } = prizesByPowerballRules(pool, carryIn, winners);
+  const rules = prizesByPowerballRules(pool, carryIn, winners, final);
+  const { prizes } = rules;
+  const { share: finalShare, dust, carry } = final ? finalDrawShare(rules.carry, games) : { share: 0n, dust: 0n, carry: rules.carry };
   const payouts = new Map<string, bigint>();
   tickets.forEach((t, i) => {
     const prize = won[i].reduce((a, g, j) => a + g * prizes[j], 0n);
@@ -411,5 +428,5 @@ export const expectedSettlement = (
       payouts.set(k, (payouts.get(k) ?? 0n) + amounts[j]);
     });
   });
-  return { winners, games, sales, fee, pool, prizes, carry, payouts, won };
+  return { winners, games, sales, fee, pool, prizes, carry, payouts, won, finalShare, dust };
 };

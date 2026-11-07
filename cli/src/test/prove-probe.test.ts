@@ -70,7 +70,7 @@ const circuitRuns = (): Run[] => {
   sim.buyPackage(games, me);
   sim.advance(3_601);
   note = 'with next draw';
-  sim.requestAndOpenNext(n, seed, { salesClose: BigInt(sim.now + 3_600), seedCommitment: new Uint8Array(32).fill(1) });
+  sim.requestAndOpenNext(n, seed, { salesClose: BigInt(sim.now + 3_600), seedCommitment: new Uint8Array(32).fill(1), final: false });
   note = '';
   sim.fulfilDraw(n);
   sim.computeNumbers(n);

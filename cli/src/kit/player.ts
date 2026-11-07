@@ -21,7 +21,16 @@ import { type KitConfig, kitPaths, limitsWhere, loadConfig, star, tNight } from 
 const { DrawStatus } = Starfall;
 const iso = (secs: bigint) => new Date(Number(secs) * 1000).toISOString();
 
-export type DrawOnSale = { draw: number; salesClose: string; minutesLeft: number; tickets: number; games: number; jackpotEstimate: string };
+export type DrawOnSale = {
+  draw: number;
+  salesClose: string;
+  minutesLeft: number;
+  tickets: number;
+  games: number;
+  jackpotEstimate: string;
+  /** The final draw: its jackpot must be won (an unwon one falls to the next division with a winner, and what no division takes is shared by every game). */
+  final?: { note: string };
+};
 export type DrawResult = { draw: number; status: 'drawn' | 'settled' | 'void'; numbers?: number[]; moonball?: number; games: number; winningGames?: number };
 
 export type Overview = {
@@ -31,6 +40,8 @@ export type Overview = {
   onSale: DrawOnSale | null;
   /** The carried-over jackpot (Division 1 rollover) going into the next draw. */
   rollover: string;
+  /** The game has ended: its final draw has given everything out, and no draw will open again. */
+  ended?: true;
   recent: DrawResult[];
 };
 
@@ -47,6 +58,16 @@ export const overviewOf = (view: StarfallView, network: string, contract: string
         games: Number(selling.games),
         // Division 1's share of this draw's pool plus the rollover, if nobody else buys
         jackpotEstimate: tNight(view.carry + (pool(selling.games) * BigInt(Starfall.POWERBALL_SHARES_BP[0])) / 10_000n),
+        ...(selling.final
+          ? {
+              final: {
+                note:
+                  'This is the final draw of this game: its jackpot must be won. If nobody wins it, it falls to the next prize division ' +
+                  'with a winner, and whatever no division takes is shared equally by every game in this draw (paid to the address the ' +
+                  'ticket was bought from). No draw opens after it.',
+              },
+            }
+          : {}),
       }
     : null;
   const recent: DrawResult[] = [...view.draws]
@@ -65,7 +86,7 @@ export const overviewOf = (view: StarfallView, network: string, contract: string
             winningGames: d.winners.reduce((a, w) => a + Number(w), 0),
           },
     );
-  return { network, contract, gamePrice: tNight(view.ticketPrice), onSale, rollover: tNight(view.carry), recent };
+  return { network, contract, gamePrice: tNight(view.ticketPrice), onSale, rollover: tNight(view.carry), ...(view.ended ? { ended: true as const } : {}), recent };
 };
 
 /** Read the draws from the chain (public data: no wallet, about a second). */
