@@ -86,6 +86,9 @@ describe.runIf(enabled)('Starfall on a local Midnight network', () => {
     revealWindow: 600n,
     drawWindow: 300n,
     settleWindow: 3_600n,
+    maxTicketsPerDraw: 1_000n,
+    finalSales: 60n,
+    mustBeWonAfter: 5n,
   };
   // Draw 1 closes 15 minutes after it opens (time for two purchases); later
   // draws 20 minutes after, so draw 2 is still selling once draw 1 is drawn.
@@ -181,18 +184,27 @@ describe.runIf(enabled)('Starfall on a local Midnight network', () => {
     const seed = seeds.seedFor(1n);
     const alpha = Starfall.pureCircuits.drawAlpha({ bytes: keeperChain.addressBytes }, 1n, seed);
     const expected = drawStarfall(combineDrawSeed(hex(seed), nightcast.evaluate(oracleSecretKey, alpha))) as { numbers: number[]; moonball: number };
-    // Five tickets holding 59 games to start: the sure winner, a System 8 (8 games), a
-    // Pick 6 (29), a PowerHit-style QuickPick with Moonball Sweep (20) and a
-    // QuickPick, so every kind of entry is proved, sealed and settled for real.
+    // Five tickets holding 70 games to start: 12 QuickPicks with the sure winner on the
+    // last line, a System 8 (8 games), a Pick 6 (29), a PowerHit-style QuickPick with
+    // Moonball Sweep (20) and a QuickPick, so every kind of entry, and a ticket's
+    // lines, are proved, sealed and settled for real.
     const games = [
-      Starfall.makeTicket(1n, lineHitting(expected.numbers, expected.moonball, 3), mine),
+      Starfall.makeTicket(1n, quickPick(), mine, undefined, [
+        ...Array.from({ length: Starfall.MAX_LINES - 1 }, () => quickPick()),
+        lineHitting(expected.numbers, expected.moonball, 3),
+      ]),
       Starfall.makeTicket(1n, { numbers: [2, 5, 9, 13, 17, 21, 26, 30], moonball: 4 }, mine),
       Starfall.makeTicket(1n, { numbers: expected.numbers.slice(0, 6), moonball: expected.moonball, pick: true }, mine),
       Starfall.makeTicket(1n, { ...quickPick(), sweep: true }, mine),
       Starfall.makeTicket(1n, quickPick(), mine),
     ];
-    // Then QuickPicks to fill a purchase: 18 tickets (72 games) in one transaction, the most a purchase holds.
-    while (games.length < Number(Starfall.pureCircuits.maxTickets())) games.push(Starfall.makeTicket(1n, quickPick(), mine));
+    // Then QuickPicks, 12 to a ticket, to fill a purchase: 7 tickets in one
+    // transaction, the most a purchase holds.
+    const room = Number(Starfall.pureCircuits.maxTickets()) - games.length;
+    games.push(...Starfall.ticketsFor(1n, Array.from({ length: room * Starfall.GAMES_PER_TICKET }, () => quickPick()), mine));
+    const ticketCount = BigInt(Starfall.pureCircuits.maxTickets());
+    const gameCount = BigInt(games.reduce((a, t) => a + Starfall.ticketGames(t), 0));
+    expect(gameCount).toBe(70n + BigInt(room * Starfall.GAMES_PER_TICKET));
     const buyer = await joinStarfall(buyerProviders, address, {});
     const started = Date.now();
     await proofServer.freshen();
@@ -202,8 +214,8 @@ describe.runIf(enabled)('Starfall on a local Midnight network', () => {
       throw new Error(`purchase rejected: ${explain(err)}`);
     });
     expect(txs).toBe(1);
-    expect((await drawOf(1n))!.tickets).toBe(18n);
-    expect((await drawOf(1n))!.games).toBe(72n);
+    expect((await drawOf(1n))!.tickets).toBe(ticketCount);
+    expect((await drawOf(1n))!.games).toBe(gameCount);
 
     // Sales close: reveal (and open draw 2), the oracle answers, the numbers come out.
     while (Date.now() / 1000 < Number(first.salesClose) + 25) await sleep(5_000);
@@ -222,8 +234,8 @@ describe.runIf(enabled)('Starfall on a local Midnight network', () => {
     // Settle the one batch, finalise, pay.
     await until('draw 1 is settled', (v) => v.draws.find((d) => d.id === 1n)!.status === DrawStatus.settled);
     const settled = (await drawOf(1n))!;
-    expect(settled.settled).toBe(18n);
-    expect(settled.fee).toBe(72n * params.feePerGame);
+    expect(settled.settled).toBe(ticketCount);
+    expect(settled.fee).toBe(gameCount * params.feePerGame);
     expect(settled.winners[7]).toBeGreaterThanOrEqual(1n);
     // The Pick 6 holds the 6 drawn numbers it was given: one of its games has all 7, with the Moonball.
     expect(settled.winners[0]).toBeGreaterThanOrEqual(1n);

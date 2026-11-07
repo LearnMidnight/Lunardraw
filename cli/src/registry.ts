@@ -18,7 +18,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { type AgentAnalytics, agentAnalytics, type AgentDraw, agentHistory, type AgentStats, agentReport, type AgentWin, type DrawOutcome, emptyStats, LISTING_PREFIX, type ListingPayload, listingProblem, periodStart, type Via } from './listing.js';
-import { loadAgentState } from './starfall-agent.js';
+import { emptyAgentState, loadAgentState } from './starfall-agent.js';
 
 export type DirectoryAgent = {
   id: string;
@@ -74,7 +74,14 @@ type Listed = {
   last_seen: string;
 };
 
-type Store = { listed: Record<string, Listed>; events: DirectoryEvent[]; hidden: string[] };
+/**
+ * The registry's store. `contract` is the Starfall deployment its stats and
+ * events are for: a season. When the site's feed shows another deployment,
+ * the store is kept aside (listings.<contract>.json) and a new season starts:
+ * agents stay listed, with their stats, history, wins and events cleared,
+ * because draw numbers start again at 1 with each deployment.
+ */
+type Store = { listed: Record<string, Listed>; events: DirectoryEvent[]; hidden: string[]; contract?: string };
 
 export type Verifier = {
   /** Whether `signature` over `data` is valid for `key`. */
@@ -130,13 +137,39 @@ export const createRegistry = (o: RegistryOptions) => {
   const maxListed = o.maxListed ?? 500;
   const lastReport = new Map<string, number>();
 
-  const load = (): Store => {
+  /** The deployment the site's feed shows (feed.contracts.starfall), lower case; undefined without a feed. */
+  const feedContract = (): string | undefined => {
     try {
-      const s = JSON.parse(readFileSync(storePath, 'utf8')) as Partial<Store>;
-      return { listed: s.listed ?? {}, events: s.events ?? [], hidden: s.hidden ?? [] };
+      const feed = JSON.parse(readFileSync(o.feedPath, 'utf8')) as { contracts?: { starfall?: unknown } };
+      const c = feed.contracts?.starfall;
+      return typeof c === 'string' && /^[0-9a-f]{64}$/i.test(c) ? c.toLowerCase() : undefined;
     } catch {
-      return { listed: {}, events: [], hidden: [] };
+      return undefined;
     }
+  };
+
+  const load = (): Store => {
+    let s: Store;
+    try {
+      const raw = JSON.parse(readFileSync(storePath, 'utf8')) as Partial<Store>;
+      s = { listed: raw.listed ?? {}, events: raw.events ?? [], hidden: raw.hidden ?? [], ...(raw.contract ? { contract: raw.contract } : {}) };
+    } catch {
+      s = { listed: {}, events: [], hidden: [] };
+    }
+    const current = feedContract();
+    if (current === undefined || s.contract === current) return s;
+    // A new deployment: a new season. Keep the old one aside, and the listings without their numbers.
+    if (s.contract !== undefined || Object.keys(s.listed).length > 0 || s.events.length > 0) {
+      mkdirSync(o.dir, { recursive: true });
+      writeFileSync(join(o.dir, `listings.${s.contract ? s.contract.slice(0, 16) : 'earlier'}.json`), JSON.stringify(s, null, 2) + '\n');
+    }
+    const listed: Record<string, Listed> = {};
+    for (const [a, l] of Object.entries(s.listed)) {
+      listed[a] = { ...l, stats: emptyStats(), week: undefined, month: undefined, wins: [], history: [] };
+    }
+    const fresh: Store = { listed, events: [], hidden: s.hidden, contract: current };
+    save(fresh);
+    return fresh;
   };
   const save = (s: Store) => {
     mkdirSync(o.dir, { recursive: true });
@@ -182,9 +215,12 @@ export const createRegistry = (o: RegistryOptions) => {
     const agents: DirectoryAgent[] = [];
     const events: DirectoryEvent[] = [];
     const wins: DirectoryWin[] = [];
+    const current = feedContract();
     for (const n of names) {
       const statePath = join(o.houseDir, `${n}.state.json`);
-      const state = loadAgentState(statePath);
+      // read only (the agent itself moves an old deployment's state aside): another deployment's counts as nothing yet
+      const kept = loadAgentState(statePath);
+      const state = current === undefined || kept.contract?.toLowerCase() === current ? kept : emptyAgentState();
       const env = readFileSync(join(o.houseDir, `${n}.env`), 'utf8');
       const style = /--style\s+(\w+)/.exec(env)?.[1] ?? 'mix';
       const r = agentReport(state, outcomes, now());
@@ -302,10 +338,29 @@ export const createRegistry = (o: RegistryOptions) => {
     const before = s.listed[address];
     if (!before && Object.keys(s.listed).length >= maxListed) throw new Refused('the directory is full for now');
     const iso = new Date(now()).toISOString();
-    s.listed[address] = { address, key: p.key, name: p.name, style: p.style, via: p.via, stats, week: period(p.week), month: period(p.month), wins, history, joined: before?.joined ?? iso, last_seen: iso };
+    // Stats count only for this season's deployment. A report for another one (or from a kit before
+    // 0.1.9, which doesn't say) keeps the agent listed and seen, with the numbers it already has here.
+    const current = s.contract;
+    const counts = current === undefined || (typeof p.contract === 'string' && p.contract.toLowerCase() === current);
+    s.listed[address] = counts
+      ? { address, key: p.key, name: p.name, style: p.style, via: p.via, stats, week: period(p.week), month: period(p.month), wins, history, joined: before?.joined ?? iso, last_seen: iso }
+      : {
+          address,
+          key: p.key,
+          name: p.name,
+          style: p.style,
+          via: p.via,
+          stats: before?.stats ?? emptyStats(),
+          week: before?.week,
+          month: before?.month,
+          wins: before?.wins ?? [],
+          history: before?.history ?? [],
+          joined: before?.joined ?? iso,
+          last_seen: iso,
+        };
     // what changed, for the activity panel
     if (!before) s.events.push({ at: iso, agent: p.name, text: 'joined the directory' });
-    else {
+    else if (counts) {
       if (stats.games > before.stats.games && stats.last_draw) s.events.push({ at: iso, agent: p.name, text: `bought ${stats.games - before.stats.games} game${stats.games - before.stats.games === 1 ? '' : 's'} in draw ${stats.last_draw}` });
       if (stats.won_star > before.stats.won_star) s.events.push({ at: iso, agent: p.name, text: `won ${(stats.won_star - before.stats.won_star) / 1e6} tNIGHT` });
     }

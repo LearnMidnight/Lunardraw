@@ -62,12 +62,15 @@ const circuitRuns = (): Run[] => {
     Starfall.makeTicket(n, { numbers: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], sweep: true }, me),
     Starfall.makeTicket(n, { numbers: draw.numbers.slice(0, 5), pick: true, sweep: true }, me),
   ];
-  while (games.length < batch + 1) games.push(Starfall.makeTicket(n, quickPick(), me));
+  // Full tickets: 12 QuickPicks each.
+  while (games.length < batch + 1) {
+    games.push(Starfall.makeTicket(n, quickPick(), me, undefined, Array.from({ length: Starfall.MAX_LINES }, () => quickPick())));
+  }
   note = `${max} tickets`;
   sim.buyPackage(games, me);
   sim.advance(3_601);
   note = 'with next draw';
-  sim.requestAndOpenNext(n, seed, { salesClose: BigInt(sim.now + 3_600), seedCommitment: new Uint8Array(32).fill(1) });
+  sim.requestAndOpenNext(n, seed, { salesClose: BigInt(sim.now + 3_600), seedCommitment: new Uint8Array(32).fill(1), final: false });
   note = '';
   sim.fulfilDraw(n);
   sim.computeNumbers(n);

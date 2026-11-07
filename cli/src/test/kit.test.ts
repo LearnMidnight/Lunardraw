@@ -9,7 +9,7 @@ import { DEFAULT_CONFIG, ensureWallet, findDeployments, limitsWhere, loadConfig,
 import { checkDeployment, deploymentWatch, outdatedText, recordUrl } from '../kit/freshness.js';
 import { BUY_SCHEMA, buyArgs, handle, type Tool } from '../kit/mcp.js';
 import { checkLimits, overviewOf, requireLocalProvingKey, ticketsReport } from '../kit/player.js';
-import { type AgentState, planPurchase } from '../starfall-agent.js';
+import { type AgentState, loadAgentState, planPurchase, saveAgentState } from '../starfall-agent.js';
 import { buyEntries } from '../starfall-commands.js';
 
 const { DrawStatus } = Starfall;
@@ -35,8 +35,8 @@ const drawView = (over: Record<string, unknown>) => ({
   winners: Array.from({ length: 9 }, () => 0n),
   ...over,
 });
-const view = (draws: Record<string, unknown>[], carry = 1000_000000n): StarfallView =>
-  ({ draws: draws.map(drawView), ticketPrice: 1_200_000n, feePerGame: 200_000n, carry }) as unknown as StarfallView;
+const view = (draws: Record<string, unknown>[], carry = 1000_000000n, more: Record<string, unknown> = {}): StarfallView =>
+  ({ draws: draws.map(drawView), ticketPrice: 1_200_000n, feePerGame: 200_000n, carry, mustBeWonAfter: 0n, rollovers: 0n, ...more }) as unknown as StarfallView;
 
 describe('the agent kit', () => {
   it("reads the owner's config, with defaults, and refuses a bad one", () => {
@@ -67,6 +67,21 @@ describe('the agent kit', () => {
     expect(() => findDeployments('preview', tmpdir())).toThrow(/wasn't found/);
   });
 
+  it('keeps a state per deployment: one from another (or an unnamed earlier one) is moved aside', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kit-state-'));
+    const path = join(dir, 'state.json');
+    writeFileSync(path, JSON.stringify({ purchases: [purchase(3, 6, 10)], reported: ['2'] }));
+    // An earlier state without a contract: aside, and a fresh one for the new deployment.
+    expect(loadAgentState(path, '8d9f297f')).toEqual({ purchases: [], reported: [], contract: '8d9f297f' });
+    expect(JSON.parse(readFileSync(join(dir, 'state.json.earlier.json'), 'utf8')).purchases).toHaveLength(1);
+    saveAgentState(path, { purchases: [purchase(1, 2, 5)], reported: [], contract: '8d9f297f' });
+    expect(loadAgentState(path, '8D9F297F').purchases).toHaveLength(1);
+    expect(loadAgentState(path).purchases).toHaveLength(1);
+    // Another deployment's: aside too.
+    expect(loadAgentState(path, 'aaaa1111').purchases).toHaveLength(0);
+    expect(JSON.parse(readFileSync(join(dir, 'state.json.8d9f297f.json'), 'utf8')).contract).toBe('8d9f297f');
+  });
+
   it("keeps purchases inside the owner's limits, per draw and per 24 hours", () => {
     const config = { ...DEFAULT_CONFIG, limits: { perDraw: 25, perDay: 30 } };
     const state: AgentState = { purchases: [purchase(7, 20, 30), purchase(6, 6, 60 * 25)], reported: [] };
@@ -95,6 +110,28 @@ describe('the agent kit', () => {
       { draw: 10, status: 'void', games: 4 },
     ]);
     expect(overviewOf(view([{ salesClose: secs(NOW - 60_000) }]), 'preprod', 'f868', NOW / 1000).onSale).toBeNull();
+  });
+
+  it('says when the draw on sale is the final draw, and when the game has ended', () => {
+    const o = overviewOf(view([{ id: 30n, final: true }]), 'preprod', 'f868', NOW / 1000);
+    expect(o.onSale?.final?.note).toMatch(/final draw of this game: its jackpot must be won/);
+    expect(o.ended).toBeUndefined();
+    expect(overviewOf(view([{ id: 12n }]), 'preprod', 'f868', NOW / 1000).onSale?.final).toBeUndefined();
+    const over = { ...view([{ id: 30n, status: DrawStatus.settled, final: true }]), ended: true } as StarfallView;
+    expect(overviewOf(over, 'preprod', 'f868', NOW / 1000)).toMatchObject({ onSale: null, ended: true });
+  });
+
+  it('says when the jackpot on sale must be won, or may have to be', () => {
+    const must = overviewOf(view([{ id: 12n }], 1000_000000n, { mustBeWonAfter: 5n, rollovers: 5n }), 'preprod', 'f868', NOW / 1000);
+    expect(must.onSale?.mustBeWon).toEqual({ status: 'yes', note: expect.stringMatching(/After 5 jackpot rollover\(s\) in a row, this draw's jackpot must be won/) });
+    const maybe = overviewOf(
+      view([{ id: 12n }, { id: 11n, status: DrawStatus.drawn }], 1000_000000n, { mustBeWonAfter: 5n, rollovers: 4n }),
+      'preprod',
+      'f868',
+      NOW / 1000,
+    );
+    expect(maybe.onSale?.mustBeWon?.status).toBe('possible');
+    expect(overviewOf(view([{ id: 12n }], 1000_000000n, { mustBeWonAfter: 5n, rollovers: 2n }), 'preprod', 'f868', NOW / 1000).onSale?.mustBeWon).toBeUndefined();
   });
 
   it("reports the agent's tickets with each draw's result", () => {

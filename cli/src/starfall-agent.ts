@@ -54,18 +54,38 @@ export type AgentState = {
   purchases: AgentPurchase[];
   /** Draws whose result has been reported. */
   reported: string[];
+  /** The deployment these draws belong to (draw numbers start again at 1 with each one). */
+  contract?: string;
 };
 
-export const emptyAgentState = (): AgentState => ({ purchases: [], reported: [] });
+export const emptyAgentState = (contract?: string): AgentState => ({ purchases: [], reported: [], ...(contract ? { contract } : {}) });
 
-export const loadAgentState = (path?: string): AgentState => {
-  if (!path || !existsSync(path)) return emptyAgentState();
+/**
+ * The agent's state. Given the deployment it plays, a state kept for another
+ * one (or from before states named theirs: the first Starfall deployment's)
+ * is moved aside to `<path>.<its contract, or "earlier">.json` and a fresh one
+ * begins: draw numbers start again at 1 with each deployment, so an old
+ * purchase of draw 3 must never count as buying the new draw 3.
+ */
+export const loadAgentState = (path?: string, contract?: string): AgentState => {
+  if (!path || !existsSync(path)) return emptyAgentState(contract);
+  let s: Partial<AgentState>;
   try {
-    const s = JSON.parse(readFileSync(path, 'utf8')) as Partial<AgentState>;
-    return { purchases: s.purchases ?? [], reported: s.reported ?? [] };
+    s = JSON.parse(readFileSync(path, 'utf8')) as Partial<AgentState>;
   } catch {
-    return emptyAgentState();
+    return emptyAgentState(contract);
   }
+  const state: AgentState = { purchases: s.purchases ?? [], reported: s.reported ?? [], ...(s.contract ? { contract: s.contract } : {}) };
+  if (contract === undefined) return state;
+  const mine = contract.toLowerCase();
+  if (state.contract?.toLowerCase() === mine) return state;
+  if (state.contract === undefined && state.purchases.length === 0 && state.reported.length === 0) return emptyAgentState(contract);
+  try {
+    renameSync(path, `${path}.${state.contract ? state.contract.slice(0, 16) : 'earlier'}.json`);
+  } catch {
+    // left in place; the fresh state replaces it on the next save
+  }
+  return emptyAgentState(contract);
 };
 
 export const saveAgentState = (path: string | undefined, state: AgentState): void => {

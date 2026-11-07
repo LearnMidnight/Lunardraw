@@ -354,8 +354,16 @@ export const kit = async (argv: string[]): Promise<number> => {
       if (values.json) return json(overview), 0;
       const s = overview.onSale;
       const left = s ? (s.minutesLeft < 1 ? 'closing now' : `in ${s.minutesLeft} min`) : '';
-      say(s ? `Draw ${s.draw} is on sale: closes at ${clock(s.salesClose)} (${left}), ${s.tickets} ticket(s) so far, jackpot about ${whole(s.jackpotEstimate)}.` : 'No draw is on sale right now; the next opens on the hour.');
-      say(`A game costs ${overview.gamePrice}. Rollover into the next Division 1: ${whole(overview.rollover)}.`);
+      say(
+        s
+          ? `Draw ${s.draw} is on sale: closes at ${clock(s.salesClose)} (${left}), ${s.tickets} ticket(s) so far, jackpot about ${whole(s.jackpotEstimate)}.`
+          : overview.ended
+            ? 'This game has ended: its final draw has paid out, and no draw will open again. Update the kit to play the next one.'
+            : 'No draw is on sale right now; the next opens shortly after the last one closes.',
+      );
+      if (s?.final) say(s.final.note);
+      if (s?.mustBeWon) say(s.mustBeWon.note);
+      if (!overview.ended) say(`A game costs ${overview.gamePrice}. Rollover into the next Division 1: ${whole(overview.rollover)}.`);
       for (const r of overview.recent) say(r.status === 'void' ? `  draw ${r.draw}: cancelled, refunded` : `  draw ${r.draw}: ${r.numbers!.join(' ')} + ${r.moonball}, ${r.winningGames} winning game(s) of ${r.games}`);
       return 0;
     }
@@ -386,7 +394,7 @@ export const kit = async (argv: string[]): Promise<number> => {
       const entries = buyEntries(values);
       const { readOverview, withPlayer } = await import('./player.js');
       const { overview } = await readOverview(config);
-      if (!overview.onSale) throw new Error('no draw is on sale right now; the next opens on the hour');
+      if (!overview.onSale) throw new Error('no draw is on sale right now; the next opens shortly after the last one closes');
       const running = await runningAgent(config);
       if (running) {
         // the agent running here has the wallet open: it buys (opening the wallet again would clash)
@@ -430,7 +438,8 @@ export const kit = async (argv: string[]): Promise<number> => {
       const { config } = setup();
       const { loadAgentState } = await import('../starfall-agent.js');
       const { readOverview, ticketsReport } = await import('./player.js');
-      const state = loadAgentState(kitPaths(kitHome(), config.network).state);
+      const { readStarfallRecord } = await import('../starfall.js');
+      const state = loadAgentState(kitPaths(kitHome(), config.network).state, readStarfallRecord(config.network).contractAddress);
       const view = state.purchases.length ? (await readOverview(config)).view : undefined;
       const report = ticketsReport(state, view, Date.now());
       if (values.json) return json(report), 0;

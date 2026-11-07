@@ -1,9 +1,9 @@
 {
   "contract": "starfall",
   "network": "preprod",
-  "contractAddress": "f868fc99557fd9194d1126d143774d060aeafe077f0dca5c11435fe6c1e374f6",
-  "deployedAt": "2026-10-28T09:32:16.603Z",
-  "sourceCommit": "2c89075dd11086754122f3377d395a929ef7dec2",
+  "contractAddress": "8d9f297fd6c1e41262f74dfc7543ef539f90277c0357885a229e2604d86ddc75",
+  "deployedAt": "2026-11-07T08:28:20.716Z",
+  "sourceCommit": "f788617be9004c18605b78e6b62b4574f87b9760",
   "compiler": {
     "compiler": "0.31.1",
     "language": "0.23.0",
@@ -20,31 +20,34 @@
       "x": "19625836673520792295582613931588024206799368001510542437671691992886344459095",
       "y": "12159625525884870422330032430672005661247751942203589223227079085807267845929"
     },
-    "operator": "e31cb284d66510192174fd58be09c777f6a76ebc25cefa90e5070e10f1c6f8bf",
-    "feePerGame": "200000",
-    "ticketPrice": "1200000",
-    "minSales": "600",
-    "maxSales": "7200",
-    "revealWindow": "600",
-    "drawWindow": "900",
-    "settleWindow": "3600"
+    "operator": "92435cd434008fd970b4bddd78986aa1213c83fa52b3504fdf2003260e014047",
+    "feePerGame": "300000",
+    "ticketPrice": "1300000",
+    "minSales": "21600",
+    "maxSales": "1209600",
+    "revealWindow": "3600",
+    "drawWindow": "7200",
+    "settleWindow": "86400",
+    "maxTicketsPerDraw": "10000",
+    "finalSales": "604800",
+    "mustBeWonAfter": "5"
   },
   "transactions": {
-    "deploy": "00289408f57ace90194579fcc48de071e78992285f0519f8425e13c8e990550fc8",
-    "acceptOracleKey": "00e5fb8a4c77ec98620e5c89d01d53d766634c424ae5e8c46a4e2b004f2a14cff2"
+    "deploy": "0071f4ac928c8b43943444195500704b068a041e308414dc7a0f5701fe22a53f31",
+    "acceptOracleKey": "00f5ae80b4d31ee3ac744c528c4f7063215e2d1978afcf76a77357789898059520"
   },
   "verifierKeys": {
-    "acceptOracleKey": "67290e92ea0e0e0d084856b42e8ca983346a3b5f04855b6962aa38d94b357919",
-    "buyTickets": "4fe9bf3ef48aea4d74c90cb8b20af4bf75f5434b39ee8c95ced54c3e9ccadf8c",
-    "changeOrganiser": "8e4723b937626e3b5f9a4f3597bbd9c94ec3ba8dbac6c6db88e84dc6af34b1c3",
-    "computeNumbers": "9477f778e0e2fffb6ce18f9c047cbdb2ecdcaef3c3deb3bd0e32e0a773aed445",
-    "finaliseDraw": "7bcf45ca4cc7296aa440a795c2759c6ed50464dfb053e85dedc5d598b88faed0",
-    "fulfilDraw": "e4e790bd7f09639e668e1a48b33c1b88dd4525d9f45db3b29d35f8caab472bd6",
-    "payEntitlement": "b36b5066b098981489fb8e1a8b5dae45e4928f42cafaaa44bf74c55349465622",
-    "proposeOracleKey": "eca5d897417c9356722d747c3b9bcfdabb5961b721142fc21828cd32253f3d76",
-    "refundTicket": "d436e1de751d39aeaa9aefbbcf2826fbe80cb1a9ab1ed180b7ca803640322456",
-    "requestDraw": "98876c2a3dd809fab61e7f932cf8ce32c0d2764c45f09cf2bc0cf7662031d074",
-    "settleBatch": "4e80c9510c336d6206a004b331bad6ef56023ad0e1cc451176a5fad56454073f",
-    "voidDraw": "1a2801d415440c953f2cadcf55b0c380ca0fd5660cb476920d5e4ffdd0436324"
+    "acceptOracleKey": "f2331336d02b0087ee31d5932c10d8aa9030e715fefdaff0be52f615b0e02cd8",
+    "buyTickets": "84e73e2a9ddf4bdf27a7642e35484b2d25a08945fd5af5dd85069b6991bdcc3f",
+    "changeOrganiser": "2f56f92b60ecfb0d3f697c91c126f78ce2449d243646a3d7277e4dc0fad0ec06",
+    "computeNumbers": "293713b543573e4147f92737cbe184cbf022053899ee961c136bc4c0c2966761",
+    "finaliseDraw": "f957fa243be80aaaafd18f3dfb5273890f626ad84b44f7fe871187cc594d8054",
+    "fulfilDraw": "2746e6769c150a33bd0c33c3991162367cc435eb69319033ef3b5bcbc3c8966b",
+    "payEntitlement": "1e728492df454038df6c0d728a6e57445134283fe96e54ea9ef4afe95e7773fd",
+    "proposeOracleKey": "c97af11c4ca4386c2c49639e9aaa9ea166bc75d3e99e71a483d7b2a77d2ab68a",
+    "refundTicket": "a3525940aa285c3d1d538daf8c4a05aebea925f296dc70bf3761bcfa1a0af21a",
+    "requestDraw": "323ccb5c1d342635f11f43e0d964dbec55cb88ca9fa7c5e5cd9e19ede9adfca7",
+    "settleBatch": "450828cf8b843803ec412e9b1fae80b0119bcf93c4bee52b0567ba17d52ecfc5",
+    "voidDraw": "fc3a34faa1711d679a9133f814c512a758747bd53ee01a57e45aa9163a3318e5"
   }
 }

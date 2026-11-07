@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -145,5 +145,45 @@ describe('the agent registry', () => {
     expect((await reg.directory()).agents[0]!.status).toBe('online');
     writeFileSync(feed, JSON.stringify({ games: { starfall: { open: { num: 15 }, draws } } }));
     expect((await reg.directory()).agents[0]!.status).toBe('idle');
+  });
+  it('starts a new season when the feed shows a new deployment: listings stay, numbers and events clear, and only reports for it count', async () => {
+    const { dir, house, feed } = setup();
+    const OLD = 'aa'.repeat(32);
+    const NEW = 'bb'.repeat(32);
+    writeFileSync(feed, JSON.stringify({ contracts: { starfall: OLD }, games: { starfall: { draws } } }));
+    writeFileSync(join(house, 'nova.state.json'), JSON.stringify({ ...state, contract: OLD }));
+    let t = Date.parse('2026-11-04T02:00:00.000Z');
+    const verifier = await ledgerVerifier('preprod');
+    const store = join(dir, 'store');
+    const reg = createRegistry({ network: 'preprod', dir: store, feedPath: feed, houseDir: house, verifier, isActive: async () => true, now: () => t });
+    const a = await walletSigner(SEED_A, 'preprod');
+    const stats = { draws: 1, games: 2, spent_star: 2_400_000, winning_games: 0, won_star: 0, last_draw: 211 };
+    const listing = { network: 'preprod', action: 'list' as const, name: 'OmegaCandle', style: 'QuickPicks', via: 'claude' as const, stats, contract: OLD };
+    expect(await reg.report(signedListing(a, listing, new Date(t)))).toBe('listed');
+    let d = await reg.directory();
+    expect(d.agents.find((x) => x.name === 'OmegaCandle')!.stats.games).toBe(2);
+    expect(d.agents.find((x) => x.name === 'NOVA')!.stats.games).toBe(3);
+
+    // the switch: the feed shows the new deployment
+    writeFileSync(feed, JSON.stringify({ contracts: { starfall: NEW }, games: { starfall: { draws: [] } } }));
+    d = await reg.directory();
+    expect(d.agents.find((x) => x.name === 'OmegaCandle')!.stats.games).toBe(0); // still listed, at zero
+    expect(d.agents.find((x) => x.name === 'NOVA')!.stats.games).toBe(0); // its state is the old deployment's
+    expect(d.events).toEqual([]);
+    expect(existsSync(join(store, `listings.${OLD.slice(0, 16)}.json`))).toBe(true);
+    // an old kit (no contract) or one still on the old deployment: seen, but its numbers don't count
+    t += 31_000;
+    expect(await reg.report(signedListing(a, { ...listing, contract: undefined, stats: { ...stats, games: 9 } }, new Date(t)))).toBe('updated');
+    t += 31_000;
+    expect(await reg.report(signedListing(a, { ...listing, stats: { ...stats, games: 9 } }, new Date(t)))).toBe('updated');
+    d = await reg.directory();
+    expect(d.agents.find((x) => x.name === 'OmegaCandle')!.stats.games).toBe(0);
+    expect(d.events).toEqual([]);
+    // a kit on the new deployment: counted
+    t += 31_000;
+    expect(await reg.report(signedListing(a, { ...listing, contract: NEW, stats: { ...stats, games: 1, last_draw: 1 } }, new Date(t)))).toBe('updated');
+    d = await reg.directory();
+    expect(d.agents.find((x) => x.name === 'OmegaCandle')!.stats.games).toBe(1);
+    expect(d.events[0]).toMatchObject({ agent: 'OmegaCandle', text: 'bought 1 game in draw 1' });
   });
 });

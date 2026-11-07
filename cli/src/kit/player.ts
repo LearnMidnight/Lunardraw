@@ -5,13 +5,13 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { Starfall } from '@lunardraw/contract';
-import { isStaleDustProof, type StarfallView } from '@lunardraw/keeper';
+import { isStaleDustProof, mustBeWonStatus, type StarfallView } from '@lunardraw/keeper';
 import { type Session, walletAddress, walletBalances } from '@nightcast/deploy';
 import { buyerProviders, buyWithRetry, proverArg } from '../buyer.js';
 import { publicDataFor, withSession } from '../common.js';
 import { BuyStopped, joinStarfall, pendingReverter, readStarfallRecord, readStarfallView, type RevertableWallet, starfallZkConfigPath } from '../starfall.js';
 import { type AgentState, describeResult, loadAgentState, type Result, saveAgentState, spentOnDraw, spentSince } from '../starfall-agent.js';
-import { describeEntry, parseUserAddress } from '../starfall-commands.js';
+import { describeEntry, entriesBought, parseUserAddress } from '../starfall-commands.js';
 import { openWallet } from '../wallet-lock.js';
 import { declareFeesAtDustTime, type DustTimeWallet } from '../dust-time.js';
 import { withFreshFees } from '../fresh-fees.js';
@@ -21,7 +21,18 @@ import { type KitConfig, kitPaths, limitsWhere, loadConfig, star, tNight } from 
 const { DrawStatus } = Starfall;
 const iso = (secs: bigint) => new Date(Number(secs) * 1000).toISOString();
 
-export type DrawOnSale = { draw: number; salesClose: string; minutesLeft: number; tickets: number; games: number; jackpotEstimate: string };
+export type DrawOnSale = {
+  draw: number;
+  salesClose: string;
+  minutesLeft: number;
+  tickets: number;
+  games: number;
+  jackpotEstimate: string;
+  /** The final draw: its jackpot must be won (an unwon one falls to the next division with a winner, and what no division takes is shared by every game). */
+  final?: { note: string };
+  /** Its jackpot must be won ('yes'), or will be if the draw before it rolls over too ('possible'). */
+  mustBeWon?: { status: 'yes' | 'possible'; note: string };
+};
 export type DrawResult = { draw: number; status: 'drawn' | 'settled' | 'void'; numbers?: number[]; moonball?: number; games: number; winningGames?: number };
 
 export type Overview = {
@@ -31,6 +42,8 @@ export type Overview = {
   onSale: DrawOnSale | null;
   /** The carried-over jackpot (Division 1 rollover) going into the next draw. */
   rollover: string;
+  /** The game has ended: its final draw has given everything out, and no draw will open again. */
+  ended?: true;
   recent: DrawResult[];
 };
 
@@ -47,6 +60,30 @@ export const overviewOf = (view: StarfallView, network: string, contract: string
         games: Number(selling.games),
         // Division 1's share of this draw's pool plus the rollover, if nobody else buys
         jackpotEstimate: tNight(view.carry + (pool(selling.games) * BigInt(Starfall.POWERBALL_SHARES_BP[0])) / 10_000n),
+        ...(selling.final
+          ? {
+              final: {
+                note:
+                  'This is the final draw of this game: its jackpot must be won. If nobody wins it, it falls to the next prize division ' +
+                  'with a winner, and whatever no division takes is shared equally by every game in this draw (paid to the address the ' +
+                  'ticket was bought from). No draw opens after it.',
+              },
+            }
+          : {}),
+        ...(() => {
+          const m = selling.final ? 'no' : mustBeWonStatus(view, selling.id);
+          if (m === 'no') return {};
+          const after = `${view.mustBeWonAfter} jackpot rollover(s) in a row`;
+          return {
+            mustBeWon: {
+              status: m,
+              note:
+                m === 'yes'
+                  ? `After ${after}, this draw's jackpot must be won: if nobody wins Division 1, it falls to the next prize division with a winner.`
+                  : `If the draw before this one doesn't pay out its jackpot either, that makes ${after}, and this draw's jackpot must be won.`,
+            },
+          };
+        })(),
       }
     : null;
   const recent: DrawResult[] = [...view.draws]
@@ -65,7 +102,7 @@ export const overviewOf = (view: StarfallView, network: string, contract: string
             winningGames: d.winners.reduce((a, w) => a + Number(w), 0),
           },
     );
-  return { network, contract, gamePrice: tNight(view.ticketPrice), onSale, rollover: tNight(view.carry), recent };
+  return { network, contract, gamePrice: tNight(view.ticketPrice), onSale, rollover: tNight(view.carry), ...(view.ended ? { ended: true as const } : {}), recent };
 };
 
 /** Read the draws from the chain (public data: no wallet, about a second). */
@@ -190,7 +227,7 @@ export const withPlayer = async <T>(config: KitConfig, seed: string, fn: (p: Pla
             if (!selling) throw new Error('no draw is on sale right now (or sales close within 3 minutes): try again when the next one opens');
             const games = entries.reduce((a, e) => a + Starfall.gamesOf(e), 0);
             const cost = view.ticketPrice * BigInt(games);
-            const state = loadAgentState(statePath);
+            const state = loadAgentState(statePath, record.contractAddress);
             // the limits as they are now: the owner may have changed them since the wallet opened
             const current = (() => {
               try {
@@ -205,7 +242,9 @@ export const withPlayer = async <T>(config: KitConfig, seed: string, fn: (p: Pla
             if (night < cost) throw new Error(`${games} game(s) cost ${tNight(cost)} but the wallet holds ${tNight(night)}: get more from the faucet`);
             if (dust <= 0n) throw new Error('the wallet has no DUST yet to pay the fee (it builds up a few minutes after tNIGHT arrives)');
             joined ??= await joinStarfall(providers, record.contractAddress, {});
-            const tickets = entries.map((e) => Starfall.makeTicket(selling.id, e, payTo));
+            const tickets = Starfall.ticketsFor(selling.id, entries, payTo);
+            const room = view.maxTicketsPerDraw > selling.tickets ? view.maxTicketsPerDraw - selling.tickets : 0n;
+            if (BigInt(tickets.length) > room) throw new Error(`draw ${selling.id} is full: room for ${room} more ticket(s), this needs ${tickets.length}; try the next draw`);
             log?.(`buying ${tickets.length} ticket(s), ${games} game(s), for draw ${selling.id} (sales close ${iso(selling.salesClose)}) for ${tNight(cost)}`);
             let bought = tickets.length;
             let message: string | undefined;
@@ -222,10 +261,10 @@ export const withPlayer = async <T>(config: KitConfig, seed: string, fn: (p: Pla
               message = err.message;
               txs = Math.ceil(err.bought / Number(Starfall.pureCircuits.maxTickets()));
             }
-            const done = entries.slice(0, bought);
+            const done = entriesBought(tickets, bought);
             const doneGames = done.reduce((a, e) => a + Starfall.gamesOf(e), 0);
             if (bought > 0) {
-              const fresh = loadAgentState(statePath); // re-read: another command may have written it meanwhile
+              const fresh = loadAgentState(statePath, record.contractAddress); // re-read: another command may have written it meanwhile
               fresh.purchases.push({ draw: selling.id.toString(), at: new Date().toISOString(), entries: done, games: doneGames, cost: (view.ticketPrice * BigInt(doneGames)).toString(), txs });
               saveAgentState(statePath, fresh);
             }

@@ -76,20 +76,25 @@ It prints `Starfall organiser commitment (public): ...` and 64 characters. Copy 
   --settlement ~/lunardraw-secrets/settlement.secret \
   --wallet ~/nightcast-secrets/requester-wallet.secret \
   --accept \
-  --min-sales 600 --max-sales 7200 --reveal 600 --draw 900 --settle 3600
+  --operator <the treasury's mn_addr_preprod1... address>
 ```
 
-The test timings, in seconds:
-- a draw sells for 10 minutes to 2 hours;
-- the keeper has 10 minutes to reveal the seed;
-- the oracle has 15 minutes to answer;
-- settlement must finish within an hour of the numbers.
+It uses the default settings, the real weekly game's, so the same contract runs **daily draws now and weekly draws later** (only the keeper's schedule changes):
+- a game costs 1.3 tNIGHT, 0.3 of it the operator's fee, which goes to `--operator` (the deploying wallet if you leave it out);
+- a draw sells for 6 hours to 14 days;
+- the keeper has 1 hour after sales close to reveal the seed, the oracle 2 hours to answer;
+- settlement must finish within 1 day of the numbers. Draws pay out in order, so a draw that can't be settled holds up the payouts of the draws after it until this deadline cancels it: a day keeps that to one daily draw. The monitor emails if a draw isn't settled 30 minutes after its numbers (it normally takes about 10);
+- at most 10,000 tickets a draw (a QuickPick ticket holds up to 12 games). That's below the roughly 15,000 the keeper can settle in a day, so a flood of purchases fills a draw (`draw is full`) instead of making it miss its deadline.
+- after 5 jackpot rollovers in a row, the next draw's jackpot must be won: if nobody wins Division 1, it falls to the next prize division with a winner (with daily draws, every 6th day it isn't won);
+- the final draw, when the game is wound down (`starfall last-draw`), sells for at least 7 days and its jackpot must be won, so no rollover is left locked in the contract (see "Switching to a new deployment" below).
 
-The price (1.3 tNIGHT) and fee (0.3 tNIGHT) are the defaults. The fee goes to the deploying wallet unless you add `--operator <address>`.
+`--min-sales`, `--max-sales`, `--reveal`, `--draw`, `--settle`, `--final-sales` (seconds), `--max-tickets` and `--must-be-won-after` change them. Keep `--max-tickets` below what can be settled within `--settle`: about 14 tickets a minute.
 
 It ends with a checklist that should be all **PASS**, including `the organiser secret can open draws`, and writes `deployments/starfall-preprod.json`. Send me the output (it's all public).
 
 ## Part 6: Run it
+
+The keeper service runs with `--daily`: a draw closes every day at 20:00 Brisbane. For weekly draws (Thursdays, 20:00 Brisbane), remove `--daily` from `/etc/systemd/system/lunardraw-starfall-keeper.service`, then `systemctl daemon-reload && systemctl restart lunardraw-starfall-keeper`. The draw on sale keeps its close time; the next one opens on the new schedule.
 
 ```bash
 cp deploy/systemd/lunardraw-starfall-*.service /etc/systemd/system/
@@ -109,16 +114,18 @@ Once the player wallet has synced and has tNIGHT, buy a package for the draw on 
   --package starter --proof-server-port 6300
 ```
 
-| Package | Games | Transactions |
-|---|---|---|
-| single | 1 | 1 |
-| starter | 4 | 2 |
-| mini | 8 | 4 |
-| regular | 12 | 6 |
-| mega | 25 | 13 |
-| maxi | 50 | 25 |
+| Package | Games | Tickets | Transactions |
+|---|---|---|---|
+| single | 1 | 1 | 1 |
+| starter | 4 | 1 | 1 |
+| mini | 8 | 1 | 1 |
+| regular | 12 | 1 | 1 |
+| super | 18 | 2 | 1 |
+| mega | 25 | 3 | 1 |
+| jumbo | 36 | 3 | 1 |
+| maxi | 50 | 5 | 1 |
 
-Or `--games <n>` for any number. Each transaction is a proof of up to 18 tickets (a minute or two and about 1.3 GB of memory): a Super or smaller is one transaction, a Maxi three. The numbers are printed when it's done: winnings go to the player wallet by themselves.
+Or `--games <n>` for any number. Standard games go 12 to a ticket (a contract with lines, 6 Nov 2026 and later), and each transaction is a proof of up to 7 tickets, 84 games: every package is one transaction. The numbers are printed when it's done: winnings go to the player wallet by themselves.
 
 System, Pick and Moonball Sweep entries are **one ticket each**, however many games they hold (a contract with entries, PR #41 and later):
 
@@ -204,12 +211,14 @@ Before a new Starfall deployment replaces this one, let this one finish cleanly,
 ./lunardraw starfall last-draw --network preprod
 ```
 
-The running keeper sees it within a minute (no restart; its log says "winding down"). The draw on sale closes, is drawn, settled and paid as usual, but **no new draw opens**. With nothing on sale, nobody can buy into the old deployment, an agent kit that still points at it included (it is told "no draw is on sale"). Check:
+The running keeper sees it within a minute (no restart; its log says "winding down"). The draw on sale finishes as usual, and the **next draw opens as the final draw**: it sells for at least 7 days (the contract's `finalSales`), and the site, the feed and the agent kit say it's the final draw. Its jackpot must be won: if nobody wins it, it falls to the next prize division with a winner, and whatever no division takes is shared equally by every game in it (the keeper pays each ticket's share to the address it was bought from). So the rollover goes to the players, and nothing is left locked in the contract. Nothing opens after the final draw, so nobody can buy into the old deployment, an agent kit that still points at it included (it is told the game has ended). Check:
 
 ```bash
 ./lunardraw starfall status --network preprod
 ```
 
-until it ends with **"Wound down: … Safe to switch to a new deployment."** Then deploy the new contract and switch the services over. `--undo` lets the keeper open draws again. The marker (`~/lunardraw-state/starfall-<contract>.last-draw`) is named after the contract, so it never affects the new one.
+until it ends with **"Wound down: … Safe to switch to a new deployment."** Then deploy the new contract and switch the services over. `--undo`, before the final draw has opened, lets the keeper carry on as normal; once the final draw is open, it runs to the end. The marker (`~/lunardraw-state/starfall-<contract>.last-draw`) is named after the contract, so it never affects the new one.
+
+If there's no rollover when you run it (every jackpot was won), no final draw is needed: the draw on sale finishes and that's it. A final draw that sells nothing keeps the rollover, and the keeper opens another.
 
 If a draw is cancelled while winding down, the keeper refunds every ticket before it counts as wound down; anyone can also void a draw past its deadline and refund it, so no stake can be stranded.

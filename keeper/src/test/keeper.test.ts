@@ -7,7 +7,7 @@ import { generateOperatorSecret, generateOracleSecretKey, pureCircuits as nightc
 import { combineDrawSeed, drawStarfall } from '@nightcast/sdk';
 import { type ChainView, type LunardrawChain, SimulatorChain } from '../chain.js';
 import { dueSteps, Keeper, stepKey } from '../keeper.js';
-import { every, STARFALL_WEEKLY, weekly } from '../schedule.js';
+import { daily, every, STARFALL_DAILY, STARFALL_WEEKLY, weekly } from '../schedule.js';
 import { commitmentOf, FileSeedStore, MemorySeedStore, type SeedStore } from '../seeds.js';
 
 const hex = (b: Uint8Array): string => Buffer.from(b).toString('hex');
@@ -395,6 +395,18 @@ describe('schedules', () => {
     // Too close to Thursday's close for the minimum sales period: next week.
     expect(iso(STARFALL_WEEKLY(at('2026-10-29T09:00:00Z'), 3_600))).toBe('2026-11-05T10:00:00.000Z');
     expect(iso(weekly({ weekday: 0, hour: 23, minute: 30 })(at('2026-10-26T00:00:00Z'), 60))).toBe('2026-11-01T23:30:00.000Z');
+  });
+
+  it('closes daily Starfall at 10:00 UTC (20:00 Brisbane), a day after the last when it opens just after a close', () => {
+    // Opened by the reveal a few minutes after Saturday's close: Sunday's, not Saturday's next hour.
+    expect(iso(STARFALL_DAILY(at('2026-11-07T10:06:00Z'), 21_600))).toBe('2026-11-08T10:00:00.000Z');
+    // Opened early in the day, with more than the minimum sales period to go: that day's.
+    expect(iso(STARFALL_DAILY(at('2026-11-07T03:00:00Z'), 21_600))).toBe('2026-11-07T10:00:00.000Z');
+    // Less than 6 hours (plus the margin) before today's close: tomorrow's.
+    expect(iso(STARFALL_DAILY(at('2026-11-07T04:00:00Z'), 21_600))).toBe('2026-11-08T10:00:00.000Z');
+    expect(iso(daily({ hour: 23, minute: 30 })(at('2026-11-07T00:00:00Z'), 60))).toBe('2026-11-07T23:30:00.000Z');
+    // The weekly schedule with the same 6-hour minimum still gives Thursdays only.
+    expect(iso(STARFALL_WEEKLY(at('2026-11-05T10:06:00Z'), 21_600))).toBe('2026-11-12T10:00:00.000Z');
   });
 
   it('closes on period boundaries for test networks', () => {

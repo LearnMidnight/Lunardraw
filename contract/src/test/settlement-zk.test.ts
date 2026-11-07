@@ -20,7 +20,7 @@ import { generateOperatorSecret, generateOracleSecretKey, oraclePublicKey, pureC
 import { combineDrawSeed, drawStarfall, seedCommitment } from '@nightcast/sdk';
 import { pureCircuits } from '../managed/settlement/contract/index.js';
 import { type ProofData, SettlementSimulator } from '../settlement-simulator.js';
-import { makeTicket, randomScalar } from '../settlement-tickets.js';
+import { GAMES_PER_TICKET, makeTicket, randomScalar, ticketsFor } from '../settlement-tickets.js';
 import { quickPick, type PlainLine } from '../tickets.js';
 
 const ZKIR = fileURLToPath(new URL('../managed/settlement/zkir/', import.meta.url));
@@ -62,7 +62,7 @@ const lineHitting = (numbers: number[], moonball: number, match: number): PlainL
   return { numbers: [...numbers.slice(0, match), ...misses.slice(0, 7 - match)], moonball };
 };
 
-const setup = (opts: { feePerGame?: bigint } = {}) => {
+const setup = (opts: { feePerGame?: bigint; mustBeWonAfter?: bigint } = {}) => {
   const runs: Run[] = [];
   const oracleSecretKey = generateOracleSecretKey();
   const organiserSecret = generateOperatorSecret();
@@ -72,6 +72,7 @@ const setup = (opts: { feePerGame?: bigint } = {}) => {
     settlementSecret: randomScalar(),
     operator: randomAddress(),
     feePerGame: opts.feePerGame,
+    mustBeWonAfter: opts.mustBeWonAfter,
     minSales: 600n,
     maxSales: 86_400n,
     revealWindow: 3_600n,
@@ -100,18 +101,24 @@ const allPass = async (runs: Run[]) => {
 };
 
 describe('every circuit run passes the zkir check', () => {
-  it('purchases of 1, 2 and 18 tickets, a settled draw with winners, payments to 1 and 3 payees', async () => {
+  it('purchases of 1, 2 and two of 7 full tickets, a settled draw with winning lines, payments to 1 and 3 payees', async () => {
     const { sim, runs, open } = setup();
     const { n, seed, draw } = open();
     const me = randomAddress();
     sim.buyTickets([makeTicket(n, quickPick(), me)], me);
     sim.buyTickets([makeTicket(n, quickPick(), me), makeTicket(n, quickPick(), me)], me);
-    // A full purchase: every slot used.
-    sim.buyTickets(Array.from({ length: Number(pureCircuits.maxTickets()) }, () => makeTicket(n, quickPick(), me)), me);
-    // A sure winner paid to one address, and one split between three payees.
+    // A full purchase: every slot used, every line of every ticket used.
+    const full = ticketsFor(n, Array.from({ length: Number(pureCircuits.maxTickets()) * GAMES_PER_TICKET }, () => quickPick()), me);
+    expect(full.length).toBe(Number(pureCircuits.maxTickets()));
+    sim.buyTickets(full, me);
+    sim.buyTickets(ticketsFor(n, Array.from({ length: Number(pureCircuits.maxTickets()) * GAMES_PER_TICKET }, () => quickPick()), me), me);
+    // Sure winners paid to one address (on its last line), and split between three payees (on its entry).
     sim.buyTickets(
       [
-        makeTicket(n, lineHitting(draw.numbers, draw.moonball, 3), randomAddress()),
+        makeTicket(n, quickPick(), randomAddress(), undefined, [
+          ...Array.from({ length: GAMES_PER_TICKET - 2 }, () => quickPick()),
+          lineHitting(draw.numbers, draw.moonball, 3),
+        ]),
         makeTicket(n, lineHitting(draw.numbers, draw.moonball, 4), [
           { address: randomAddress(), share: 5_000 },
           { address: randomAddress(), share: 3_000 },
@@ -122,10 +129,10 @@ describe('every circuit run passes the zkir check', () => {
     );
     sim.advance(3_601);
     // Reveal and open the next draw in one go.
-    sim.requestAndOpenNext(n, seed, { salesClose: BigInt(sim.now + 3_600), seedCommitment: new Uint8Array(32).fill(99) });
+    sim.requestAndOpenNext(n, seed, { salesClose: BigInt(sim.now + 3_600), seedCommitment: new Uint8Array(32).fill(99), final: false });
     sim.fulfilDraw(n);
     sim.computeNumbers(n);
-    expect(sim.settleAll(n)).toBe(2); // 23 tickets: a full batch of 22, then 1
+    expect(sim.settleAll(n)).toBe(2); // 19 tickets: a full batch of 14, then 5
     expect(sim.entitlementsOf(n).length).toBeGreaterThanOrEqual(2);
     const circuits = new Set(runs.map((r) => r.circuit));
     for (const c of ['buyTickets', 'requestDraw', 'fulfilDraw', 'computeNumbers', 'settleBatch', 'finaliseDraw', 'payEntitlement']) {
@@ -149,6 +156,82 @@ describe('every circuit run passes the zkir check', () => {
     sim.fulfilDraw(second.n);
     sim.computeNumbers(second.n);
     sim.settleAll(second.n);
+    expect(await allPass(runs)).toEqual([]);
+  }, 60_000);
+
+  it('a final draw: opened at a reveal and directly, a jackpot dropped to a winner, shares paid, an empty one and a void one', async () => {
+    const { sim, runs, open, oracleSecretKey } = setup();
+    const lose = (d: { numbers: number[]; moonball: number }): PlainLine => {
+      const misses = Array.from({ length: 35 }, (_, i) => i + 1).filter((x) => !d.numbers.includes(x));
+      return { numbers: [d.numbers[0], ...misses.slice(0, 6)], moonball: (d.moonball % 20) + 1 };
+    };
+    // A normal draw of losing games builds a rollover; its reveal opens a final draw.
+    const first = open();
+    sim.buyTickets([makeTicket(first.n, lose(first.draw), randomAddress()), makeTicket(first.n, lose(first.draw), randomAddress())], randomAddress());
+    sim.advance(3_601);
+    const seed = new Uint8Array(32).fill(77);
+    sim.requestAndOpenNext(first.n, first.seed, { salesClose: BigInt(sim.now + 3_600), seedCommitment: Uint8Array.from(Buffer.from(seedCommitment(hex(seed)), 'hex')), final: true });
+    const n = first.n + 1n;
+    const draw = drawStarfall(combineDrawSeed(hex(seed), nightcast.evaluate(oracleSecretKey, sim.alphaOf(n, seed)))) as { numbers: number[]; moonball: number };
+    sim.fulfilDraw(first.n);
+    sim.computeNumbers(first.n);
+    sim.settleAll(first.n);
+    // In the final draw, a division 9 winner (the jackpot falls to it) and losers, who share the remainder.
+    sim.buyTickets([makeTicket(n, lineHitting(draw.numbers, draw.moonball, 2), randomAddress()), makeTicket(n, lose(draw), randomAddress())], randomAddress());
+    sim.advance(3_601);
+    sim.requestDraw(n, seed);
+    sim.fulfilDraw(n);
+    sim.computeNumbers(n);
+    sim.settleAll(n);
+    const d = sim.getLedger().draws.lookup(n);
+    if (d.finalShare > 0n) {
+      sim.refundTicket(n, 0n);
+      sim.refundTicket(n, 1n);
+    }
+    expect(sim.getLedger().ended).toBe(true);
+    expect(await allPass(runs)).toEqual([]);
+
+    // An empty final draw keeps the rollover; a void one is refunded at the ticket price.
+    const other = setup();
+    const before = other.open();
+    other.sim.buyTickets([makeTicket(before.n, lose(before.draw), randomAddress())], randomAddress());
+    other.sim.advance(3_601);
+    other.sim.requestDraw(before.n, before.seed);
+    other.sim.fulfilDraw(before.n);
+    other.sim.computeNumbers(before.n);
+    other.sim.settleAll(before.n);
+    const emptySeed = new Uint8Array(32).fill(55);
+    const empty = other.sim.openDraw(BigInt(other.sim.now + 3_600), Uint8Array.from(Buffer.from(seedCommitment(hex(emptySeed)), 'hex')), other.sim.organiser, true);
+    other.sim.advance(3_601);
+    other.sim.requestDraw(empty, emptySeed);
+    other.sim.fulfilDraw(empty);
+    other.sim.computeNumbers(empty);
+    other.sim.settleAll(empty);
+    expect(other.sim.getLedger().carry).toBeGreaterThan(0n);
+    const voided = other.sim.openDraw(BigInt(other.sim.now + 3_600), new Uint8Array(32).fill(56), other.sim.organiser, true);
+    other.sim.buyTickets([makeTicket(voided, quickPick(), randomAddress())], randomAddress());
+    other.sim.advance(3_601 + 3_600);
+    other.sim.voidDraw(voided);
+    other.sim.refundTicket(voided, 0n);
+    expect(await allPass(other.runs)).toEqual([]);
+  }, 120_000);
+
+  it('a must-be-won draw: the jackpot dropped to a winner, and one with no winner anywhere', async () => {
+    const { sim, runs, open } = setup({ mustBeWonAfter: 1n });
+    const run = (build: (d: { n: bigint; numbers: number[]; moonball: number }) => ReturnType<typeof makeTicket>[]) => {
+      const { n, seed, draw } = open();
+      const ts = build({ n, ...draw });
+      if (ts.length) sim.buyTickets(ts, randomAddress());
+      sim.advance(3_601);
+      sim.requestDraw(n, seed);
+      sim.fulfilDraw(n);
+      sim.computeNumbers(n);
+      sim.settleAll(n);
+    };
+    run(() => []); // rolls over (nothing sold)
+    run(() => []); // must be won, nobody to win it
+    run((d) => [makeTicket(d.n, lineHitting(d.numbers, d.moonball, 3), randomAddress())]); // falls to division 8
+    expect(sim.getLedger().rollovers).toBe(0n);
     expect(await allPass(runs)).toEqual([]);
   }, 60_000);
 
@@ -192,7 +275,7 @@ describe('every circuit run passes the zkir check', () => {
       me,
     );
     sim.advance(3_601);
-    sim.requestAndOpenNext(n, seed, { salesClose: BigInt(sim.now + 3_600), seedCommitment: new Uint8Array(32).fill(98) });
+    sim.requestAndOpenNext(n, seed, { salesClose: BigInt(sim.now + 3_600), seedCommitment: new Uint8Array(32).fill(98), final: false });
     sim.fulfilDraw(n);
     sim.computeNumbers(n);
     expect(sim.settleAll(n)).toBe(1);

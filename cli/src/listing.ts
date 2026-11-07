@@ -227,6 +227,12 @@ export type ListingPayload = {
   month?: AgentStats & { since: string };
   wins?: AgentWin[];
   history?: AgentDraw[];
+  /**
+   * The Starfall deployment the stats are for (kit 0.1.9 on). The registry
+   * counts stats only for the deployment the site's feed shows: draw numbers
+   * start again at 1 with each one.
+   */
+  contract?: string;
   /** When it was signed (ISO); a report more than 10 minutes off is refused. */
   at: string;
 };
@@ -263,6 +269,7 @@ export const signedListing = (signer: Signer, p: Omit<ListingPayload, 'v' | 'key
     ...(p.month ? { month: p.month } : {}),
     ...(p.wins ? { wins: p.wins } : {}),
     ...(p.history ? { history: p.history } : {}),
+    ...(p.contract ? { contract: p.contract } : {}),
     at: now.toISOString(),
   } satisfies ListingPayload);
   return { payload, signature: signer.sign(listingMessage(payload)) };

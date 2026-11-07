@@ -123,7 +123,21 @@ describe('the monitor', () => {
     expect(keys(inputs({ feed: feed([{ ...asked, vrf_output: 'ff' }]) }))).toEqual([]); // answered
     const settling = draw(9, { status: 'settling', settle_deadline: iso(NOW + 40 * MIN), batches: 3, batches_done: 1 });
     const alerts = evaluate(inputs({ feed: feed([settling]) }), { ...emptyState(), lastVoid: 0 });
-    expect(alerts.map((a) => [a.key, a.detail])).toEqual([['settle:9', '1 of 3 settlement batches done.']]);
+    expect(alerts.map((a) => [a.key, a.title])).toEqual([['settle:9', "Draw 9 isn't settled yet: 40 min before it's cancelled"]]);
+    expect(alerts[0].detail).toMatch(/^1 of 3 settlement batches done\. It usually settles within about 10 minutes; 40 min are left/);
+  });
+
+  it('warns when a draw is still unsettled 30 minutes after its numbers, long before its deadline', () => {
+    const drawn = (m: number, extra = {}) =>
+      draw(20, { status: 'settling', settle_deadline: iso(NOW + 20 * 60 * MIN), batches: 2, batches_done: 1, timeline: { drawn_at: iso(NOW - m * MIN) }, ...extra });
+    expect(keys(inputs({ feed: feed([drawn(12)]) }))).toEqual([]); // still within the usual time
+    const late = evaluate(inputs({ feed: feed([drawn(31)]) }), { ...emptyState(), lastVoid: 0 });
+    expect(late.map((a) => [a.key, a.title])).toEqual([['settle:20', "Draw 20 isn't settled 31 min after its numbers"]]);
+    expect(late[0].detail).toMatch(/20 h are left before it is cancelled/);
+    // every batch done but not finalised: the draw before it is holding it up
+    const held = evaluate(inputs({ feed: feed([drawn(45, { batches_done: 2 })]) }), { ...emptyState(), lastVoid: 0 });
+    expect(held[0].detail).toMatch(/finalising waits for the draw before it/);
+    expect(keys(inputs({ feed: feed([drawn(45, { status: 'settled' })]) }))).toEqual([]);
   });
 
   it('reports each void draw once, with why, but not the ones there before it started', () => {

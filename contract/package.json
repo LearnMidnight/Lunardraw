@@ -24,6 +24,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "gen:batch": "python3 scripts/gen-batch.py",
+    "gen:lines": "python3 scripts/gen-lines.py",
     "compact:settlement": "compact compile src/settlement.compact src/managed/settlement"
   },
   "dependencies": {

@@ -6,7 +6,7 @@ import { generateOperatorSecret, generateOracleSecretKey, oraclePublicKey } from
 import { onChainFingerprints } from '@nightcast/deploy';
 import { MidnightBech32m, UnshieldedAddress } from '@midnight-ntwrk/wallet-sdk-address-format';
 import { pureCircuits as v0 } from '@lunardraw/contract';
-import { buyEntries, describeEntry, lastDrawMarker, organiserCheck, parseUserAddress, starfallOrganiserCommitment, windDownStatus } from '../starfall-commands.js';
+import { buyEntries, describeEntry, describeTickets, drawRoom, entriesBought, lastDrawMarker, organiserCheck, parseUserAddress, starfallOrganiserCommitment, windDownStatus } from '../starfall-commands.js';
 import {
   buyGames,
   BuyStopped,
@@ -105,7 +105,9 @@ describe('MidnightStarfallChain', () => {
     });
     expect((await keeper.tick()).done).toEqual(['open after 0']);
     const buyer = webcrypto.getRandomValues(new Uint8Array(32));
-    const games = Array.from({ length: 30 }, () => Starfall.makeTicket(1n, quickPick(), buyer));
+    // A full batch and part of the next (an even number: they're bought two at a time).
+    const count = Number(Starfall.pureCircuits.batchSize()) + 8;
+    const games = Array.from({ length: count }, () => Starfall.makeTicket(1n, quickPick(), buyer));
     for (let i = 0; i < games.length; i += 2) {
       await m.store.set(STARFALL_PRIVATE_STATE_ID, { pendingTickets: games.slice(i, i + 2) });
       await m.calls.callTx.buyTickets(BigInt(games.slice(i, i + 2).length), { bytes: buyer });
@@ -122,7 +124,7 @@ describe('MidnightStarfallChain', () => {
     // Each batch saw every ticket of the draw, beside the organiser secret ...
     expect(m.seen).toHaveLength(2);
     for (const s of m.seen) {
-      expect(s.settling?.tickets).toHaveLength(30);
+      expect(s.settling?.tickets).toHaveLength(count);
       expect(s.organiserSecret).toBe(organiserSecret);
     }
     // ... and the private state is back to just the organiser secret.
@@ -172,6 +174,9 @@ describe('verifyStarfall', () => {
         revealWindow: 1_800n,
         drawWindow: 1_800n,
         settleWindow: 7_200n,
+        maxTicketsPerDraw: 4_294_967_295n,
+        finalSales: 600n,
+        mustBeWonAfter: 0n,
       }),
       transactions: {},
       verifierKeys: fps,
@@ -195,9 +200,23 @@ describe('verifyStarfall', () => {
     ]);
     const other = { ...record, parameters: { ...p, operator: '00'.repeat(32), feePerGame: '100000' } };
     const checks = verifyStarfall(other, state);
-    expect(failing(checks)).toEqual(['price, fee and windows match']);
+    expect(failing(checks)).toEqual(['price, fee, windows and ticket limit match']);
     expect(checks.find((c) => !c.ok)!.detail).toMatch(/operator .*feePerGame 200000/);
+    const capped = verifyStarfall({ ...record, parameters: { ...p, maxTicketsPerDraw: '10000' } }, state);
+    expect(capped.find((c) => !c.ok)!.detail).toBe('maxTicketsPerDraw 4294967295 (record 10000)');
+    const notice = verifyStarfall({ ...record, parameters: { ...p, finalSales: '604800' } }, state);
+    expect(notice.find((c) => !c.ok)!.detail).toBe('finalSales 600 (record 604800)');
+    const cap = verifyStarfall({ ...record, parameters: { ...p, mustBeWonAfter: '5' } }, state);
+    expect(cap.find((c) => !c.ok)!.detail).toBe('mustBeWonAfter 0 (record 5)');
     expect(failing(verifyStarfall(record, null))).toEqual(['contract exists']);
+  });
+});
+
+describe('drawRoom', () => {
+  it('is what a draw can still sell before "draw is full"', () => {
+    expect(drawRoom({ maxTicketsPerDraw: 10_000n }, { tickets: 9_990n })).toBe(10n);
+    expect(drawRoom({ maxTicketsPerDraw: 10_000n }, { tickets: 10_000n })).toBe(0n);
+    expect(drawRoom({ maxTicketsPerDraw: 5n }, { tickets: 7n })).toBe(0n);
   });
 });
 
@@ -225,10 +244,14 @@ describe("Starfall's organiser commitment", () => {
 });
 
 describe('winding a deployment down', () => {
-  const view = (draws: { id: bigint; status: Starfall.DrawStatus; unrefunded?: bigint[] }[], paid = true) =>
+  type D = { id: bigint; status: Starfall.DrawStatus; unrefunded?: bigint[]; final?: boolean; games?: bigint };
+  const view = (draws: D[], paid = true, more: Partial<StarfallView> = {}) =>
     ({
-      draws: draws.map((d) => ({ unrefunded: [], ...d })),
+      carry: 0n,
+      ended: false,
+      draws: draws.map((d) => ({ unrefunded: [], final: false, games: 1n, ...d })),
       entitlements: [{ id: new Uint8Array(32), drawId: 1n, games: [], paid }],
+      ...more,
     }) as unknown as StarfallView;
 
   it('names the marker after the contract, so a new deployment is never wound down by an old one', () => {
@@ -236,20 +259,37 @@ describe('winding a deployment down', () => {
     expect(lastDrawMarker('abc123')).not.toBe(lastDrawMarker('def456'));
   });
 
-  it('says safe to switch only when every draw is finished, paid and refunded', () => {
-    const { settled, voided, drawn } = { settled: Starfall.DrawStatus.settled, voided: Starfall.DrawStatus.voided, drawn: Starfall.DrawStatus.drawn };
+  it('says safe to switch only when every draw is finished, paid and refunded, and no rollover is left', () => {
+    const { settled, voided, drawn, open } = {
+      settled: Starfall.DrawStatus.settled,
+      voided: Starfall.DrawStatus.voided,
+      drawn: Starfall.DrawStatus.drawn,
+      open: Starfall.DrawStatus.open,
+    };
     expect(windDownStatus(view([{ id: 1n, status: settled }, { id: 2n, status: voided }]))).toMatch(/^Wound down: .* Safe to switch/);
     expect(windDownStatus(view([{ id: 1n, status: settled }, { id: 2n, status: drawn }]))).toBe(
-      'Winding down: no new draws will open. Still in progress: draw 2.',
+      'Winding down: the next draw to open is the final draw (its jackpot must be won). Still in progress: draw 2.',
     );
     expect(windDownStatus(view([{ id: 1n, status: settled }], false))).toMatch(/in progress: payments or refunds/);
     expect(windDownStatus(view([{ id: 1n, status: voided, unrefunded: [0n] }]))).toMatch(/in progress: payments or refunds/);
+    // A rollover still waiting: not until a final draw has given it out.
+    expect(windDownStatus(view([{ id: 1n, status: settled }], true, { carry: 5n }))).toMatch(/^Winding down: the next draw to open is the final draw/);
+    expect(windDownStatus(view([{ id: 1n, status: settled }, { id: 2n, status: open, final: true }], true, { carry: 5n }))).toBe(
+      'Winding down: draw 2 is the final draw (its jackpot must be won); nothing opens after it. Still in progress: draw 2.',
+    );
+    expect(
+      windDownStatus(view([{ id: 1n, status: settled }, { id: 2n, status: settled, final: true, unrefunded: [3n] }], true, { ended: true })),
+    ).toBe('Winding down: the final draw has given out the rollover. Still in progress: payments or refunds.');
+    expect(windDownStatus(view([{ id: 1n, status: settled }, { id: 2n, status: settled, final: true }], true, { ended: true }))).toMatch(
+      /^Wound down: .* Safe to switch/,
+    );
   });
 });
 
 describe('buyGames', () => {
   const store = { setContractAddress() {}, async set() {} };
-  // 40 tickets: 18 a purchase, so 18, 18, then 4.
+  // 40 tickets: 7 a purchase, so 7, 7, 7, 7, 7, then 5.
+  const M = Number(Starfall.pureCircuits.maxTickets());
   const games = Array.from({ length: 40 }, () => Starfall.makeTicket(1n, quickPick(), OPERATOR));
   const calls = (buy: () => Promise<unknown>) => ({ callTx: { buyTickets: buy } }) as unknown as StarfallCalls;
 
@@ -258,7 +298,7 @@ describe('buyGames', () => {
     const hangs = calls(() => (++n === 2 ? new Promise(() => {}) : Promise.resolve()));
     const err = await buyGames(hangs, store, 'addr', games, OPERATOR, { timeoutMs: 50 }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(BuyStopped);
-    expect((err as BuyStopped).bought).toBe(18);
+    expect((err as BuyStopped).bought).toBe(M);
     expect((err as BuyStopped).of).toBe(40);
     expect((err as BuyStopped).message).toMatch(/didn't land/);
   });
@@ -271,20 +311,20 @@ describe('buyGames', () => {
     let n = 0;
     const fails = calls(() => (++n === 3 ? Promise.reject(new Error('sales have closed')) : Promise.resolve()));
     const err = await buyGames(fails, store, 'addr', games, OPERATOR).catch((e: unknown) => e);
-    expect((err as BuyStopped).bought).toBe(36);
+    expect((err as BuyStopped).bought).toBe(2 * M);
     expect((err as BuyStopped).message).toBe('sales have closed');
-    expect(await buyGames(ok, store, 'addr', games, OPERATOR)).toBe(3);
+    expect(await buyGames(ok, store, 'addr', games, OPERATOR)).toBe(Math.ceil(40 / M));
   });
 
   it("counts a purchase the wallet lost track of if the chain has it, and not if it doesn't", async () => {
     let n = 0;
     const hangs = calls(() => (++n === 2 ? new Promise(() => {}) : Promise.resolve()));
     const went = await buyGames(hangs, store, 'addr', games, OPERATOR, { timeoutMs: 50, onChain: async (p) => p.map(() => true) }).catch((e: unknown) => e);
-    expect((went as BuyStopped).bought).toBe(36);
+    expect((went as BuyStopped).bought).toBe(2 * M);
     expect((went as BuyStopped).message).toMatch(/did go in/);
     n = 0;
     const lost = await buyGames(hangs, store, 'addr', games, OPERATOR, { timeoutMs: 50, onChain: async (p) => p.map(() => false) }).catch((e: unknown) => e);
-    expect((lost as BuyStopped).bought).toBe(18);
+    expect((lost as BuyStopped).bought).toBe(M);
     expect((lost as BuyStopped).message).toMatch(/didn't go in/);
     // one that didn't land gives the wallet its coins back; one that did, doesn't
     let reverts = 0;
@@ -301,7 +341,7 @@ describe('buyGames', () => {
         throw new Error('indexer down');
       },
     }).catch((e: unknown) => e);
-    expect((unknown as BuyStopped).bought).toBe(18);
+    expect((unknown as BuyStopped).bought).toBe(M);
     expect((unknown as BuyStopped).message).toMatch(/couldn't be checked/);
   });
 
@@ -363,6 +403,23 @@ describe('buy: what to buy', () => {
     expect(Starfall.entryName(system8)).toBe('System 8');
     const [pick6] = buyEntries({ pick: '6', numbers: '4 8 15 16 23 34', moonball: '1' });
     expect(Starfall.gamesOf(pick6)).toBe(29);
+  });
+
+  it('packs QuickPicks 12 to a ticket, lists each game, and knows which games a stopped purchase bought', () => {
+    const me = new Uint8Array(32).fill(7);
+    const entries = buyEntries({ package: 'maxi' });
+    const tickets = Starfall.ticketsFor(1n, entries, me);
+    expect(tickets.map(Starfall.ticketGames)).toEqual([12, 12, 12, 12, 2]);
+    const listing = describeTickets(tickets).split('\n');
+    expect(listing).toHaveLength(50);
+    expect(listing[0]).toMatch(/^  ticket 1, game 1: standard: .* \(1 game\)$/);
+    expect(listing[49]).toMatch(/^  ticket 5, game 2: standard: /);
+    expect(describeTickets(Starfall.ticketsFor(1n, buyEntries({ system: '9' }), me))).toMatch(/^  ticket 1: System 9: /);
+    // Stopped after 2 of 5 tickets: 24 of the 50 games are in.
+    const done = entriesBought(tickets, 2);
+    expect(done).toHaveLength(24);
+    const key = (e: { numbers: number[]; moonball?: number }) => [...e.numbers].sort((a, b) => a - b).join(' ') + '/' + e.moonball;
+    expect(done.map(key)).toEqual(entries.slice(0, 24).map(key));
   });
 
   it('refuses what the contract would', () => {

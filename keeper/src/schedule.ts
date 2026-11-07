@@ -34,6 +34,19 @@ export const weekly =
   };
 
 /**
+ * Daily at a fixed UTC time: the next one at least the minimum sales period
+ * away. `daily({ hour: 10 })` is 20:00 Brisbane every day.
+ */
+export const daily =
+  ({ hour, minute = 0 }: { hour: number; minute?: number }): Schedule =>
+  (nowSecs, minSalesSecs) => {
+    if (hour < 0 || hour > 23 || minute < 0 || minute > 59) throw new Error('daily: hour 0-23, minute 0-59');
+    const earliest = nowSecs + minSalesSecs + OPENING_MARGIN_SECS;
+    const t = Math.floor(earliest / DAY) * DAY + hour * 3600 + minute * 60;
+    return BigInt(t >= earliest ? t : t + DAY);
+  };
+
+/**
  * Every `periodSecs`, on multiples of the period (e.g. every 30 minutes on the
  * hour and half hour). For test networks.
  */
@@ -47,3 +60,9 @@ export const every =
 
 /** The Starfall schedule: Thursdays 20:00 Brisbane (10:00 UTC). */
 export const STARFALL_WEEKLY = weekly({ weekday: 4, hour: 10 });
+
+/**
+ * Starfall's test schedule: every day at 20:00 Brisbane (10:00 UTC), the
+ * weekly draw's time, so the same deployment can move to weekly draws.
+ */
+export const STARFALL_DAILY = daily({ hour: 10 });

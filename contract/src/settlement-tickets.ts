@@ -1,5 +1,5 @@
 import { webcrypto } from 'node:crypto';
-import type { Entry, Payee, TicketPreimage } from './managed/settlement/contract/index.js';
+import type { Entry, Line, Payee, TicketPreimage } from './managed/settlement/contract/index.js';
 import { divisionFor, quickPick, type PlainLine } from './tickets.js';
 
 /**
@@ -113,6 +113,28 @@ export const checkEntry = (e: PlainEntry): void => {
   }
 };
 
+/**
+ * Extra standard games ("lines") a ticket carries beside its entry: the
+ * contract's `maxLines()`. A ticket of standard games holds up to
+ * GAMES_PER_TICKET of them, so a QuickPick package of up to 12 is one ticket.
+ */
+export const MAX_LINES = 11;
+/** Most standard games in one ticket: its entry and its lines. */
+export const GAMES_PER_TICKET = MAX_LINES + 1;
+
+/** Whether an entry is a standard game (7 numbers and a Moonball): the kind a ticket's lines can hold. */
+export const isStandard = (e: PlainEntry): boolean => !e.pick && !e.sweep && e.numbers.length === 7;
+
+const NO_LINE: Line = { numbers: Array.from({ length: 7 }, () => 0n), moonball: 0n };
+
+/** The contract's form of a line (a standard game). */
+export const toLine = (l: PlainLine): Line => {
+  const e: PlainEntry = { numbers: l.numbers, moonball: l.moonball };
+  if (!isStandard(e)) throw new Error('a line is a standard game: 7 numbers and a Moonball');
+  checkEntry(e);
+  return { numbers: [...l.numbers].sort((a, b) => a - b).map(BigInt), moonball: BigInt(l.moonball) };
+};
+
 /** The contract's form of an entry. */
 export const toEntry = (e: PlainEntry): Entry => {
   checkEntry(e);
@@ -128,19 +150,25 @@ export const toEntry = (e: PlainEntry): Entry => {
 };
 
 /**
- * Build a Starfall ticket (one entry) for draw `drawId`, paid to `payees`: a
- * single address (the whole prize) or up to three payees whose shares add up
- * to 10000. Numbers may be in any order. `salt` defaults to a random field element (31 random bytes).
- * The buyer doesn't need to keep it: the settlement key holder decrypts the
- * ticket from the chain, and refunds go to the address given at purchase.
+ * Build a Starfall ticket for draw `drawId`: one entry, plus up to MAX_LINES
+ * extra standard games (`lines`), paid to `payees`: a single address (the
+ * whole prize) or up to three payees whose shares add up to 10000. Numbers
+ * may be in any order. `salt` defaults to a random field element (31 random
+ * bytes). The buyer doesn't need to keep it: the settlement key holder
+ * decrypts the ticket from the chain, and refunds go to the address given at
+ * purchase. `ticketsFor` packs a list of entries into as few tickets as it can.
  */
 export const makeTicket = (
   drawId: number | bigint,
   entry: PlainEntry | PlainLine,
   payees: Uint8Array | PlainPayee[],
   salt?: bigint,
+  lines: readonly PlainLine[] = [],
 ): TicketPreimage => {
   const e = toEntry(entry);
+  if (lines.length > MAX_LINES) throw new Error(`a ticket has at most ${MAX_LINES} lines beside its entry`);
+  const ls = lines.map(toLine);
+  while (ls.length < MAX_LINES) ls.push(NO_LINE);
   const list = payees instanceof Uint8Array ? [{ address: payees, share: WHOLE }] : payees;
   if (list.length < 1 || list.length > MAX_PAYEES) throw new Error(`a ticket has 1 to ${MAX_PAYEES} payees`);
   for (const p of list) {
@@ -153,9 +181,38 @@ export const makeTicket = (
   return {
     drawId: BigInt(drawId),
     entry: e,
+    lines: ls,
     payees: out,
     salt: salt ?? randomSalt(),
   };
+};
+
+/**
+ * The tickets for a list of entries, all paid to `payees`: standard games
+ * GAMES_PER_TICKET to a ticket (the first as its entry, the rest as its
+ * lines), and every other entry (a System, a Pick, Moonball Sweep) a ticket
+ * of its own. The games, and so the price, are the same as one ticket each;
+ * a purchase and its settlement just take fewer tickets.
+ */
+export const ticketsFor = (
+  drawId: number | bigint,
+  entries: readonly (PlainEntry | PlainLine)[],
+  payees: Uint8Array | PlainPayee[],
+): TicketPreimage[] => {
+  const out: TicketPreimage[] = [];
+  let group: PlainLine[] = [];
+  const flush = () => {
+    if (group.length) out.push(makeTicket(drawId, group[0], payees, undefined, group.slice(1)));
+    group = [];
+  };
+  for (const e of entries) {
+    if (isStandard(e)) {
+      group.push({ numbers: e.numbers, moonball: e.moonball as number });
+      if (group.length === GAMES_PER_TICKET) flush();
+    } else out.push(makeTicket(drawId, e, payees));
+  }
+  flush();
+  return out;
 };
 
 /**
@@ -175,28 +232,45 @@ export const QUICK_PICK_PACKAGES = {
 
 export type QuickPickPackage = keyof typeof QUICK_PICK_PACKAGES;
 
-/** The games of a QuickPick package for draw `drawId`, all paid to `payees`. */
+/**
+ * A QuickPick package for draw `drawId`, all paid to `payees`: its random
+ * games, GAMES_PER_TICKET to a ticket (a Maxi of 50 is 5 tickets).
+ */
 export const quickPickPackage = (
   drawId: number | bigint,
   pkg: QuickPickPackage,
   payees: Uint8Array | PlainPayee[],
-): TicketPreimage[] => Array.from({ length: QUICK_PICK_PACKAGES[pkg] }, () => makeTicket(drawId, quickPick(), payees));
+): TicketPreimage[] => ticketsFor(drawId, Array.from({ length: QUICK_PICK_PACKAGES[pkg] }, () => quickPick()), payees);
 
 /** A ticket with every field zero: fills the unused slots of a purchase and of a draw's last settlement batch. */
 export const emptyTicket = (drawId: bigint): TicketPreimage => ({
   drawId,
   entry: { kind: 0n, count: 0n, numbers: Array.from({ length: MAX_NUMBERS }, () => 0n), moonball: 0n, sweep: false },
+  lines: Array.from({ length: MAX_LINES }, () => NO_LINE),
   payees: [NO_PAYEE, NO_PAYEE, NO_PAYEE],
   salt: 0n,
 });
 
-/** A ticket's entry as plain numbers. */
+/** A ticket's entry as plain numbers (without its lines: see entriesOf). */
 export const entryOf = (t: TicketPreimage): PlainEntry => ({
   numbers: t.entry.numbers.slice(0, Number(t.entry.count)).map(Number),
   moonball: Number(t.entry.moonball),
   pick: t.entry.kind === 1n,
   sweep: t.entry.sweep,
 });
+
+/** The lines a ticket uses, as plain numbers. */
+export const linesOf = (t: TicketPreimage): PlainLine[] =>
+  t.lines.filter((l) => l.moonball !== 0n).map((l) => ({ numbers: l.numbers.map(Number), moonball: Number(l.moonball) }));
+
+/** Everything a ticket plays: its entry, then each line it uses (as a standard entry). */
+export const entriesOf = (t: TicketPreimage): PlainEntry[] => [
+  entryOf(t),
+  ...linesOf(t).map((l) => ({ numbers: l.numbers, moonball: l.moonball })),
+];
+
+/** Games in a ticket: its entry's and one per line (what its buyer paid for). */
+export const ticketGames = (t: TicketPreimage): number => entriesOf(t).reduce((a, e) => a + gamesOf(e), 0);
 
 /** Every game in an entry, as lines (a Pick 5 + Moonball Sweep is 8,700). */
 export const gamesIn = (e: PlainEntry): PlainLine[] => {
@@ -227,6 +301,13 @@ export const gamesByDivisionFor = (e: PlainEntry, numbers: number[], moonball: n
   return out;
 };
 
+/** A ticket's winning games per division: its entry's and its lines' (the reference for `ticketDivisions`). */
+export const ticketDivisionsFor = (t: TicketPreimage, numbers: number[], moonball: number): bigint[] =>
+  entriesOf(t).reduce(
+    (acc, e) => gamesByDivisionFor(e, numbers, moonball).map((g, i) => acc[i] + g),
+    Array.from({ length: 9 }, () => 0n),
+  );
+
 /** Random scalar for sealing a ticket (31 random bytes, so always below the field size). */
 export const randomScalar = (): bigint => {
   const b = webcrypto.getRandomValues(new Uint8Array(31));
@@ -247,12 +328,16 @@ export const splitPrize = (prize: bigint, shares: readonly bigint[]): bigint[] =
  * share of the pool; the rollover joins division 1; an unwon division 2..8
  * falls to the next lower division with a winner; an unwon division 1 or 9,
  * rounding remainders, and what the floored shares leave of the pool (at
- * most 8 STAR) roll over.
+ * most 8 STAR) roll over. When the jackpot must be won (`final`: a final
+ * draw, or one after mustBeWonAfter rollovers) an unwon division 1 falls too,
+ * like 2..8. In a final draw what's left over (`carry`) is then shared by
+ * every game sold (`finalDrawShare`) instead of rolling over.
  */
 export const prizesByPowerballRules = (
   pool: bigint,
   carryIn: bigint,
   winners: readonly bigint[],
+  final = false,
 ): { prizes: bigint[]; carry: bigint } => {
   const prizes: bigint[] = [];
   let cascade = 0n;
@@ -270,7 +355,7 @@ export const prizesByPowerballRules = (
       cascade = 0n;
     } else {
       prizes.push(0n);
-      if (j === 0 || j === 8) {
+      if ((j === 0 && !final) || j === 8) {
         carry += amount;
         cascade = 0n;
       } else cascade = amount;
@@ -278,6 +363,14 @@ export const prizesByPowerballRules = (
   });
   return { prizes, carry: carry + (pool - allocated) };
 };
+
+/**
+ * How a final draw gives out what no division took (`left`): an equal share
+ * per game sold, and the last fraction of a STAR per game to the operator. A
+ * final draw that sold nothing keeps it as rollover.
+ */
+export const finalDrawShare = (left: bigint, games: bigint): { share: bigint; dust: bigint; carry: bigint } =>
+  games === 0n ? { share: 0n, dust: 0n, carry: left } : { share: left / games, dust: left % games, carry: 0n };
 
 /** What a draw's settlement must come to, worked out off-chain from the plain tickets. */
 export type ExpectedSettlement = {
@@ -297,6 +390,9 @@ export type ExpectedSettlement = {
   payouts: Map<string, bigint>;
   /** Each ticket's winning games per division, in index order. */
   won: bigint[][];
+  /** A final draw's share per game of what no division took, and the fraction of a STAR per game left over (to the operator). */
+  finalShare: bigint;
+  dust: bigint;
 };
 
 /**
@@ -311,14 +407,19 @@ export const expectedSettlement = (
   price: bigint,
   feePerGame: bigint,
   carryIn: bigint,
+  final = false,
+  /** The jackpot must be won (a final draw, or after mustBeWonAfter rollovers). */
+  mustWin = final,
 ): ExpectedSettlement => {
-  const won = tickets.map((t) => gamesByDivisionFor(entryOf(t), numbers, moonball));
+  const won = tickets.map((t) => ticketDivisionsFor(t, numbers, moonball));
   const winners = [0, 1, 2, 3, 4, 5, 6, 7, 8].map((j) => won.reduce((a, w) => a + w[j], 0n));
-  const games = tickets.reduce((a, t) => a + BigInt(gamesOf(entryOf(t))), 0n);
+  const games = tickets.reduce((a, t) => a + BigInt(ticketGames(t)), 0n);
   const sales = price * games;
   const fee = feePerGame * games;
   const pool = sales - fee;
-  const { prizes, carry } = prizesByPowerballRules(pool, carryIn, winners);
+  const rules = prizesByPowerballRules(pool, carryIn, winners, mustWin);
+  const { prizes } = rules;
+  const { share: finalShare, dust, carry } = final ? finalDrawShare(rules.carry, games) : { share: 0n, dust: 0n, carry: rules.carry };
   const payouts = new Map<string, bigint>();
   tickets.forEach((t, i) => {
     const prize = won[i].reduce((a, g, j) => a + g * prizes[j], 0n);
@@ -330,5 +431,5 @@ export const expectedSettlement = (
       payouts.set(k, (payouts.get(k) ?? 0n) + amounts[j]);
     });
   });
-  return { winners, games, sales, fee, pool, prizes, carry, payouts, won };
+  return { winners, games, sales, fee, pool, prizes, carry, payouts, won, finalShare, dust };
 };

@@ -21,10 +21,13 @@ import {
   starfallSteps,
   type StarfallView,
   storedTicketsOf,
+  mustBeWonStatus,
   woundDown,
 } from '../starfall.js';
 
 const { DrawStatus, SettlementSimulator, makeTicket, randomScalar } = Starfall;
+/** Tickets that take two settlement batches: a full one and part of the next. */
+const TWO_BATCHES = Number(Starfall.pureCircuits.batchSize()) + 8;
 type Sim = InstanceType<typeof SettlementSimulator>;
 
 const hex = (b: Uint8Array): string => Buffer.from(b).toString('hex');
@@ -38,7 +41,7 @@ const REVEAL = 1_800;
 const DRAW = 1_800;
 const SETTLE = 7_200;
 
-const setup = () => {
+const setup = (opts: { finalSales?: bigint } = {}) => {
   const oracleSecretKey = generateOracleSecretKey();
   const organiserSecret = generateOperatorSecret();
   const settlementSecret = randomScalar();
@@ -54,6 +57,7 @@ const setup = () => {
     revealWindow: BigInt(REVEAL),
     drawWindow: BigInt(DRAW),
     settleWindow: BigInt(SETTLE),
+    finalSales: opts.finalSales,
   });
   const chain = new StarfallSimulatorChain(sim);
   const seeds = new DerivedSeeds(organiserSecret, sim.addressBytes);
@@ -109,13 +113,13 @@ describe('the Starfall keeper', () => {
     expect((await keeper.tick()).done).toEqual(['open after 0']);
     expect(draw(sim, 1n).status).toBe(DrawStatus.open);
 
-    // 30 games: two batches. One is a sure winner (3 + Moonball); the rest are QuickPicks.
+    // Two batches of tickets. One is a sure winner (3 + Moonball); the rest are QuickPicks.
     const { numbers, moonball } = numbersOf(ctx, 1n);
     const winner = randomAddress();
     const games = [makeTicket(1n, lineHitting(numbers, moonball, 3), winner)];
-    for (let i = 0; i < 29; i++) games.push(makeTicket(1n, quickPick(), randomAddress()));
+    for (let i = 1; i < TWO_BATCHES; i++) games.push(makeTicket(1n, quickPick(), randomAddress()));
     sim.buyPackage(games, BUYER);
-    expect(sim.ticketsSold(1n)).toBe(30n);
+    expect(sim.ticketsSold(1n)).toBe(BigInt(TWO_BATCHES));
 
     passing(sim, draw(sim, 1n).salesClose);
     expect((await keeper.tick()).done).toEqual(['reveal 1']);
@@ -127,11 +131,11 @@ describe('the Starfall keeper', () => {
     // One batch a pass, in order, until every ticket is settled.
     expect((await keeper.tick()).done).toEqual(['settle 1 from 0']);
     expect((await keeper.tick()).done).toEqual([`settle 1 from ${Starfall.pureCircuits.batchSize()}`]);
-    expect(sim.getLedger().progress.lookup(1n).next).toBe(30n);
+    expect(sim.getLedger().progress.lookup(1n).next).toBe(BigInt(TWO_BATCHES));
     expect((await keeper.tick()).done).toEqual(['finalise 1']);
     const settled = draw(sim, 1n);
     expect(settled.status).toBe(DrawStatus.settled);
-    expect(settled.fee).toBe(30n * FEE);
+    expect(settled.fee).toBe(BigInt(TWO_BATCHES) * FEE);
 
     // Then every entitlement is paid, the sure winner's among them.
     const ids = sim.entitlementsOf(1n);
@@ -144,37 +148,60 @@ describe('the Starfall keeper', () => {
     expect((await keeper.tick()).done).toEqual([]);
   }, 120_000);
 
-  it('winds down when told to: reveals the draw on sale without opening another, then finishes it and says so', async () => {
-    const ctx = setup();
+  it('winds down when told to: the next draw is the final draw, which gives out the rollover, and then nothing opens', async () => {
+    const ctx = setup({ finalSales: 2n * BigInt(SALES) });
     const { sim } = ctx;
     let last = false;
     const said: string[] = [];
     const log = (m: string) => said.push(m);
-    const keeper = ctx.keeper({ openNew: () => !last, logger: { info: log, warn: log, error: log } });
+    const keeper = ctx.keeper({ finalDraw: () => last, logger: { info: log, warn: log, error: log } });
     expect((await keeper.tick()).done).toEqual(['open after 0']);
     const { numbers, moonball } = numbersOf(ctx, 1n);
     sim.buyTickets([makeTicket(1n, lineHitting(numbers, moonball, 3), randomAddress()), makeTicket(1n, quickPick(), randomAddress())], BUYER);
     // Told to wind down while draw 1 is selling.
     last = true;
     await keeper.tick();
-    expect(said.some((m) => /winding down: no new draws/.test(m))).toBe(true);
+    expect(said.some((m) => /winding down: the next draw to open will be the final draw/.test(m))).toBe(true);
     passing(sim, draw(sim, 1n).salesClose);
     expect((await keeper.tick()).done).toEqual(['reveal 1']);
-    expect(sim.getLedger().lastDraw).toBe(1n); // no draw 2
+    // Draw 2 is the final draw, selling for at least finalSales.
+    const final = draw(sim, 2n);
+    expect(final.final).toBe(true);
+    expect(Number(final.salesClose) - sim.now).toBeGreaterThanOrEqual(2 * SALES);
     oracleAnswers(sim);
     for (let pass = 0; pass < 10; pass++) await keeper.tick();
     expect(draw(sim, 1n).status).toBe(DrawStatus.settled);
-    for (const id of sim.entitlementsOf(1n)) expect(sim.getLedger().entitlements.lookup(id).paid).toBe(true);
-    // Nothing on sale, nothing owed: it says so once, and never opens a draw.
+    const carried = sim.getLedger().carry;
+    expect(carried).toBeGreaterThan(0n);
+    expect(woundDown(await ctx.chain.view())).toBe(false);
+    // Players buy into the final draw: losing games only, so they share everything.
+    const n2 = numbersOf(ctx, 2n);
+    const losing = { numbers: Array.from({ length: 35 }, (_, i) => i + 1).filter((x) => !n2.numbers.includes(x)).slice(0, 7), moonball: (n2.moonball % 20) + 1 };
+    const players = [randomAddress(), randomAddress(), randomAddress()];
+    for (const p of players) sim.buyTickets([makeTicket(2n, losing, p)], p);
+    passing(sim, final.salesClose);
+    expect((await keeper.tick()).done).toEqual(['reveal 2']);
+    expect(sim.getLedger().lastDraw).toBe(2n); // nothing opens after the final draw
+    oracleAnswers(sim);
+    for (let pass = 0; pass < 10; pass++) await keeper.tick();
+    const l = sim.getLedger();
+    expect(l.draws.lookup(2n).status).toBe(DrawStatus.settled);
+    expect(l.ended).toBe(true);
+    expect(l.carry).toBe(0n);
+    const share = l.draws.lookup(2n).finalShare;
+    expect(share).toBe((carried + 3n * (PRICE - FEE)) / 3n);
+    // Every player's share is paid to the address they bought with.
+    for (let i = 0n; i < 3n; i++) expect(l.tickets.lookup(Starfall.pureCircuits.ticketKey(2n, i)).refunded).toBe(true);
+    if (sim.payments) for (const p of players) expect(sim.payments.some((x) => x.to === hex(p) && x.amount === share)).toBe(true);
+    // Nothing more: it says so once, and never opens a draw, even told to carry on.
     sim.advance(5 * SALES);
     for (let pass = 0; pass < 3; pass++) expect((await keeper.tick()).done).toEqual([]);
-    expect(sim.getLedger().lastDraw).toBe(1n);
-    expect(said.filter((m) => /^wound down: .*safe to switch/.test(m))).toHaveLength(1);
+    expect(said.filter((m) => /^wound down: .*the final draw gave out the rollover.*safe to switch/.test(m))).toHaveLength(1);
     expect(woundDown(await ctx.chain.view())).toBe(true);
-    // Told to carry on again, it opens the next draw.
     last = false;
-    expect((await keeper.tick()).done).toEqual(['open after 1']);
-  }, 120_000);
+    expect((await keeper.tick()).done).toEqual([]);
+    expect(sim.getLedger().lastDraw).toBe(2n);
+  }, 180_000);
 
   it('counts a void draw as wound down only once every ticket is refunded', async () => {
     const ctx = setup();
@@ -193,6 +220,35 @@ describe('the Starfall keeper', () => {
     await keeper.tick();
     expect(woundDown(await ctx.chain.view())).toBe(true);
   }, 60_000);
+
+  it('settles QuickPick tickets of 12 games in one batch and pays a winning line', async () => {
+    const ctx = setup();
+    const { sim } = ctx;
+    const keeper = ctx.keeper();
+    await keeper.tick(); // open 1
+    const { numbers, moonball } = numbersOf(ctx, 1n);
+    const winner = randomAddress();
+    // 84 games in 7 tickets, one purchase: the sure winner is the last line of a full ticket.
+    const games = Array.from({ length: 84 }, () => quickPick());
+    games[23] = lineHitting(numbers, moonball, 3);
+    const tickets = Starfall.ticketsFor(1n, games, winner);
+    expect(tickets.length).toBe(7);
+    expect(Starfall.linesOf(tickets[1]).length).toBe(11);
+    expect(sim.buyPackage(tickets, BUYER)).toBe(1);
+    passing(sim, draw(sim, 1n).salesClose);
+    await keeper.tick(); // reveal
+    oracleAnswers(sim);
+    await keeper.tick(); // compute
+    expect((await keeper.tick()).done).toEqual(['settle 1 from 0']);
+    expect((await keeper.tick()).done).toEqual(['finalise 1']);
+    expect(draw(sim, 1n).fee).toBe(84n * FEE);
+    expect(sim.getLedger().progress.lookup(1n).winners[7]).toBeGreaterThanOrEqual(1n); // the 3 + Moonball
+    for (let pass = 0; pass < 10 && sim.entitlementsOf(1n).some((id) => !sim.getLedger().entitlements.lookup(id).paid); pass++) {
+      await keeper.tick();
+    }
+    for (const id of sim.entitlementsOf(1n)) expect(sim.getLedger().entitlements.lookup(id).paid).toBe(true);
+    if (sim.payments) expect(sim.payments.some((p) => p.to === hex(winner) && p.amount > 0n)).toBe(true);
+  }, 120_000);
 
   it('finalises an unsold draw straight away, and draws in order', async () => {
     const ctx = setup();
@@ -344,7 +400,7 @@ describe('the standby keeper', () => {
     const primary = ctx.keeper({ openNew: false });
     const standby = ctx.keeper({ role: 'standby', openNew: false, takeOverAfterSecs: 300 });
     openFirst(ctx);
-    sim.buyPackage(Array.from({ length: 30 }, () => makeTicket(1n, quickPick(), randomAddress())), BUYER);
+    sim.buyPackage(Array.from({ length: TWO_BATCHES }, () => makeTicket(1n, quickPick(), randomAddress())), BUYER);
     passing(sim, draw(sim, 1n).salesClose);
     await primary.tick(); // reveal
     oracleAnswers(sim);
@@ -387,9 +443,9 @@ describe('the standby keeper', () => {
     const refund = (i: bigint): StarfallStep => ({ kind: 'refund', draw: 1n, index: i });
     expect([0, 1, 2, 3].map((n) => shareOf(pay(n), 2))).toEqual([0, 1, 0, 1]);
     expect([0n, 1n, 2n].map((i) => shareOf(refund(i), 3))).toEqual([0, 1, 2]);
-    expect(shareOf({ kind: 'open' }, 2)).toBeUndefined();
-    expect(isMine({ kind: 'open' }, 'primary', { index: 0, of: 2 })).toBe(true);
-    expect(isMine({ kind: 'open' }, 'standby', { index: 1, of: 2 })).toBe(false);
+    expect(shareOf({ kind: 'open', final: false }, 2)).toBeUndefined();
+    expect(isMine({ kind: 'open', final: false }, 'primary', { index: 0, of: 2 })).toBe(true);
+    expect(isMine({ kind: 'open', final: false }, 'standby', { index: 1, of: 2 })).toBe(false);
     expect(isMine(refund(1n), 'standby', { index: 1, of: 2 })).toBe(true);
     expect(isMine(refund(1n), 'primary', { index: 0, of: 2 })).toBe(false);
     expect(() => setup().keeper({ split: { index: 2, of: 2 } })).toThrow(/split/);
@@ -425,7 +481,12 @@ describe('the Starfall plan', () => {
     revealWindow: 600n,
     drawWindow: 600n,
     settleWindow: 3_600n,
+    maxTicketsPerDraw: 10_000n,
     carry: 0n,
+    finalSales: 1_200n,
+    ended: false,
+    mustBeWonAfter: 5n,
+    rollovers: 0n,
     oracleKeyReady: true,
     settlementKey: { x: 0n, y: 0n },
     entitlements: [],
@@ -449,6 +510,9 @@ describe('the Starfall plan', () => {
       carried: 0n,
       fee: 0n,
       prizes: [],
+      final: false,
+      mustBeWon: false,
+      finalShare: 0n,
       unrefunded: [],
       refundedGames: 0n,
       ...d,
@@ -484,7 +548,7 @@ describe('the Starfall plan', () => {
     // Past it: void, then open, then the refunds.
     expect(starfallSteps(view, 740, { ...opts, openNew: true })).toEqual([
       { kind: 'void', draw: 2n, reason: 'its seed was not revealed in time' },
-      { kind: 'open' },
+      { kind: 'open', final: false },
       { kind: 'refund', draw: 1n, index: 3n },
       { kind: 'refund', draw: 1n, index: 4n },
     ]);
@@ -495,8 +559,60 @@ describe('the Starfall plan', () => {
 
   it("doesn't open or reveal without the organiser's seeds", () => {
     const view = base([{ status: DrawStatus.open, salesClose: 100n, revealDeadline: 2_000n }]);
-    expect(starfallSteps(view, 200, { ...opts, openNew: true })).toEqual([{ kind: 'reveal', draw: 1n, openNext: true }]);
+    expect(starfallSteps(view, 200, { ...opts, openNew: true })).toEqual([{ kind: 'reveal', draw: 1n, openNext: true, final: false }]);
     expect(starfallSteps(view, 200, { ...opts, openNew: true, organise: false })).toEqual([]);
+  });
+
+  it('winding down, announces the final draw when the draw on sale is revealed, and opens nothing while it runs or once the game has ended', () => {
+    const wind = { ...opts, openNew: true, final: true };
+    const selling = base([{ status: DrawStatus.open, salesClose: 100n, revealDeadline: 2_000n }]);
+    expect(starfallSteps(selling, 200, wind)).toEqual([{ kind: 'reveal', draw: 1n, openNext: true, final: true }]);
+    // The final draw itself is revealed without opening another.
+    const finalSelling = base([{ status: DrawStatus.settled }, { status: DrawStatus.open, final: true, salesClose: 100n, revealDeadline: 2_000n }]);
+    expect(starfallSteps(finalSelling, 200, wind)).toEqual([{ kind: 'reveal', draw: 2n, openNext: false, final: false }]);
+    expect(starfallSteps(finalSelling, 200, { ...opts, openNew: true })).toEqual([{ kind: 'reveal', draw: 2n, openNext: false, final: false }]);
+    // While it settles, nothing opens, even when no longer winding down.
+    const finalDrawn = base([{ status: DrawStatus.settled }, { final: true, tickets: 3n, settled: 3n }]);
+    expect(starfallSteps(finalDrawn, 200, { ...opts, openNew: true })).toEqual([{ kind: 'finalise', draw: 2n }]);
+    // Once it has given everything out, its shares are paid and nothing more opens.
+    const ended = { ...base([{ status: DrawStatus.settled }, { status: DrawStatus.settled, final: true, finalShare: 5n, unrefunded: [0n, 2n] }]), ended: true };
+    expect(starfallSteps(ended, 200, { ...opts, openNew: true })).toEqual([
+      { kind: 'refund', draw: 2n, index: 0n, share: true },
+      { kind: 'refund', draw: 2n, index: 2n, share: true },
+    ]);
+  });
+
+  it("says when a draw's jackpot must be won: after the rollovers, or possibly, while a draw before it is still settling", () => {
+    const selling = (rollovers: bigint, before: StarfallView['draws'][number]['status'] = DrawStatus.settled) => ({
+      ...base([{ status: before }, { status: DrawStatus.open }]),
+      rollovers,
+    });
+    expect(mustBeWonStatus(selling(4n), 2n)).toBe('no');
+    expect(mustBeWonStatus(selling(5n), 2n)).toBe('yes');
+    expect(mustBeWonStatus(selling(4n, DrawStatus.drawn), 2n)).toBe('possible');
+    expect(mustBeWonStatus(selling(3n, DrawStatus.drawn), 2n)).toBe('no');
+    // With the rule off, only a final draw.
+    expect(mustBeWonStatus({ ...selling(9n), mustBeWonAfter: 0n }, 2n)).toBe('no');
+    const final = base([{ status: DrawStatus.settled }, { status: DrawStatus.open, final: true }]);
+    expect(mustBeWonStatus({ ...final, mustBeWonAfter: 0n }, 2n)).toBe('yes');
+    // The feed passes it on with the draw on sale.
+    const feed = buildStarfallFeed(selling(5n), { network: 'local', contract: 'x', nowSecs: 0 });
+    expect(feed.games.starfall.open?.must_be_won).toBe('yes');
+    expect(feed.games.starfall).toMatchObject({ must_be_won_after: 5, rollovers: 5 });
+    expect(buildStarfallFeed(selling(1n), { network: 'local', contract: 'x', nowSecs: 0 }).games.starfall.open?.must_be_won).toBeUndefined();
+  });
+
+  it('winding down with nothing selling, opens a final draw only if there is a rollover to give out', () => {
+    const wind = { ...opts, openNew: true, final: true };
+    const after = (carry: bigint, d: Partial<StarfallView['draws'][number]>[] = [{ status: DrawStatus.settled }]) => ({ ...base(d), carry });
+    expect(starfallSteps(after(0n), 200, wind)).toEqual([]);
+    expect(starfallSteps(after(5_000n), 200, wind)).toEqual([{ kind: 'open', final: true }]);
+    // A void or empty final draw kept the rollover: another final draw opens.
+    expect(starfallSteps(after(5_000n, [{ status: DrawStatus.voided, final: true }]), 200, wind)).toEqual([{ kind: 'open', final: true }]);
+    // Not until the draws before it are finished, so the rollover is known.
+    expect(starfallSteps(after(5_000n, [{ status: DrawStatus.settled }, { status: DrawStatus.drawn, tickets: 1n, settled: 0n }]), 200, wind)).toEqual([
+      { kind: 'settle', draw: 2n, from: 0n, of: 1n },
+    ]);
   });
 });
 
@@ -509,7 +625,7 @@ describe('the Starfall site feed', () => {
     await keeper.tick();
     const { numbers, moonball } = numbersOf(ctx, 1n);
     const games = [makeTicket(1n, lineHitting(numbers, moonball, 3), randomAddress())];
-    for (let i = 0; i < 29; i++) games.push(makeTicket(1n, quickPick(), randomAddress()));
+    for (let i = 1; i < TWO_BATCHES; i++) games.push(makeTicket(1n, quickPick(), randomAddress()));
     sim.buyPackage(games, BUYER);
 
     let f = await feed();
@@ -517,7 +633,7 @@ describe('the Starfall site feed', () => {
     expect(game.price_star).toBe(1_200_000);
     expect(game.fee_star).toBe(200_000);
     expect(game.allocation_bp).toEqual([3350, 185, 230, 200, 150, 940, 730, 1550, 2665]);
-    expect(game.open).toMatchObject({ num: 1, games_sold: 30 });
+    expect(game.open).toMatchObject({ num: 1, games_sold: TWO_BATCHES });
     // the monitor warns before the reveal deadline
     expect(game.open!.reveal_deadline).toBe(new Date(Number(draw(sim, 1n).revealDeadline) * 1000).toISOString());
     expect(game.draws).toEqual([]);
@@ -541,7 +657,7 @@ describe('the Starfall site feed', () => {
     d1 = (await feed()).games.starfall.draws.find((d) => d.num === 1)!;
     expect(d1.status).toBe('settled');
     // The site's check: prizes and rollover by Powerball's rules from the games sold and the winners.
-    const pool = 30n * (PRICE - FEE);
+    const pool = BigInt(TWO_BATCHES) * (PRICE - FEE);
     const expected = Starfall.prizesByPowerballRules(pool, BigInt(d1.carried_in_star!), d1.winners!.map(BigInt));
     expect(d1.prizes_star).toEqual(expected.prizes.map(Number));
     expect(d1.carry_out_star).toBe(Number(expected.carry));

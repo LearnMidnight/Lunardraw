@@ -20,7 +20,7 @@ import {
 import { type SettlementPrivateState, settlementWitnesses } from './settlement-witnesses.js';
 
 const COIN_PUBLIC_KEY = '0'.repeat(64);
-const NO_NEXT = { is_some: false, value: { salesClose: 0n, seedCommitment: new Uint8Array(32) } };
+const NO_NEXT = { is_some: false, value: { salesClose: 0n, seedCommitment: new Uint8Array(32), final: false } };
 
 export type SettlementSimulatorOptions = {
   oracleSecretKey: bigint;
@@ -40,6 +40,12 @@ export type SettlementSimulatorOptions = {
   revealWindow?: bigint;
   drawWindow?: bigint;
   settleWindow?: bigint;
+  /** Most tickets a draw may sell (default 4,294,967,295: no practical limit). */
+  maxTicketsPerDraw?: bigint;
+  /** Shortest sales period of a final draw (default: minSales). */
+  finalSales?: bigint;
+  /** Jackpot rollovers in a row before a draw's jackpot must be won (default 0: never). */
+  mustBeWonAfter?: bigint;
   /** Starting block time, seconds since the epoch. */
   now?: number;
   /** Activate the oracle key right after deployment (default true). */
@@ -156,6 +162,9 @@ export class SettlementSimulator {
       opts.revealWindow ?? 3_600n,
       opts.drawWindow ?? 3_600n,
       opts.settleWindow ?? 86_400n,
+      opts.maxTicketsPerDraw ?? 4_294_967_295n,
+      opts.finalSales ?? opts.minSales ?? 600n,
+      opts.mustBeWonAfter ?? 0n,
     );
     this.state = result.currentContractState;
     if (opts.acceptKey ?? true) this.acceptOracleKey();
@@ -273,10 +282,10 @@ export class SettlementSimulator {
     this.changeOrganiser(commitment, as);
   }
 
-  /** Open the next draw without revealing one (`requestDraw(0, …, next)`); returns its number. */
-  openDraw(salesClose: bigint, seedCommitment: Uint8Array, as: SettlementPrivateState = this.organiser): bigint {
+  /** Open the next draw without revealing one (`requestDraw(0, …, next)`), a final draw if `final`; returns its number. */
+  openDraw(salesClose: bigint, seedCommitment: Uint8Array, as: SettlementPrivateState = this.organiser, final = false): bigint {
     this.run(as, (ctx) =>
-      this.contract.impureCircuits.requestDraw(ctx, 0n, new Uint8Array(32), { is_some: true, value: { salesClose, seedCommitment } }),
+      this.contract.impureCircuits.requestDraw(ctx, 0n, new Uint8Array(32), { is_some: true, value: { salesClose, seedCommitment, final } }),
     );
     return this.getLedger().lastDraw;
   }

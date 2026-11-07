@@ -5,6 +5,7 @@ export type {
   Ledger,
   Draw,
   TicketPreimage,
+  Line,
   TicketRecord,
   SealedTicket,
   Payee,
