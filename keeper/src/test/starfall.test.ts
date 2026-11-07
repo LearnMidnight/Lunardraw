@@ -21,6 +21,7 @@ import {
   starfallSteps,
   type StarfallView,
   storedTicketsOf,
+  mustBeWonStatus,
   woundDown,
 } from '../starfall.js';
 
@@ -227,11 +228,11 @@ describe('the Starfall keeper', () => {
     await keeper.tick(); // open 1
     const { numbers, moonball } = numbersOf(ctx, 1n);
     const winner = randomAddress();
-    // 156 games in 13 tickets, one purchase: the sure winner is the last line of a full ticket.
-    const games = Array.from({ length: 156 }, () => quickPick());
+    // 84 games in 7 tickets, one purchase: the sure winner is the last line of a full ticket.
+    const games = Array.from({ length: 84 }, () => quickPick());
     games[23] = lineHitting(numbers, moonball, 3);
     const tickets = Starfall.ticketsFor(1n, games, winner);
-    expect(tickets.length).toBe(13);
+    expect(tickets.length).toBe(7);
     expect(Starfall.linesOf(tickets[1]).length).toBe(11);
     expect(sim.buyPackage(tickets, BUYER)).toBe(1);
     passing(sim, draw(sim, 1n).salesClose);
@@ -240,7 +241,7 @@ describe('the Starfall keeper', () => {
     await keeper.tick(); // compute
     expect((await keeper.tick()).done).toEqual(['settle 1 from 0']);
     expect((await keeper.tick()).done).toEqual(['finalise 1']);
-    expect(draw(sim, 1n).fee).toBe(156n * FEE);
+    expect(draw(sim, 1n).fee).toBe(84n * FEE);
     expect(sim.getLedger().progress.lookup(1n).winners[7]).toBeGreaterThanOrEqual(1n); // the 3 + Moonball
     for (let pass = 0; pass < 10 && sim.entitlementsOf(1n).some((id) => !sim.getLedger().entitlements.lookup(id).paid); pass++) {
       await keeper.tick();
@@ -484,6 +485,8 @@ describe('the Starfall plan', () => {
     carry: 0n,
     finalSales: 1_200n,
     ended: false,
+    mustBeWonAfter: 5n,
+    rollovers: 0n,
     oracleKeyReady: true,
     settlementKey: { x: 0n, y: 0n },
     entitlements: [],
@@ -508,6 +511,7 @@ describe('the Starfall plan', () => {
       fee: 0n,
       prizes: [],
       final: false,
+      mustBeWon: false,
       finalShare: 0n,
       unrefunded: [],
       refundedGames: 0n,
@@ -576,6 +580,26 @@ describe('the Starfall plan', () => {
       { kind: 'refund', draw: 2n, index: 0n, share: true },
       { kind: 'refund', draw: 2n, index: 2n, share: true },
     ]);
+  });
+
+  it("says when a draw's jackpot must be won: after the rollovers, or possibly, while a draw before it is still settling", () => {
+    const selling = (rollovers: bigint, before: StarfallView['draws'][number]['status'] = DrawStatus.settled) => ({
+      ...base([{ status: before }, { status: DrawStatus.open }]),
+      rollovers,
+    });
+    expect(mustBeWonStatus(selling(4n), 2n)).toBe('no');
+    expect(mustBeWonStatus(selling(5n), 2n)).toBe('yes');
+    expect(mustBeWonStatus(selling(4n, DrawStatus.drawn), 2n)).toBe('possible');
+    expect(mustBeWonStatus(selling(3n, DrawStatus.drawn), 2n)).toBe('no');
+    // With the rule off, only a final draw.
+    expect(mustBeWonStatus({ ...selling(9n), mustBeWonAfter: 0n }, 2n)).toBe('no');
+    const final = base([{ status: DrawStatus.settled }, { status: DrawStatus.open, final: true }]);
+    expect(mustBeWonStatus({ ...final, mustBeWonAfter: 0n }, 2n)).toBe('yes');
+    // The feed passes it on with the draw on sale.
+    const feed = buildStarfallFeed(selling(5n), { network: 'local', contract: 'x', nowSecs: 0 });
+    expect(feed.games.starfall.open?.must_be_won).toBe('yes');
+    expect(feed.games.starfall).toMatchObject({ must_be_won_after: 5, rollovers: 5 });
+    expect(buildStarfallFeed(selling(1n), { network: 'local', contract: 'x', nowSecs: 0 }).games.starfall.open?.must_be_won).toBeUndefined();
   });
 
   it('winding down with nothing selling, opens a final draw only if there is a rollover to give out', () => {

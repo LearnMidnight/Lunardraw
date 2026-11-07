@@ -176,6 +176,7 @@ describe('verifyStarfall', () => {
         settleWindow: 7_200n,
         maxTicketsPerDraw: 4_294_967_295n,
         finalSales: 600n,
+        mustBeWonAfter: 0n,
       }),
       transactions: {},
       verifierKeys: fps,
@@ -205,6 +206,8 @@ describe('verifyStarfall', () => {
     expect(capped.find((c) => !c.ok)!.detail).toBe('maxTicketsPerDraw 4294967295 (record 10000)');
     const notice = verifyStarfall({ ...record, parameters: { ...p, finalSales: '604800' } }, state);
     expect(notice.find((c) => !c.ok)!.detail).toBe('finalSales 600 (record 604800)');
+    const cap = verifyStarfall({ ...record, parameters: { ...p, mustBeWonAfter: '5' } }, state);
+    expect(cap.find((c) => !c.ok)!.detail).toBe('mustBeWonAfter 0 (record 5)');
     expect(failing(verifyStarfall(record, null))).toEqual(['contract exists']);
   });
 });
@@ -285,7 +288,7 @@ describe('winding a deployment down', () => {
 
 describe('buyGames', () => {
   const store = { setContractAddress() {}, async set() {} };
-  // 40 tickets: 13 a purchase, so 13, 13, 13, then 1.
+  // 40 tickets: 7 a purchase, so 7, 7, 7, 7, 7, then 5.
   const M = Number(Starfall.pureCircuits.maxTickets());
   const games = Array.from({ length: 40 }, () => Starfall.makeTicket(1n, quickPick(), OPERATOR));
   const calls = (buy: () => Promise<unknown>) => ({ callTx: { buyTickets: buy } }) as unknown as StarfallCalls;

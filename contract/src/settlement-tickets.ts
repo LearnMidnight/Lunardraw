@@ -328,9 +328,10 @@ export const splitPrize = (prize: bigint, shares: readonly bigint[]): bigint[] =
  * share of the pool; the rollover joins division 1; an unwon division 2..8
  * falls to the next lower division with a winner; an unwon division 1 or 9,
  * rounding remainders, and what the floored shares leave of the pool (at
- * most 8 STAR) roll over. In a final draw (`final`) an unwon division 1 falls
- * too, like 2..8; what's left over (`carry`) is then shared by every game
- * sold (`finalDrawShare`) instead of rolling over.
+ * most 8 STAR) roll over. When the jackpot must be won (`final`: a final
+ * draw, or one after mustBeWonAfter rollovers) an unwon division 1 falls too,
+ * like 2..8. In a final draw what's left over (`carry`) is then shared by
+ * every game sold (`finalDrawShare`) instead of rolling over.
  */
 export const prizesByPowerballRules = (
   pool: bigint,
@@ -407,6 +408,8 @@ export const expectedSettlement = (
   feePerGame: bigint,
   carryIn: bigint,
   final = false,
+  /** The jackpot must be won (a final draw, or after mustBeWonAfter rollovers). */
+  mustWin = final,
 ): ExpectedSettlement => {
   const won = tickets.map((t) => ticketDivisionsFor(t, numbers, moonball));
   const winners = [0, 1, 2, 3, 4, 5, 6, 7, 8].map((j) => won.reduce((a, w) => a + w[j], 0n));
@@ -414,7 +417,7 @@ export const expectedSettlement = (
   const sales = price * games;
   const fee = feePerGame * games;
   const pool = sales - fee;
-  const rules = prizesByPowerballRules(pool, carryIn, winners, final);
+  const rules = prizesByPowerballRules(pool, carryIn, winners, mustWin);
   const { prizes } = rules;
   const { share: finalShare, dust, carry } = final ? finalDrawShare(rules.carry, games) : { share: 0n, dust: 0n, carry: rules.carry };
   const payouts = new Map<string, bigint>();

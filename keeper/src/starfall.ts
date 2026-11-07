@@ -69,6 +69,8 @@ export type StarfallDrawView = {
   prizes: bigint[];
   /** The final draw: its jackpot must be won. */
   final: boolean;
+  /** Its jackpot had to be won (a final draw, or after mustBeWonAfter rollovers); fixed when finalised. */
+  mustBeWon: boolean;
   /** A finalised final draw's share per game of what no division took (0 otherwise). */
   finalShare: bigint;
   /**
@@ -99,6 +101,9 @@ export type StarfallView = {
   finalSales: bigint;
   /** A final draw has given everything out: no draw can open again. */
   ended: boolean;
+  /** Jackpot rollovers in a row before a draw's jackpot must be won (0: never), and the rollovers so far. */
+  mustBeWonAfter: bigint;
+  rollovers: bigint;
   oracleKeyReady: boolean;
   oracleKeyChange?: { key: { x: bigint; y: bigint }; at: bigint; approved: boolean };
   /** The key tickets are encrypted to. */
@@ -124,6 +129,8 @@ export const starfallViewOf = (l: Starfall.Ledger): StarfallView => ({
   carry: l.carry,
   finalSales: l.finalSales,
   ended: l.ended,
+  mustBeWonAfter: l.mustBeWonAfter,
+  rollovers: l.rollovers,
   oracleKeyReady: l.oracleKeyReady,
   oracleKeyChange: l.proposedOracleKey.is_some
     ? { key: { x: l.proposedOracleKey.value.x, y: l.proposedOracleKey.value.y }, at: l.oracleKeyChangeAt, approved: l.oracleKeyApproved }
@@ -164,6 +171,7 @@ export const starfallViewOf = (l: Starfall.Ledger): StarfallView => ({
       fee: d.fee,
       prizes: [...d.prizes],
       final: d.final,
+      mustBeWon: d.mustBeWon,
       finalShare: d.finalShare,
       unrefunded,
       refundedGames,
@@ -311,6 +319,20 @@ export const idle = (view: StarfallView): boolean => {
  * there was none).
  */
 export const woundDown = (view: StarfallView): boolean => idle(view) && (view.ended || view.carry === 0n);
+
+/**
+ * Whether draw `id`'s jackpot must be won when it's finalised: 'yes',
+ * 'possible' (it depends on draws before it still to be finalised: one whose
+ * jackpot is given out starts the count again) or 'no'.
+ */
+export const mustBeWonStatus = (view: StarfallView, id: bigint): 'yes' | 'possible' | 'no' => {
+  const d = view.draws.find((x) => x.id === id);
+  if (d?.final) return 'yes';
+  if (view.mustBeWonAfter === 0n) return 'no';
+  const pending = BigInt(view.draws.filter((x) => x.id < id && x.status !== DrawStatus.settled && x.status !== DrawStatus.voided).length);
+  if (pending === 0n) return view.rollovers >= view.mustBeWonAfter ? 'yes' : 'no';
+  return view.rollovers + pending >= view.mustBeWonAfter ? 'possible' : 'no';
+};
 
 /** The draw under way that is final (opened as final, not yet settled or void), if any. */
 const finalUnderway = (view: StarfallView): StarfallDrawView | undefined =>

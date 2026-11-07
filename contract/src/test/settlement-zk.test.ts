@@ -62,7 +62,7 @@ const lineHitting = (numbers: number[], moonball: number, match: number): PlainL
   return { numbers: [...numbers.slice(0, match), ...misses.slice(0, 7 - match)], moonball };
 };
 
-const setup = (opts: { feePerGame?: bigint } = {}) => {
+const setup = (opts: { feePerGame?: bigint; mustBeWonAfter?: bigint } = {}) => {
   const runs: Run[] = [];
   const oracleSecretKey = generateOracleSecretKey();
   const organiserSecret = generateOperatorSecret();
@@ -72,6 +72,7 @@ const setup = (opts: { feePerGame?: bigint } = {}) => {
     settlementSecret: randomScalar(),
     operator: randomAddress(),
     feePerGame: opts.feePerGame,
+    mustBeWonAfter: opts.mustBeWonAfter,
     minSales: 600n,
     maxSales: 86_400n,
     revealWindow: 3_600n,
@@ -100,7 +101,7 @@ const allPass = async (runs: Run[]) => {
 };
 
 describe('every circuit run passes the zkir check', () => {
-  it('purchases of 1, 2 and 13 full tickets, a settled draw with winning lines, payments to 1 and 3 payees', async () => {
+  it('purchases of 1, 2 and two of 7 full tickets, a settled draw with winning lines, payments to 1 and 3 payees', async () => {
     const { sim, runs, open } = setup();
     const { n, seed, draw } = open();
     const me = randomAddress();
@@ -110,6 +111,7 @@ describe('every circuit run passes the zkir check', () => {
     const full = ticketsFor(n, Array.from({ length: Number(pureCircuits.maxTickets()) * GAMES_PER_TICKET }, () => quickPick()), me);
     expect(full.length).toBe(Number(pureCircuits.maxTickets()));
     sim.buyTickets(full, me);
+    sim.buyTickets(ticketsFor(n, Array.from({ length: Number(pureCircuits.maxTickets()) * GAMES_PER_TICKET }, () => quickPick()), me), me);
     // Sure winners paid to one address (on its last line), and split between three payees (on its entry).
     sim.buyTickets(
       [
@@ -130,7 +132,7 @@ describe('every circuit run passes the zkir check', () => {
     sim.requestAndOpenNext(n, seed, { salesClose: BigInt(sim.now + 3_600), seedCommitment: new Uint8Array(32).fill(99), final: false });
     sim.fulfilDraw(n);
     sim.computeNumbers(n);
-    expect(sim.settleAll(n)).toBe(2); // 18 tickets: a full batch of 14, then 4
+    expect(sim.settleAll(n)).toBe(2); // 19 tickets: a full batch of 14, then 5
     expect(sim.entitlementsOf(n).length).toBeGreaterThanOrEqual(2);
     const circuits = new Set(runs.map((r) => r.circuit));
     for (const c of ['buyTickets', 'requestDraw', 'fulfilDraw', 'computeNumbers', 'settleBatch', 'finaliseDraw', 'payEntitlement']) {
@@ -213,6 +215,25 @@ describe('every circuit run passes the zkir check', () => {
     other.sim.refundTicket(voided, 0n);
     expect(await allPass(other.runs)).toEqual([]);
   }, 120_000);
+
+  it('a must-be-won draw: the jackpot dropped to a winner, and one with no winner anywhere', async () => {
+    const { sim, runs, open } = setup({ mustBeWonAfter: 1n });
+    const run = (build: (d: { n: bigint; numbers: number[]; moonball: number }) => ReturnType<typeof makeTicket>[]) => {
+      const { n, seed, draw } = open();
+      const ts = build({ n, ...draw });
+      if (ts.length) sim.buyTickets(ts, randomAddress());
+      sim.advance(3_601);
+      sim.requestDraw(n, seed);
+      sim.fulfilDraw(n);
+      sim.computeNumbers(n);
+      sim.settleAll(n);
+    };
+    run(() => []); // rolls over (nothing sold)
+    run(() => []); // must be won, nobody to win it
+    run((d) => [makeTicket(d.n, lineHitting(d.numbers, d.moonball, 3), randomAddress())]); // falls to division 8
+    expect(sim.getLedger().rollovers).toBe(0n);
+    expect(await allPass(runs)).toEqual([]);
+  }, 60_000);
 
   it('a void draw and its refunds', async () => {
     const { sim, runs, open } = setup();

@@ -44,6 +44,8 @@ export type SettlementSimulatorOptions = {
   maxTicketsPerDraw?: bigint;
   /** Shortest sales period of a final draw (default: minSales). */
   finalSales?: bigint;
+  /** Jackpot rollovers in a row before a draw's jackpot must be won (default 0: never). */
+  mustBeWonAfter?: bigint;
   /** Starting block time, seconds since the epoch. */
   now?: number;
   /** Activate the oracle key right after deployment (default true). */
@@ -162,6 +164,7 @@ export class SettlementSimulator {
       opts.settleWindow ?? 86_400n,
       opts.maxTicketsPerDraw ?? 4_294_967_295n,
       opts.finalSales ?? opts.minSales ?? 600n,
+      opts.mustBeWonAfter ?? 0n,
     );
     this.state = result.currentContractState;
     if (opts.acceptKey ?? true) this.acceptOracleKey();

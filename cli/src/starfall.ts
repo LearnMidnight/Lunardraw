@@ -377,6 +377,8 @@ export type StarfallDeployParams = {
   maxTicketsPerDraw: bigint;
   /** Shortest sales period of the final draw (minSales to maxSales). */
   finalSales: bigint;
+  /** Jackpot rollovers in a row before a draw's jackpot must be won (0: never). */
+  mustBeWonAfter: bigint;
 };
 
 /**
@@ -385,7 +387,8 @@ export type StarfallDeployParams = {
  * 6 hours to 14 days, so the same contract runs daily draws (the keeper's
  * --daily) or weekly ones (its default); an hour to reveal; two hours for the
  * oracle; a day to settle once the numbers are in; at most 10,000 tickets a
- * draw; a final draw sells for at least a week.
+ * draw; a final draw sells for at least a week; after 5 jackpot rollovers in a
+ * row the next draw's jackpot must be won.
  *
  * Why those last two (Jack, 7 Nov 2026): draws finalise in order, so a draw
  * that can't be settled holds up the payouts of the draws after it until its
@@ -398,6 +401,11 @@ export type StarfallDeployParams = {
  * draw's jackpot must be won, and what no division takes is shared by every
  * game in it, so no rollover is left locked in the contract. Its players get
  * the rollover, so it is announced a week ahead for anyone to buy in.
+ *
+ * Must be won after 5 rollovers (Jack, 7 Nov 2026; UK Lotto's rule): at 1 in
+ * 134.5 million and Lunardraw's player numbers a jackpot would almost never be
+ * won, so after 5 rollovers in a row the next draw's jackpot falls to the next
+ * division with a winner. With daily draws that's every 6th day it isn't won.
  */
 export const STARFALL_WEEKLY_DEFAULTS = {
   ticketPrice: 1_300_000n,
@@ -409,6 +417,7 @@ export const STARFALL_WEEKLY_DEFAULTS = {
   settleWindow: 86_400n,
   maxTicketsPerDraw: 10_000n,
   finalSales: 7n * 86_400n,
+  mustBeWonAfter: 5n,
 } as const;
 
 export const deployStarfall = (providers: StarfallProviders, p: StarfallDeployParams) =>
@@ -431,6 +440,7 @@ export const deployStarfall = (providers: StarfallProviders, p: StarfallDeployPa
       p.settleWindow,
       p.maxTicketsPerDraw,
       p.finalSales,
+      p.mustBeWonAfter,
     ],
   });
 
@@ -470,6 +480,7 @@ export type StarfallDeploymentRecord = {
     settleWindow: string;
     maxTicketsPerDraw: string;
     finalSales: string;
+    mustBeWonAfter: string;
   };
   transactions: { deploy?: string; acceptOracleKey?: string };
   verifierKeys: Fingerprints;
@@ -490,6 +501,7 @@ export const starfallRecordParameters = (p: StarfallDeployParams): StarfallDeplo
   settleWindow: p.settleWindow.toString(),
   maxTicketsPerDraw: p.maxTicketsPerDraw.toString(),
   finalSales: p.finalSales.toString(),
+  mustBeWonAfter: p.mustBeWonAfter.toString(),
 });
 
 export const starfallRecordPath = (network: string): string => join(deploymentsDir(), `starfall-${network}.json`);
@@ -576,6 +588,7 @@ export const verifyStarfall = (
     settleWindow: l.settleWindow,
     maxTicketsPerDraw: l.maxTicketsPerDraw,
     finalSales: l.finalSales,
+    mustBeWonAfter: l.mustBeWonAfter,
   };
   const differ = Object.entries(actual).filter(([k, v]) => v.toString() !== p[k as keyof typeof p]);
   checks.push({
@@ -583,7 +596,7 @@ export const verifyStarfall = (
     ok: differ.length === 0,
     detail:
       differ.length === 0
-        ? `${Number(l.ticketPrice) / 1e6} tNIGHT a game (${Number(l.feePerGame) / 1e6} to the operator); sales ${l.minSales}-${l.maxSales} s; reveal ${l.revealWindow} s, draw ${l.drawWindow} s, settle ${l.settleWindow} s; at most ${l.maxTicketsPerDraw} tickets a draw; a final draw sells ${l.finalSales} s or more`
+        ? `${Number(l.ticketPrice) / 1e6} tNIGHT a game (${Number(l.feePerGame) / 1e6} to the operator); sales ${l.minSales}-${l.maxSales} s; reveal ${l.revealWindow} s, draw ${l.drawWindow} s, settle ${l.settleWindow} s; at most ${l.maxTicketsPerDraw} tickets a draw; a final draw sells ${l.finalSales} s or more; ${l.mustBeWonAfter === 0n ? 'no must-be-won rule' : `must be won after ${l.mustBeWonAfter} rollovers`}`
         : differ.map(([k, v]) => `${k} ${v} (record ${String(p[k as keyof typeof p])})`).join('; '),
   });
   return checks;

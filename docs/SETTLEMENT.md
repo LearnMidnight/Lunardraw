@@ -18,7 +18,7 @@ The game is Australian Powerball's, as the Starfall spec asks: 7 numbers from 35
 
    The purchase proof shows that both hold the same valid ticket (an entry of a type the contract knows, its numbers increasing in 1–35, a Moonball in 1–20 or Moonball Sweep, each line a standard game or empty, and shares adding up to 10,000 basis points) and charges the ticket's **games × the game price**. The buyer also names a public refund address. Tickets are numbered 0, 1, 2, … within the draw, in purchase order; each record stores its games, and the draw counts games sold.
 
-   `buyTickets(count, refundTo)` buys 1 to `maxTickets()` = 13 tickets in one transaction, each with its own commitment, ciphertext and index, and returns the first index. A ticket holds its entry plus up to `maxLines()` = 11 extra standard games (see "Lines"), so standard games go 12 to a ticket: a QuickPick package (Single 1, Starter 4, Mini 8, Regular 12, Super 18, Mega 25, Jumbo 36, Maxi 50 games; `quickPickPackage` in the SDK, `ticketsFor` for any list of entries) is 1 to 5 tickets, and **every package is one transaction**. A purchase holds up to 156 standard games. A System, a Pick or a Moonball Sweep is one ticket: a Pick 5 with Moonball Sweep (8,700 games) is one transaction.
+   `buyTickets(count, refundTo)` buys 1 to `maxTickets()` = 7 tickets in one transaction, each with its own commitment, ciphertext and index, and returns the first index. A ticket holds its entry plus up to `maxLines()` = 11 extra standard games (see "Lines"), so standard games go 12 to a ticket: a QuickPick package (Single 1, Starter 4, Mini 8, Regular 12, Super 18, Mega 25, Jumbo 36, Maxi 50 games; `quickPickPackage` in the SDK, `ticketsFor` for any list of entries) is 1 to 5 tickets, and **every package is one transaction**. A purchase holds up to 84 standard games. A System, a Pick or a Moonball Sweep is one ticket: a Pick 5 with Moonball Sweep (8,700 games) is one transaction.
 2. **Sales close.** The count is frozen: no ticket can be added or removed.
 3. **Draw.** As v0: the organiser's sealed seed, the oracle's VRF and the site's number rule. Each draw is bound to the active oracle key **when it opens**, so buyers can see which key will answer it. `requestDraw(n, seed, next)` reveals draw `n`'s seed and can open the next draw in the same transaction; `requestDraw(0, …, next)` just opens a draw. `computeNumbers(n, now)` puts the numbers in the ledger; its clock stamp may be up to **30 minutes** from block time, so a slow numbers proof still lands (v0 allows 10; Lunardraw #32).
 4. **Settlement.** The settler decrypts every ticket with the settlement secret and calls `settleBatch` repeatedly. Each call covers the next 14 tickets in index order (up to 168 QuickPick games). For each ticket, the proof shows that the decrypted ticket hashes to the commitment stored at its index, then counts its winning games per division against the numbers stored in the ledger (without listing them: see "Entries"). Winning tickets become **entitlements** (winning games per division + payees) under the id `Poseidon(domain, C, salt)`. The salt is secret, so nobody can link an entitlement to a purchase.
@@ -65,7 +65,7 @@ Besides its entry, a ticket carries up to `maxLines()` = 11 **lines**, `Line { n
 
 | | One game a ticket (before) | 12 games a ticket |
 |---|---|---|
-| Tickets per purchase | 18 (18 games) | 13 (up to 156 games) |
+| Tickets per purchase | 18 (18 games) | 7 (up to 84 games; 13 until 7 Nov 2026) |
 | Transactions for a Maxi (50 games) | 3 | 1 |
 | QuickPick games per settlement batch | 22 | 168 |
 | Payouts for a ticket's winning games | one per game | one per ticket |
@@ -98,11 +98,26 @@ The divisions and the pool allocation are Australian Powerball's. The allocation
 
 Shares are stored in basis points (`shares()` in the contract, `POWERBALL_SHARES_BP` in the SDK) and sum to 10,000. Two things differ from Powerball, on purpose:
 - **No guaranteed jackpot.** Powerball advertises a minimum Division 1; Starfall's jackpot is exactly 33.5% of the pool plus whatever rolled over, because the contract only pays what it holds. A guarantee would need a funded reserve.
-- **No jackpot cap.** Powerball must pay out Division 1 after 25 rollovers. Starfall rolls over indefinitely; a cap (pay the jackpot down to the next division with a winner) is a small change to `finaliseDraw` once the product rule is decided.
+- **A shorter jackpot cap.** Powerball must pay out Division 1 after 25 rollovers. Starfall's must be won after `mustBeWonAfter` rollovers in a row (5 by default, UK Lotto's rule), because at 1 in 134.5 million and Lunardraw's player numbers a jackpot would almost never be won (at 1,000 games a week, about once in 2,600 years). See "Must be won after 5 rollovers" below.
 
 The fee is a constructor parameter. A flat fee per game (decided 22 Oct 2026, replacing a 2% share of sales) means the operator's income scales with lines sold, and a multi-line ticket pays it once per line: price 1.3 tNIGHT = 1 tNIGHT to the pool + 0.3 tNIGHT to the operator (since 6 Nov 2026; Jack's decision). The operator fee pays the running costs (NIGHT held to generate the keeper's and oracle's DUST, hosting, Blockfrost) and the creator's cut, taken from the operator wallet by hand. Whether 0.3 tNIGHT covers the running costs at scale is to be measured (DUST per transaction).
 
 **Site note:** the theme's `lunardraw_settle()` mirrors `finaliseDraw`; it must also add `pool − Σ floor(pool × bp / 10000)` to the carry (the rounding fix above).
+
+### Must be won after 5 rollovers (7 Nov 2026)
+
+Jack's decision, from the lottery comparison (`claude/lottery-comparison-nov-2026.md`): after `mustBeWonAfter` jackpot rollovers in a row (a sealed deploy setting, 5 by default, `--must-be-won-after`, 0 for never), the next draw's jackpot must be won.
+
+- **Counting.** The ledger's `rollovers` counts finalised draws in a row whose jackpot rolled over; void draws don't count.
+- **The must-be-won draw.** Once `rollovers` reaches `mustBeWonAfter`, the next draw finalised drops an unwon Division 1 (its share and all the rollover) to the next division with a winner. That's the same rolldown the final draw uses. What no division takes rolls over as usual, so the game goes on.
+- **Resetting.** A jackpot won, or given out to a lower division, sets the count back to 0. A must-be-won draw that found no winner anywhere keeps the count, so the next one must be won too.
+- **Records.** `Draw.mustBeWon` records it when the draw is finalised.
+- **Players know before they buy.** The feed's open draw says `must_be_won: "yes"`, or `"possible"` while the draw before it is still settling (its own result decides). Status and the agent kit say so too. With daily draws, an unwon jackpot is given out every 6th day.
+- **Cost.** No new circuit: `finaliseDraw` is 4,809 rows (k=13).
+
+### Tickets per purchase: 7 (7 Nov 2026)
+
+`maxTickets()` went from 13 to 7 (`gen-batch.py 14 7`), so `buyTickets` is in the k=16 class (63,394 rows; it was k=17 at 117,475). That's about half the proving key and proving time for every purchase. The largest QuickPick package (Maxi, 50 games) is 5 tickets, so every package is still one transaction. Only 8 or more Systems, Picks or Sweeps at once take a second. The margin to k=16's 65,536 rows is about 2,100 rows, so a later change to `buyTickets` that crosses it goes back to k=17.
 
 ### The final draw: the jackpot must be won (7 Nov 2026)
 
@@ -136,7 +151,7 @@ A deploy transaction carries every circuit's verifier key and must fit Midnight'
 | `proposeOracleKey` | organiser | propose a new oracle key (waits `oracleKeyDelay`) |
 | `changeOrganiser` | organiser / successor / backup | propose / accept / recover |
 | `requestDraw` | organiser | reveal a seed and open the next draw; `n = 0` only opens |
-| `buyTickets` | anyone | buy 1–13 tickets of up to 12 standard games each, or Systems, Picks, Sweeps (replaces `buyTicket`) |
+| `buyTickets` | anyone | buy 1–7 tickets of up to 12 standard games each, or Systems, Picks, Sweeps (replaces `buyTicket`) |
 | `fulfilDraw` | the draw's oracle | the VRF output |
 | `computeNumbers` | anyone | the numbers |
 | `settleBatch` | settlement key holder | settle the next 14 tickets |
@@ -262,7 +277,7 @@ For comparison, 2 lighter tickets are k=14 (13,702), 10 are k=16 and 20 are k=17
 
 | Circuit | One game a ticket | 11 lines a ticket |
 |---|---|---|
-| `buyTickets` | 18 tickets, k=17, 113,126 | **13 tickets, k=17, 117,629** |
+| `buyTickets` | 18 tickets, k=17, 113,126 | **7 tickets, k=16, 63,421** (13 tickets were k=17, 117,629) |
 | `settleBatch` | 22 tickets, k=17, 110,154 | **14 tickets, k=17, 116,826** |
 | `payEntitlement` | | k=16, 50,285 |
 | `refundTicket` | | k=10, 222 |
@@ -289,11 +304,11 @@ The proof server keeps much of a proof's memory afterwards: on CI two purchases 
 
 ## Other limits
 
-- **13 tickets per transaction.** Standard games go 12 to a ticket, so every QuickPick package is one transaction (up to 156 games). A System, Pick or Moonball Sweep entry is one ticket.
+- **7 tickets per transaction** (13 until 7 Nov 2026, cut so the purchase proof is the half-size k=16 class: about half the proving key and time). Standard games go 12 to a ticket, so every QuickPick package is still one transaction (up to 84 games). A System, Pick or Moonball Sweep entry is one ticket.
 - **No subscriptions.** Multi-week entries need per-draw purchases, which an agent can do.
 - **Purchases are sequential.** Each purchase takes the next index, so two purchases in the same block conflict and one must retry. Fine at prototype volume; a Merkle-tree set or per-block batching would lift it.
 - **Settler liveness.** A settler who sees a result it dislikes can stop, and the draw voids and refunds. This is the same class of trust as the oracle's: a committee (stage 2) with t-of-n liveness reduces it.
-- **Untested on a real network.** Block limits on a transaction's ledger operations (14 ticket lookups and up to 14 inserts in a batch, 13 sealed tickets of 12 elements in a purchase) are only known once it runs on Preprod. Next: the Starfall CLI (deploy with a test settlement key, keeper, buy), then a 100-ticket draw on Preprod.
+- **Untested on a real network.** Block limits on a transaction's ledger operations (14 ticket lookups and up to 14 inserts in a batch, 7 sealed tickets of 12 elements in a purchase) are only known once it runs on Preprod. Next: the Starfall CLI (deploy with a test settlement key, keeper, buy), then a 100-ticket draw on Preprod.
 
 ## The keeper
 

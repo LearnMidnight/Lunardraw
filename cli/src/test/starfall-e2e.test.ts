@@ -88,6 +88,7 @@ describe.runIf(enabled)('Starfall on a local Midnight network', () => {
     settleWindow: 3_600n,
     maxTicketsPerDraw: 1_000n,
     finalSales: 60n,
+    mustBeWonAfter: 5n,
   };
   // Draw 1 closes 15 minutes after it opens (time for two purchases); later
   // draws 20 minutes after, so draw 2 is still selling once draw 1 is drawn.
@@ -197,7 +198,7 @@ describe.runIf(enabled)('Starfall on a local Midnight network', () => {
       Starfall.makeTicket(1n, { ...quickPick(), sweep: true }, mine),
       Starfall.makeTicket(1n, quickPick(), mine),
     ];
-    // Then QuickPicks, 12 to a ticket, to fill a purchase: 13 tickets (166 games) in one
+    // Then QuickPicks, 12 to a ticket, to fill a purchase: 7 tickets in one
     // transaction, the most a purchase holds.
     const room = Number(Starfall.pureCircuits.maxTickets()) - games.length;
     games.push(...Starfall.ticketsFor(1n, Array.from({ length: room * Starfall.GAMES_PER_TICKET }, () => quickPick()), mine));

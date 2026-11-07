@@ -12,7 +12,7 @@ import { encodeContractAddress } from '@midnight-ntwrk/compact-runtime';
 import { unshieldedToken } from '@midnight-ntwrk/midnight-js-protocol/ledger';
 import { MidnightBech32m } from '@midnight-ntwrk/wallet-sdk-address-format';
 import { quickPick, Starfall } from '@lunardraw/contract';
-import { buildStarfallFeed, DerivedSeeds, DrawOracle, every, isStaleDustProof, PurchaseLog, STARFALL_DAILY, STARFALL_WEEKLY, StarfallKeeper, type StarfallView, StepTimes, woundDown, writeFeed } from '@lunardraw/keeper';
+import { buildStarfallFeed, DerivedSeeds, DrawOracle, every, isStaleDustProof, mustBeWonStatus, PurchaseLog, STARFALL_DAILY, STARFALL_WEEKLY, StarfallKeeper, type StarfallView, StepTimes, woundDown, writeFeed } from '@lunardraw/keeper';
 import { declareFeesAtDustTime, type DustTimeWallet } from './dust-time.js';
 import { DustMeter, meterDustFees } from './dust-meter.js';
 import { withFreshFees } from './fresh-fees.js';
@@ -84,7 +84,7 @@ export const STARFALL_USAGE = `usage: ./lunardraw starfall <command>
   commitment   --organiser <file>      (an organiser's Starfall commitment: public; for --backup)
   deploy       --network <${NETWORKS.join('|')}> --organiser <file> --backup <file> --oracle <file> --settlement <file> --wallet <file> [--accept]
                [--operator <address>] [--price <STAR>] [--fee <STAR>] [--min-sales <s>] [--max-sales <s>] [--reveal <s>] [--draw <s>] [--settle <s>] [--max-tickets <n>]
-               [--final-sales <s>]
+               [--final-sales <s>] [--must-be-won-after <rollovers>]
   accept-key   --network <network> --oracle <file> --wallet <file>
   keeper       --network <network> --organiser <file> --settlement <file> --wallet <file> [--daily | --every <seconds>] [--feed <file>]
                [--proof-server-port <port>] [--prove-lead <secs>] [--restart-after <min>] [--stall-after <min>] [--dust-wait <min>]
@@ -114,7 +114,9 @@ restart never buys twice. Styles: quickpick (--games random games), lucky (the s
 Deploy defaults: a game costs 1.3 tNIGHT (1 to the prize pool, 0.3 to the operator), sales of
 6 hours to 14 days, 1 hour to reveal, 2 hours for the oracle, 1 day to settle once the numbers are
 in, at most 10,000 tickets a draw (--max-tickets: keep it below what can be settled within --settle,
-about 14 tickets a minute), and a final draw sells for at least a week (--final-sales). The keeper closes draws on Thursdays at 20:00 Brisbane; --daily closes
+about 14 tickets a minute), a final draw sells for at least a week (--final-sales), and after 5 jackpot rollovers in a row the
+next draw's jackpot must be won: unwon, it falls to the next prize division with a winner
+(--must-be-won-after, 0 for never). The keeper closes draws on Thursdays at 20:00 Brisbane; --daily closes
 them every day at 20:00 Brisbane instead (the same contract can switch between the two with a
 keeper restart), and --every <seconds> on a fixed period (for short test deployments).
 
@@ -140,7 +142,7 @@ wallet's balances, its last pass, failures in a row) for \`./lunardraw monitor\`
 instead of a proof server: no Docker and no proving keys needed. It sees the tickets being bought, never
 the draw.
 buy buys tickets for the draw on sale, paid to --pay-to (default: your wallet), with refunds to your
-wallet if the draw is cancelled; it sends up to 13 tickets per transaction. A ticket is one entry,
+wallet if the draw is cancelled; it sends up to 7 tickets per transaction. A ticket is one entry,
 and standard games go 12 to a ticket (every QuickPick package is one transaction):
   --games <n> / --package <name>   that many random standard games (QuickPick);
   --numbers "3 9 14 21 27 33 35"   your own standard game (7 numbers), or a System with 8 to 12;
@@ -297,10 +299,18 @@ const describeView = (view: StarfallView, nowSecs: number): string => {
     }
     const numbers = d.status === Starfall.DrawStatus.drawn || d.status === Starfall.DrawStatus.settled ? `  ${d.numbers.join(' ')} + ${d.moonball}` : '';
     if (d.final) stage = `${stage} (final draw)`;
+    else if (d.status === Starfall.DrawStatus.settled && d.mustBeWon) stage = `${stage} (jackpot had to be won)`;
+    else if (d.status !== Starfall.DrawStatus.settled && d.status !== Starfall.DrawStatus.voided) {
+      const m = mustBeWonStatus(view, d.id);
+      if (m !== 'no') stage = `${stage} (jackpot ${m === 'yes' ? 'must be won' : 'may have to be won'})`;
+    }
     lines.push(`draw ${d.id}  ${stage}  sales close ${iso(d.salesClose)}  ${d.games} game(s) in ${d.tickets} ticket(s)${numbers}${extra}`);
   }
   if (view.ended) lines.push('The final draw has given out the rollover: the game has ended, and no draw will open again.');
-  else lines.push(`Rollover into the next draw: ${tn(view.carry)}`);
+  else {
+    lines.push(`Rollover into the next draw: ${tn(view.carry)}`);
+    if (view.mustBeWonAfter > 0n) lines.push(`Jackpot rollovers in a row: ${view.rollovers} (after ${view.mustBeWonAfter}, the next jackpot must be won)`);
+  }
   return lines.join('\n');
 };
 
@@ -443,6 +453,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
       settle: { type: 'string' },
       'max-tickets': { type: 'string' },
       'final-sales': { type: 'string' },
+      'must-be-won-after': { type: 'string' },
       daily: { type: 'boolean', default: false },
       games: { type: 'string' },
       package: { type: 'string' },
@@ -516,6 +527,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
             settleWindow: num(values.settle, STARFALL_WEEKLY_DEFAULTS.settleWindow),
             maxTicketsPerDraw: num(values['max-tickets'], STARFALL_WEEKLY_DEFAULTS.maxTicketsPerDraw),
             finalSales: num(values['final-sales'], STARFALL_WEEKLY_DEFAULTS.finalSales),
+            mustBeWonAfter: num(values['must-be-won-after'], STARFALL_WEEKLY_DEFAULTS.mustBeWonAfter),
           };
           const providers = starfallProviders(session, wallet);
           session.logger.info('Deploying Starfall, locked from the start (nobody can ever change its code)...');

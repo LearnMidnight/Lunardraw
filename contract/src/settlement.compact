@@ -27,7 +27,9 @@
 //   5. If settlement isn't complete by the settlement deadline, the draw is
 //      void and anyone can refund every ticket to the address given at
 //      purchase. A draw is never redrawn.
-//   6. To end the game, the organiser opens a final draw, marked as such
+//   6. After mustBeWonAfter jackpot rollovers in a row, the next draw's
+//      jackpot must be won: unwon, it falls to the next division with a winner.
+//   7. To end the game, the organiser opens a final draw, marked as such
 //      before it sells (and selling for at least finalSales). Its jackpot must
 //      be won: an unwon one falls to the next division with a winner, and what
 //      no division takes is shared by every game in the draw. Once it's
@@ -186,6 +188,9 @@ export struct Draw {
   prizes: Vector<9, Uint<128>>;
   // A final draw: its jackpot must be won (see finaliseDraw). Fixed when it opens.
   final: Boolean;
+  // Its jackpot had to be won (a final draw, or one after mustBeWonAfter
+  // rollovers in a row). Fixed when it is finalised.
+  mustBeWon: Boolean;
   // For a final draw, what each game sold gets of the money no division took
   // (paid by refundTicket), once finalised; 0 otherwise.
   finalShare: Uint<128>;
@@ -260,6 +265,10 @@ export ledger carry: Uint<128>;
 // Set once a final draw that sold games is finalised: the game is over and no
 // draw can open again.
 export ledger ended: Boolean;
+// Finalised draws in a row whose jackpot rolled over (void draws don't count).
+// Once it reaches mustBeWonAfter, the next draw finalised must give its
+// jackpot out.
+export ledger rollovers: Uint<32>;
 // The oracle key new draws are bound to. Each draw copies it when it opens,
 // so a later change never touches a draw that is selling or in progress.
 export ledger oracleKey: JubjubPoint;
@@ -307,6 +316,9 @@ export sealed ledger maxTicketsPerDraw: Uint<64>;
 // Shortest time a final draw may sell for, so everyone can see it coming and
 // buy in: its rollover goes to its own players.
 export sealed ledger finalSales: Uint<64>;
+// How many jackpot rollovers in a row before the next draw's jackpot must be
+// won (0: never, only a final draw's).
+export sealed ledger mustBeWonAfter: Uint<32>;
 
 // -------------------------------------------------------------- witnesses
 //
@@ -324,7 +336,7 @@ constructor(key: JubjubPoint, organiserCommitment: Bytes<32>, backupCommitment: 
             sealingKey: JubjubPoint, operatorAddress: UserAddress, fee: Uint<128>, price: Uint<128>,
             salesMin: Uint<64>, salesMax: Uint<64>,
             reveal: Uint<64>, draw: Uint<64>, settle: Uint<64>, ticketLimit: Uint<64>,
-            finalNotice: Uint<64>) {
+            finalNotice: Uint<64>, rolloverCap: Uint<32>) {
   assert(price > 0, "ticket price must be positive");
   assert(fee < price, "operator fee per game must be below the ticket price");
   assert(!isIdentity(sealingKey), "identity settlement key not allowed");
@@ -353,6 +365,7 @@ constructor(key: JubjubPoint, organiserCommitment: Bytes<32>, backupCommitment: 
   settleWindow = disclose(settle);
   maxTicketsPerDraw = disclose(ticketLimit);
   finalSales = disclose(finalNotice);
+  mustBeWonAfter = disclose(rolloverCap);
 }
 
 // ------------------------------------------------------- pure functions
@@ -779,6 +792,7 @@ circuit openNext(close: Uint<64>, commitment: Bytes<32>, final: Boolean): Uint<3
     fee: 0,
     prizes: [0, 0, 0, 0, 0, 0, 0, 0, 0],
     final: final,
+    mustBeWon: false,
     finalShare: 0
   });
   ticketCount.insert(id, 0);
@@ -982,6 +996,10 @@ export circuit settleBatch(n: Uint<32>): Uint<64> {
 // equally by every game sold, through refundTicket; the last fraction of a STAR
 // per game goes with the operator fee. The contract then keeps nothing back,
 // and the game has ended. A final draw that sold nothing keeps the rollover.
+// After mustBeWonAfter rollovers in a row, a draw's jackpot must be won the
+// same way (falling to the next division with a winner), but what no division
+// takes rolls over as usual. A jackpot won, or given out to a lower division,
+// starts the count again; one that found no winner anywhere keeps it.
 export circuit finaliseDraw(n: Uint<32>): [] {
   const id = disclose(n);
   const d = drawFor(id);
@@ -1000,6 +1018,7 @@ export circuit finaliseDraw(n: Uint<32>): [] {
   const fee = (feePerGame * sold) as Uint<128>;
   const pool = (sales - fee) as Uint<128>;
   const fin = d.final;
+  const mustWin = fin || (mustBeWonAfter > 0 && rollovers >= mustBeWonAfter);
   // Powerball's rules: each division gets its share of the pool; the rollover
   // (jackpot) joins division 1 only; an unwon division 2..8 falls to the next
   // lower division with a winner; an unwon division 1 or 9, and rounding
@@ -1011,11 +1030,11 @@ export circuit finaliseDraw(n: Uint<32>): [] {
     const perTicket = quotient(amount as Field, w == 0 ? 1 : w);
     const won = w != 0;
     const remainder = won ? (amount - perTicket * w) as Uint<128> : 0;
-    const toCarry = (won || (j < 8 && (j > 0 || fin))) ? remainder : amount;
+    const toCarry = (won || (j < 8 && (j > 0 || mustWin))) ? remainder : amount;
     return PrizeCalc {
       prizes: map((x: Uint<128>, k: Uint<8>): Uint<128> => k == j ? (won ? perTicket : 0) : x,
                   acc.prizes, [0, 1, 2, 3, 4, 5, 6, 7, 8]),
-      cascade: (won || j == 8 || (j == 0 && !fin)) ? 0 : amount,
+      cascade: (won || j == 8 || (j == 0 && !mustWin)) ? 0 : amount,
       carry: (acc.carry + toCarry) as Uint<128>,
       allocated: (acc.allocated + share) as Uint<128>
     };
@@ -1030,7 +1049,13 @@ export circuit finaliseDraw(n: Uint<32>): [] {
   if (sharing) {
     ended = true;
   }
-  draws.insert(id, Draw { ...d, status: DrawStatus.settled, carried: carried, fee: fee, prizes: calc.prizes, finalShare: share });
+  // The jackpot rolled over unless division 1 was won, or it had to be won and
+  // some division took it.
+  const anyWon = fold((acc: Boolean, w: Uint<64>): Boolean => acc || w != 0, false, p.winners);
+  const givenOut = p.winners[0] != 0 || (mustWin && anyWon);
+  rollovers = givenOut ? 0 : (rollovers + 1) as Uint<32>;
+  draws.insert(id, Draw { ...d, status: DrawStatus.settled, carried: carried, fee: fee, prizes: calc.prizes,
+                          mustBeWon: mustWin, finalShare: share });
   const toOperator = (fee + dust) as Uint<128>;
   if (toOperator > 0) {
     sendUnshielded(nativeToken(), toOperator, right<ContractAddress, UserAddress>(operator));

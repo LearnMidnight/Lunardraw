@@ -85,9 +85,10 @@ It uses the default settings, the real weekly game's, so the same contract runs 
 - the keeper has 1 hour after sales close to reveal the seed, the oracle 2 hours to answer;
 - settlement must finish within 1 day of the numbers. Draws pay out in order, so a draw that can't be settled holds up the payouts of the draws after it until this deadline cancels it: a day keeps that to one daily draw. The monitor emails if a draw isn't settled 30 minutes after its numbers (it normally takes about 10);
 - at most 10,000 tickets a draw (a QuickPick ticket holds up to 12 games). That's below the roughly 15,000 the keeper can settle in a day, so a flood of purchases fills a draw (`draw is full`) instead of making it miss its deadline.
+- after 5 jackpot rollovers in a row, the next draw's jackpot must be won: if nobody wins Division 1, it falls to the next prize division with a winner (with daily draws, every 6th day it isn't won);
 - the final draw, when the game is wound down (`starfall last-draw`), sells for at least 7 days and its jackpot must be won, so no rollover is left locked in the contract (see "Switching to a new deployment" below).
 
-`--min-sales`, `--max-sales`, `--reveal`, `--draw`, `--settle`, `--final-sales` (seconds) and `--max-tickets` change them. Keep `--max-tickets` below what can be settled within `--settle`: about 14 tickets a minute.
+`--min-sales`, `--max-sales`, `--reveal`, `--draw`, `--settle`, `--final-sales` (seconds), `--max-tickets` and `--must-be-won-after` change them. Keep `--max-tickets` below what can be settled within `--settle`: about 14 tickets a minute.
 
 It ends with a checklist that should be all **PASS**, including `the organiser secret can open draws`, and writes `deployments/starfall-preprod.json`. Send me the output (it's all public).
 
@@ -124,7 +125,7 @@ Once the player wallet has synced and has tNIGHT, buy a package for the draw on 
 | jumbo | 36 | 3 | 1 |
 | maxi | 50 | 5 | 1 |
 
-Or `--games <n>` for any number. Standard games go 12 to a ticket (a contract with lines, 6 Nov 2026 and later), and each transaction is a proof of up to 13 tickets, 156 games (a minute or two and about 1.3 GB of memory): every package is one transaction. The numbers are printed when it's done: winnings go to the player wallet by themselves.
+Or `--games <n>` for any number. Standard games go 12 to a ticket (a contract with lines, 6 Nov 2026 and later), and each transaction is a proof of up to 7 tickets, 84 games: every package is one transaction. The numbers are printed when it's done: winnings go to the player wallet by themselves.
 
 System, Pick and Moonball Sweep entries are **one ticket each**, however many games they hold (a contract with entries, PR #41 and later):
 

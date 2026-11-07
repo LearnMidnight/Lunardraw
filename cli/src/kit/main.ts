@@ -362,6 +362,7 @@ export const kit = async (argv: string[]): Promise<number> => {
             : 'No draw is on sale right now; the next opens shortly after the last one closes.',
       );
       if (s?.final) say(s.final.note);
+      if (s?.mustBeWon) say(s.mustBeWon.note);
       if (!overview.ended) say(`A game costs ${overview.gamePrice}. Rollover into the next Division 1: ${whole(overview.rollover)}.`);
       for (const r of overview.recent) say(r.status === 'void' ? `  draw ${r.draw}: cancelled, refunded` : `  draw ${r.draw}: ${r.numbers!.join(' ')} + ${r.moonball}, ${r.winningGames} winning game(s) of ${r.games}`);
       return 0;

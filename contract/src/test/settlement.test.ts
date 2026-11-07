@@ -59,7 +59,7 @@ const SALES = 3_600;
 const BATCH = Number(pureCircuits.batchSize());
 const OPERATOR = bytes('operator wallet');
 
-const setup = (opts: { feePerGame?: bigint; acceptKey?: boolean; maxTicketsPerDraw?: bigint; finalSales?: bigint } = {}) => {
+const setup = (opts: { feePerGame?: bigint; acceptKey?: boolean; maxTicketsPerDraw?: bigint; finalSales?: bigint; mustBeWonAfter?: bigint } = {}) => {
   const oracleSecretKey = generateOracleSecretKey();
   const settlementSecret = randomScalar();
   const sim = new SettlementSimulator({
@@ -76,6 +76,7 @@ const setup = (opts: { feePerGame?: bigint; acceptKey?: boolean; maxTicketsPerDr
     settleWindow: SETTLE,
     maxTicketsPerDraw: opts.maxTicketsPerDraw,
     finalSales: opts.finalSales,
+    mustBeWonAfter: opts.mustBeWonAfter,
     acceptKey: opts.acceptKey,
   });
   return { sim, oracleSecretKey, settlementSecret };
@@ -212,7 +213,7 @@ describe('multi-ticket purchases', () => {
     const { sim, oracleSecretKey, settlementSecret } = setup();
     const { n } = openWithSeed(sim, oracleSecretKey);
     const me = randomAddress();
-    expect(Number(pureCircuits.maxTickets())).toBe(13);
+    expect(Number(pureCircuits.maxTickets())).toBe(7);
     expect(Number(pureCircuits.maxLines())).toBe(MAX_LINES);
     expect(GAMES_PER_TICKET).toBe(12);
     // Every package fits one purchase: a Maxi of 50 is 5 tickets.
@@ -234,9 +235,9 @@ describe('multi-ticket purchases', () => {
     expect(sim.buyTickets([makeTicket(n, quickPick(), me), makeTicket(n, quickPick(), me)], me)).toBe(6n);
     expect(sim.ticketsSold(n)).toBe(8n);
     expect(sim.decryptDrawTickets(n, settlementSecret).length).toBe(8);
-    // 13 full tickets: 156 games in one purchase.
-    expect(sim.buyPackage(ticketsFor(n, Array.from({ length: 156 }, () => quickPick()), me), me)).toBe(1);
-    expect(sim.getLedger().gamesSold.lookup(n)).toBe(50n + 3n + 156n);
+    // 7 full tickets: 84 games in one purchase.
+    expect(sim.buyPackage(ticketsFor(n, Array.from({ length: 84 }, () => quickPick()), me), me)).toBe(1);
+    expect(sim.getLedger().gamesSold.lookup(n)).toBe(50n + 3n + 84n);
   });
 
   it('rejects too many tickets, a bad ticket in the set, a duplicate, and a mixed draw', () => {
@@ -1219,6 +1220,74 @@ describe('the final draw', () => {
     // A third final draw can still give it out.
     const last = openFinal(sim, oracleSecretKey, 'last final');
     expect(last.n).toBe(empty.n + 2n);
+  });
+});
+
+describe('must be won after mustBeWonAfter rollovers', () => {
+  /** Run a draw of the given tickets (built for its numbers) to the end; returns what it should come to. */
+  const runDraw = (sim: SettlementSimulator, sk: bigint, build: (d: { n: bigint; numbers: number[]; moonball: number }) => TicketPreimage[], mustWin = false) => {
+    const { n, seed, draw } = openWithSeed(sim, sk);
+    const carried = sim.getLedger().carry;
+    const tickets = build({ n, ...draw });
+    if (tickets.length) buyAll(sim, tickets);
+    drawIt(sim, n, seed);
+    sim.settleAll(n);
+    return { n, carried, e: expectedSettlement(tickets, draw.numbers, draw.moonball, PRICE, FEE, carried, false, mustWin) };
+  };
+  const losers = (k: number) => (d: { n: bigint; numbers: number[]; moonball: number }) =>
+    Array.from({ length: k }, () => makeTicket(d.n, losingLine(d.numbers, d.moonball), randomAddress()));
+
+  it('counts rollovers, then drops the jackpot to the next division with a winner and starts again', () => {
+    const { sim, oracleSecretKey } = setup({ mustBeWonAfter: 2n });
+    expect(sim.getLedger().mustBeWonAfter).toBe(2n);
+    runDraw(sim, oracleSecretKey, losers(5));
+    expect(sim.getLedger().rollovers).toBe(1n);
+    runDraw(sim, oracleSecretKey, losers(5));
+    expect(sim.getLedger().rollovers).toBe(2n);
+    // The third draw must be won: a division 8 winner takes the jackpot and the rollover.
+    const third = runDraw(
+      sim,
+      oracleSecretKey,
+      (d) => [makeTicket(d.n, lineHitting(d.numbers, d.moonball, 3, true), randomAddress()), ...losers(4)(d)],
+      true,
+    );
+    const l = sim.getLedger();
+    const d = l.draws.lookup(third.n);
+    expect(d.mustBeWon).toBe(true);
+    expect(d.prizes).toEqual(third.e.prizes);
+    expect(d.prizes[0]).toBe(0n);
+    expect(d.prizes[7]).toBeGreaterThan(third.carried);
+    expect(l.carry).toBe(third.e.carry);
+    expect(l.rollovers).toBe(0n);
+    // Not the final draw: the game goes on, and what no division took rolls over.
+    expect(l.ended).toBe(false);
+    expect(d.finalShare).toBe(0n);
+  });
+
+  it('keeps the count when a must-be-won draw finds no winner anywhere, and a jackpot win resets it', () => {
+    const { sim, oracleSecretKey } = setup({ mustBeWonAfter: 1n });
+    runDraw(sim, oracleSecretKey, losers(3));
+    expect(sim.getLedger().rollovers).toBe(1n);
+    // Must be won, but nobody won anything: all of it rolls over, and the next must be won too.
+    const empty = runDraw(sim, oracleSecretKey, losers(3), true);
+    expect(sim.getLedger().draws.lookup(empty.n).mustBeWon).toBe(true);
+    expect(sim.getLedger().carry).toBe(empty.e.carry);
+    expect(sim.getLedger().rollovers).toBe(2n);
+    // A division 1 winner takes it and the count starts again.
+    const won = runDraw(sim, oracleSecretKey, (d) => [makeTicket(d.n, lineHitting(d.numbers, d.moonball, 7, true), randomAddress())], true);
+    expect(sim.getLedger().draws.lookup(won.n).prizes[0]).toBe(won.e.prizes[0]);
+    expect(sim.getLedger().rollovers).toBe(0n);
+  });
+
+  it('never forces a payout with mustBeWonAfter 0', () => {
+    const { sim, oracleSecretKey } = setup({ mustBeWonAfter: 0n });
+    for (let i = 0; i < 3; i++) runDraw(sim, oracleSecretKey, losers(2));
+    const last = runDraw(sim, oracleSecretKey, (d) => [makeTicket(d.n, lineHitting(d.numbers, d.moonball, 3, true), randomAddress())]);
+    const d = sim.getLedger().draws.lookup(last.n);
+    expect(d.mustBeWon).toBe(false);
+    expect(d.prizes[0]).toBe(0n);
+    expect(d.prizes).toEqual(last.e.prizes);
+    expect(sim.getLedger().rollovers).toBe(4n);
   });
 });
 

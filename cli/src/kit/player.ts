@@ -5,7 +5,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { Starfall } from '@lunardraw/contract';
-import { isStaleDustProof, type StarfallView } from '@lunardraw/keeper';
+import { isStaleDustProof, mustBeWonStatus, type StarfallView } from '@lunardraw/keeper';
 import { type Session, walletAddress, walletBalances } from '@nightcast/deploy';
 import { buyerProviders, buyWithRetry, proverArg } from '../buyer.js';
 import { publicDataFor, withSession } from '../common.js';
@@ -30,6 +30,8 @@ export type DrawOnSale = {
   jackpotEstimate: string;
   /** The final draw: its jackpot must be won (an unwon one falls to the next division with a winner, and what no division takes is shared by every game). */
   final?: { note: string };
+  /** Its jackpot must be won ('yes'), or will be if the draw before it rolls over too ('possible'). */
+  mustBeWon?: { status: 'yes' | 'possible'; note: string };
 };
 export type DrawResult = { draw: number; status: 'drawn' | 'settled' | 'void'; numbers?: number[]; moonball?: number; games: number; winningGames?: number };
 
@@ -68,6 +70,20 @@ export const overviewOf = (view: StarfallView, network: string, contract: string
               },
             }
           : {}),
+        ...(() => {
+          const m = selling.final ? 'no' : mustBeWonStatus(view, selling.id);
+          if (m === 'no') return {};
+          const after = `${view.mustBeWonAfter} jackpot rollover(s) in a row`;
+          return {
+            mustBeWon: {
+              status: m,
+              note:
+                m === 'yes'
+                  ? `After ${after}, this draw's jackpot must be won: if nobody wins Division 1, it falls to the next prize division with a winner.`
+                  : `If the draw before this one doesn't pay out its jackpot either, that makes ${after}, and this draw's jackpot must be won.`,
+            },
+          };
+        })(),
       }
     : null;
   const recent: DrawResult[] = [...view.draws]

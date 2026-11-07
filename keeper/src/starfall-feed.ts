@@ -7,7 +7,7 @@
  */
 import { Starfall } from '@lunardraw/contract';
 import type { FeedDraw } from './feed.js';
-import type { StarfallDrawView, StarfallView } from './starfall.js';
+import { mustBeWonStatus, type StarfallDrawView, type StarfallView } from './starfall.js';
 import type { Purchase } from './purchase-log.js';
 import type { StepRecord } from './step-times.js';
 
@@ -24,6 +24,8 @@ export type StarfallFeedDraw = Omit<FeedDraw, 'status' | 'claim_deadline'> & {
   refunded?: number;
   /** The final draw: its jackpot must be won (an unwon one falls to the next division with a winner). */
   final?: true;
+  /** A settled draw whose jackpot had to be won (a final draw, or after must_be_won_after rollovers). */
+  must_be_won?: true;
   /** A settled final draw: what each game sold gets of the money no division took (paid to its refund address). */
   final_share_star?: number;
   /** Tickets sold: entries, each a standard game, a System or a Pick (games_sold counts their games). */
@@ -58,9 +60,22 @@ export type StarfallFeed = {
       final_sales_secs?: number;
       /** The final draw has given everything out: no draw will open again. */
       ended?: true;
+      /** Jackpot rollovers in a row before a draw's jackpot must be won (0: never), and the rollovers so far. */
+      must_be_won_after?: number;
+      rollovers?: number;
       allocation_bp: number[];
       carry_star: number;
-      open?: { num: number; sales_close: string; reveal_deadline?: string; seed_commitment: string; games_sold: number; tickets: number; final?: true };
+      open?: {
+        num: number;
+        sales_close: string;
+        reveal_deadline?: string;
+        seed_commitment: string;
+        games_sold: number;
+        tickets: number;
+        final?: true;
+        /** Its jackpot must be won ('yes'), or will be if the draws before it roll over ('possible'). */
+        must_be_won?: 'yes' | 'possible';
+      };
       /** Recent purchases, newest first, as the keeper saw them (PurchaseLog): draw, games and tickets only. */
       purchases?: Purchase[];
       draws: StarfallFeedDraw[];
@@ -133,6 +148,7 @@ export const buildStarfallFeed = (
       out.carry_out_star = star(carryOut.get(d.id) ?? 0n);
     }
     if (d.final) out.final = true;
+    if (d.status === DrawStatus.settled && d.mustBeWon) out.must_be_won = true;
     if (d.status === DrawStatus.voided) out.refunded = Number(d.refundedGames);
     if (d.status === DrawStatus.settled && d.finalShare > 0n) {
       out.final_share_star = star(d.finalShare);
@@ -165,6 +181,7 @@ export const buildStarfallFeed = (
         ...(view.maxTicketsPerDraw !== undefined ? { max_tickets_per_draw: Number(view.maxTicketsPerDraw) } : {}),
         ...(view.finalSales !== undefined ? { final_sales_secs: Number(view.finalSales) } : {}),
         ...(view.ended ? { ended: true as const } : {}),
+        ...(view.mustBeWonAfter !== undefined ? { must_be_won_after: Number(view.mustBeWonAfter), rollovers: Number(view.rollovers) } : {}),
         allocation_bp: [...Starfall.POWERBALL_SHARES_BP],
         carry_star: star(view.carry),
         open: selling
@@ -177,6 +194,10 @@ export const buildStarfallFeed = (
               games_sold: Number(selling.games),
               tickets: Number(selling.tickets),
               ...(selling.final ? { final: true as const } : {}),
+              ...(() => {
+                const m = mustBeWonStatus(view, selling.id);
+                return m === 'no' ? {} : { must_be_won: m };
+              })(),
             }
           : undefined,
         ...(opts.purchases ? { purchases: opts.purchases } : {}),
