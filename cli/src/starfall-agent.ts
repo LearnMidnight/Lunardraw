@@ -5,7 +5,11 @@
  * into yet (and sales don't close too soon), it composes an entry from its
  * style and buys. With `buyEverySecs` it buys again in each later slot of that
  * length (an hour, say) while the draw sells, within its budget for the draw:
- * with daily draws, that keeps an agent playing through the day. Once a draw it played has its numbers, it works out what it
+ * with daily draws, that keeps an agent playing through the day. Each agent's
+ * slots start at its own minute past the hour (`buyOffsetSecs`, by default
+ * from its name): purchases take the next ticket index, so agents buying in the
+ * same minute knock each other's purchases out (8 Nov 2026: at the top of the
+ * hour two of three failed with FailFallible). Once a draw it played has its numbers, it works out what it
  * won and says so (prizes reach its wallet by themselves). What it bought and
  * what it reported are kept in a small state file, so a restart doesn't buy
  * twice or report twice.
@@ -46,6 +50,8 @@ export type AgentOptions = {
    * hour), not just once a draw. The budget still caps the whole draw. Default: once a draw.
    */
   buyEverySecs?: number;
+  /** With buyEverySecs: the slots start this many seconds into each period (default 0). */
+  buyOffsetSecs?: number;
 };
 
 export type AgentPurchase = {
@@ -153,6 +159,17 @@ export const spentSince = (state: AgentState, sinceMs: number): bigint =>
 export const spentOnDraw = (state: AgentState, draw: bigint): bigint =>
   state.purchases.filter((p) => p.draw === draw.toString()).reduce((a, p) => a + BigInt(p.cost), 0n);
 
+/**
+ * A minute within each period of `periodSecs`, from the agent's name (FNV-1a), so
+ * agents left on the default spread out instead of all buying at the top of the hour.
+ */
+export const slotOffsetFor = (name: string, periodSecs: number): number => {
+  let h = 0x811c9dc5;
+  for (const c of new TextEncoder().encode(name)) h = Math.imul(h ^ c, 0x01000193) >>> 0;
+  const minutes = Math.max(1, Math.floor(periodSecs / 60));
+  return (h % minutes) * 60;
+};
+
 /** The draws the agent has bought into (several purchases of one draw count once). */
 export const drawsPlayed = (state: AgentState): number => new Set(state.purchases.map((p) => p.draw)).size;
 
@@ -177,7 +194,8 @@ export const planPurchase = (
   if (inDraw.length) {
     if (!o.buyEverySecs || o.buyEverySecs <= 0) return null;
     // once a slot: the slot of the latest purchase in this draw is done
-    const slot = (ms: number) => Math.floor(ms / (o.buyEverySecs! * 1000));
+    const offset = (o.buyOffsetSecs ?? 0) * 1000;
+    const slot = (ms: number) => Math.floor((ms - offset) / (o.buyEverySecs! * 1000));
     const latest = Math.max(...inDraw.map((p) => Date.parse(p.at)).filter((t) => Number.isFinite(t)));
     if (!Number.isFinite(latest) || slot(latest) >= slot(nowSecs * 1000)) return null;
   } else if (o.maxDraws && drawsPlayed(state) >= o.maxDraws) {

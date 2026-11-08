@@ -13,6 +13,7 @@ import {
   planPurchase,
   saveAgentState,
   settledResults,
+  slotOffsetFor,
   voidedDraws,
 } from '../starfall-agent.js';
 
@@ -82,6 +83,31 @@ describe('the Starfall agent', () => {
     const p2 = planPurchase(v2, 11_000, state, o, entries);
     expect(p2 && !('skipped' in p2) ? p2.draw : p2).toBe(2n);
     expect(planPurchase(view([draw(1, DrawStatus.requested, 10_000)]), 11_000, emptyAgentState(), o, entries)).toBeNull(); // nothing on sale
+  });
+
+  it('with buyOffsetSecs, each slot starts that far into the hour, so agents buy at different minutes', () => {
+    const hour = 3600;
+    const o = { name: 'a', style: 'quickpick' as const, games: 1, buyEverySecs: hour, buyOffsetSecs: 30 * 60, budget: 100_000_000n };
+    const entries = composeEntries(o);
+    const top = 1_800_000_000 - (1_800_000_000 % hour); // a top of the hour
+    const v = view([draw(1, DrawStatus.open, top + 24 * hour)]);
+    const state = emptyAgentState();
+    state.purchases.push({ draw: '1', at: new Date((top + 35 * 60) * 1000).toISOString(), entries, games: 1, cost: '1300000', txs: 1 });
+    const planned = (now: number) => {
+      const p = planPurchase(v, now, state, o, entries);
+      return p && !('skipped' in p) ? p.draw : p;
+    };
+    expect(planned(top + hour + 5)).toBeNull(); // the top of the next hour: still the :30 slot it bought in
+    expect(planned(top + hour + 29 * 60)).toBeNull();
+    expect(planned(top + hour + 30 * 60)).toBe(1n); // :30, its next slot
+    // the default minute comes from the name: the same every time, within the hour, whole minutes
+    for (const n of ['nova', 'pixel', 'orbit', 'x']) {
+      const s = slotOffsetFor(n, hour);
+      expect(s).toBe(slotOffsetFor(n, hour));
+      expect(s % 60).toBe(0);
+      expect(s >= 0 && s < hour).toBe(true);
+    }
+    expect(new Set(['nova', 'pixel', 'orbit'].map((n) => slotOffsetFor(n, hour))).size).toBe(3);
   });
 
   it('with buyEverySecs, buys again in each later slot of a draw while it sells, within its budget for the draw', () => {

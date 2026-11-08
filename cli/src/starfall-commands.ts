@@ -53,6 +53,7 @@ import {
   saveAgentState,
   settledResults,
   drawsPlayed,
+  slotOffsetFor,
   voidedDraws,
 } from './starfall-agent.js';
 import { type Check, currentCommit, formatChecks } from './deployment.js';
@@ -97,7 +98,7 @@ export const STARFALL_USAGE = `usage: ./lunardraw starfall <command>
                | [--system <8-12> | --pick <5|6>] [--numbers "<n n n ...>"] [--moonball <1-20> | --sweep]
   agent        --network <network> --wallet <file> --name <name> [--style quickpick|lucky|moonhit|system|mix]
                [--games <n>] [--numbers "<7 numbers>" --moonball <1-20>] [--budget <tNIGHT a draw>] [--max-draws <n>]
-               [--daily-limit <tNIGHT a day>] [--buy-every <minutes>] [--state <file>] [--proof-server-port <port> | --prover <url|hosted>] [--dust-wait <min>]
+               [--daily-limit <tNIGHT a day>] [--buy-every <minutes> [--buy-at <minute>]] [--state <file>] [--proof-server-port <port> | --prover <url|hosted>] [--dust-wait <min>]
   status       --network <network>
   last-draw    --network <network> [--undo]   (the next draw is the final draw, then nothing more opens: see below)
   verify       --network <network>
@@ -470,6 +471,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
       'daily-limit': { type: 'string' },
       'max-draws': { type: 'string' },
       'buy-every': { type: 'string' },
+      'buy-at': { type: 'string' },
       state: { type: 'string' },
       undo: { type: 'boolean', default: false },
     },
@@ -791,6 +793,15 @@ export const starfall = async (argv: string[]): Promise<number> => {
         buyEverySecs: values['buy-every'] !== undefined ? Math.round(Number(values['buy-every']) * 60) : undefined,
       };
       if (opts.buyEverySecs !== undefined && !(opts.buyEverySecs >= 60)) throw new Error('--buy-every takes minutes, 1 or more (60: each hour)');
+      if (values['buy-at'] !== undefined) {
+        const at = Number(values['buy-at']);
+        if (!opts.buyEverySecs) throw new Error('--buy-at goes with --buy-every');
+        if (!(Number.isInteger(at) && at >= 0 && at * 60 < opts.buyEverySecs)) throw new Error(`--buy-at takes a minute from 0 to ${opts.buyEverySecs / 60 - 1}`);
+        opts.buyOffsetSecs = at * 60;
+      } else if (opts.buyEverySecs) {
+        // agents buying in the same minute knock each other's purchases out: each gets its own minute
+        opts.buyOffsetSecs = slotOffsetFor(name, opts.buyEverySecs);
+      }
       if (style === 'lucky') {
         if (!opts.numbers || opts.numbers.length !== 7 || !opts.moonball) throw new Error('--style lucky needs --numbers "<7 numbers>" and --moonball');
         Starfall.checkEntry({ numbers: opts.numbers, moonball: opts.moonball });
@@ -808,7 +819,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
           const mine = walletBytes(wallet);
           const log = (msg: string) => session.logger.info(`[${name}] ${msg}`);
           log(
-            `playing Starfall on ${network} in the ${style} style from ${walletAddress(wallet)}${opts.buyEverySecs ? `, buying every ${opts.buyEverySecs / 60} min while a draw sells` : ''}; ` +
+            `playing Starfall on ${network} in the ${style} style from ${walletAddress(wallet)}${opts.buyEverySecs ? `, buying every ${opts.buyEverySecs / 60} min (from ${(opts.buyOffsetSecs ?? 0) / 60} min past) while a draw sells` : ''}; ` +
               `${drawsPlayed(state)} draw(s) played so far; state in ${statePath}`,
           );
           let stop = false;
