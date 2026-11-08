@@ -3,7 +3,9 @@
  *
  * Each pass it looks at the chain: if a draw is on sale that it hasn't bought
  * into yet (and sales don't close too soon), it composes an entry from its
- * style and buys. Once a draw it played has its numbers, it works out what it
+ * style and buys. With `buyEverySecs` it buys again in each later slot of that
+ * length (an hour, say) while the draw sells, within its budget for the draw:
+ * with daily draws, that keeps an agent playing through the day. Once a draw it played has its numbers, it works out what it
  * won and says so (prizes reach its wallet by themselves). What it bought and
  * what it reported are kept in a small state file, so a restart doesn't buy
  * twice or report twice.
@@ -39,6 +41,11 @@ export type AgentOptions = {
   maxDraws?: number;
   /** Most to spend in any 24 hours, in STAR (none by default). */
   dailyLimit?: bigint;
+  /**
+   * Buy again into the draw on sale once in every slot of this many seconds (3600: each clock
+   * hour), not just once a draw. The budget still caps the whole draw. Default: once a draw.
+   */
+  buyEverySecs?: number;
 };
 
 export type AgentPurchase = {
@@ -146,9 +153,13 @@ export const spentSince = (state: AgentState, sinceMs: number): bigint =>
 export const spentOnDraw = (state: AgentState, draw: bigint): bigint =>
   state.purchases.filter((p) => p.draw === draw.toString()).reduce((a, p) => a + BigInt(p.cost), 0n);
 
+/** The draws the agent has bought into (several purchases of one draw count once). */
+export const drawsPlayed = (state: AgentState): number => new Set(state.purchases.map((p) => p.draw)).size;
+
 /**
  * What to buy now, or null: nothing on sale, sales closing too soon, already
- * bought into this draw, the budget or the limit of draws reached. `entries`
+ * bought into this draw (or, with buyEverySecs, already in this slot of it),
+ * the budget for the draw, the daily limit or the limit of draws reached. `entries`
  * lets the caller (or a test) supply the composed entries.
  */
 export const planPurchase = (
@@ -162,12 +173,27 @@ export const planPurchase = (
   const margin = BigInt(o.marginSecs ?? 180);
   const selling = view.draws.find((d) => d.status === Starfall.DrawStatus.open && d.salesClose > now + margin);
   if (!selling) return null;
-  if (state.purchases.some((p) => p.draw === selling.id.toString())) return null;
-  if (o.maxDraws && state.purchases.length >= o.maxDraws) return { skipped: `played ${o.maxDraws} draw(s), the limit` };
+  const inDraw = state.purchases.filter((p) => p.draw === selling.id.toString());
+  if (inDraw.length) {
+    if (!o.buyEverySecs || o.buyEverySecs <= 0) return null;
+    // once a slot: the slot of the latest purchase in this draw is done
+    const slot = (ms: number) => Math.floor(ms / (o.buyEverySecs! * 1000));
+    const latest = Math.max(...inDraw.map((p) => Date.parse(p.at)).filter((t) => Number.isFinite(t)));
+    if (!Number.isFinite(latest) || slot(latest) >= slot(nowSecs * 1000)) return null;
+  } else if (o.maxDraws && drawsPlayed(state) >= o.maxDraws) {
+    return { skipped: `played ${o.maxDraws} draw(s), the limit` };
+  }
   const games = entries.reduce((a, e) => a + Starfall.gamesOf(e), 0);
   const cost = view.ticketPrice * BigInt(games);
   const budget = o.budget ?? 60_000_000n;
-  if (cost > budget) return { skipped: `${games} game(s) would cost ${Number(cost) / 1e6} tNIGHT, over the budget of ${Number(budget) / 1e6}` };
+  const spent = spentOnDraw(state, selling.id);
+  if (spent + cost > budget) {
+    return {
+      skipped: spent
+        ? `${games} game(s) more (${Number(cost) / 1e6} tNIGHT) would take draw ${selling.id} to ${Number(spent + cost) / 1e6}, over the budget of ${Number(budget) / 1e6} a draw`
+        : `${games} game(s) would cost ${Number(cost) / 1e6} tNIGHT, over the budget of ${Number(budget) / 1e6}`,
+    };
+  }
   if (o.dailyLimit !== undefined) {
     const spent = spentSince(state, nowSecs * 1000 - 24 * 3600_000);
     if (spent + cost > o.dailyLimit) {
@@ -182,19 +208,24 @@ export type Result = { draw: bigint; numbers: number[]; moonball: number; games:
 /** Draws the agent played whose numbers are out and haven't been reported yet. */
 export const settledResults = (view: StarfallView, state: AgentState): Result[] => {
   const out: Result[] = [];
-  for (const p of state.purchases) {
-    if (state.reported.includes(p.draw)) continue;
-    const d = view.draws.find((x) => x.id.toString() === p.draw);
+  // one result a draw, however many purchases went into it
+  for (const draw of new Set(state.purchases.map((p) => p.draw))) {
+    if (state.reported.includes(draw)) continue;
+    const d = view.draws.find((x) => x.id.toString() === draw);
     if (!d || (d.status !== Starfall.DrawStatus.drawn && d.status !== Starfall.DrawStatus.settled)) continue;
     const won = Array.from({ length: 9 }, () => 0n);
-    for (const e of p.entries) {
-      Starfall.gamesByDivisionFor(e, d.numbers, d.moonball).forEach((n, i) => (won[i] += n));
+    let games = 0;
+    for (const p of state.purchases.filter((x) => x.draw === draw)) {
+      games += p.games;
+      for (const e of p.entries) {
+        Starfall.gamesByDivisionFor(e, d.numbers, d.moonball).forEach((n, i) => (won[i] += n));
+      }
     }
     out.push({
       draw: d.id,
       numbers: d.numbers,
       moonball: d.moonball,
-      games: p.games,
+      games,
       won: won.map((n, i) => ({ division: i + 1, games: Number(n) })).filter((w) => w.games > 0),
     });
   }
@@ -203,9 +234,9 @@ export const settledResults = (view: StarfallView, state: AgentState): Result[] 
 
 /** Draws the agent played that were cancelled (its games are refunded). */
 export const voidedDraws = (view: StarfallView, state: AgentState): bigint[] =>
-  state.purchases
-    .filter((p) => !state.reported.includes(p.draw))
-    .map((p) => view.draws.find((x) => x.id.toString() === p.draw))
+  [...new Set(state.purchases.map((p) => p.draw))]
+    .filter((draw) => !state.reported.includes(draw))
+    .map((draw) => view.draws.find((x) => x.id.toString() === draw))
     .filter((d): d is NonNullable<typeof d> => !!d && d.status === Starfall.DrawStatus.voided)
     .map((d) => d.id);
 
