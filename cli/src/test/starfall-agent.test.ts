@@ -7,6 +7,7 @@ import type { StarfallDrawView, StarfallView } from '@lunardraw/keeper';
 import {
   composeEntries,
   describeResult,
+  drawsPlayed,
   emptyAgentState,
   loadAgentState,
   planPurchase,
@@ -81,6 +82,53 @@ describe('the Starfall agent', () => {
     const p2 = planPurchase(v2, 11_000, state, o, entries);
     expect(p2 && !('skipped' in p2) ? p2.draw : p2).toBe(2n);
     expect(planPurchase(view([draw(1, DrawStatus.requested, 10_000)]), 11_000, emptyAgentState(), o, entries)).toBeNull(); // nothing on sale
+  });
+
+  it('with buyEverySecs, buys again in each later slot of a draw while it sells, within its budget for the draw', () => {
+    const hour = 3600;
+    const o = { name: 'a', style: 'quickpick' as const, games: 2, buyEverySecs: hour, budget: 6_000_000n };
+    const entries = composeEntries(o);
+    const t0 = 1_800_000_000; // a moment within a clock hour
+    const v = view([draw(1, DrawStatus.open, t0 + 24 * hour)]);
+    const state = emptyAgentState();
+    const at = (secs: number) => new Date(secs * 1000).toISOString();
+    const planned = (now: number) => {
+      const p = planPurchase(v, now, state, o, entries);
+      return p && !('skipped' in p) ? p.draw : p;
+    };
+    expect(planned(t0)).toBe(1n);
+    state.purchases.push({ draw: '1', at: at(t0), entries, games: 2, cost: '2400000', txs: 1 });
+    expect(planned(t0 + 60)).toBeNull(); // the same hour: done
+    const nextHour = (Math.floor(t0 / hour) + 1) * hour;
+    expect(planned(nextHour - 1)).toBeNull();
+    expect(planned(nextHour + 5)).toBe(1n); // the next clock hour
+    state.purchases.push({ draw: '1', at: at(nextHour + 5), entries, games: 2, cost: '2400000', txs: 1 });
+    // 4.8 spent of a 6 tNIGHT budget for the draw: 2.4 more would pass it
+    expect(planPurchase(v, nextHour + 2 * hour, state, o, entries)).toMatchObject({ skipped: expect.stringMatching(/take draw 1 to 7\.2, over the budget of 6 a draw/) });
+    // without buyEverySecs: once a draw, as before
+    expect(planPurchase(v, nextHour + 2 * hour, state, { ...o, buyEverySecs: undefined }, entries)).toBeNull();
+    // the limit of draws counts draws, not purchases
+    expect(drawsPlayed(state)).toBe(1);
+    const v2 = view([draw(2, DrawStatus.open, t0 + 48 * hour), draw(1, DrawStatus.drawn, t0 + 24 * hour)]);
+    expect(planPurchase(v2, t0 + 25 * hour, state, { ...o, maxDraws: 2 }, entries)).toMatchObject({ draw: 2n });
+    expect(planPurchase(v2, t0 + 25 * hour, state, { ...o, maxDraws: 1 }, entries)).toEqual({ skipped: 'played 1 draw(s), the limit' });
+  });
+
+  it('reports a draw bought into several times once, with all its games', () => {
+    const state = emptyAgentState();
+    const a = { numbers: [1, 2, 3, 4, 5, 6, 7], moonball: 9 };
+    const b = { numbers: [1, 2, 3, 30, 31, 32, 33], moonball: 9 };
+    state.purchases.push({ draw: '1', at: 'a', entries: [a], games: 1, cost: '1300000', txs: 1 });
+    state.purchases.push({ draw: '1', at: 'b', entries: [b], games: 1, cost: '1300000', txs: 1 });
+    const v = view([draw(1, DrawStatus.drawn, 10_000, { numbers: [1, 2, 3, 4, 5, 6, 7], moonball: 9 })]);
+    const results = settledResults(v, state);
+    expect(results).toHaveLength(1);
+    expect(results[0].games).toBe(2);
+    expect(results[0].won).toEqual([
+      { division: 1, games: 1 },
+      { division: 8, games: 1 },
+    ]);
+    expect(voidedDraws(view([draw(1, DrawStatus.voided, 10_000)]), state)).toEqual([1n]);
   });
 
   it('reports each played draw once its numbers are out, with what it won, and cancelled draws', () => {
