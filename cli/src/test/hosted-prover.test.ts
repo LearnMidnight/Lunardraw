@@ -63,8 +63,17 @@ describe("proving purchases with Lunardraw's player prover", () => {
     const answer = await hostedProofProvider('https://prover.example', { fetcher }).proveTx(handle);
     expect(answer.era).toBe('v9');
     expect(calls).toEqual([]); // no circuit, so the prover was never asked
-    // The provider itself keeps no keys: the player prover holds them.
-    expect(await hostedProvingProvider('https://prover.example', { fetcher }).lookupKey('buyTickets')).toBeUndefined();
+  });
+
+  it("answers the ledger's key lookup with the prover's verifier key (and nothing else), once per circuit", async () => {
+    const { fetcher, calls } = fakeFetch([() => new Response(new Uint8Array([4, 2]))]);
+    const p = hostedProvingProvider('https://prover.example', { fetcher });
+    const material = await p.lookupKey('contract:' + 'ab'.repeat(32) + '/buyTickets?vk=' + 'cd'.repeat(32));
+    expect(Array.from(material!.verifierKey)).toEqual([4, 2]);
+    expect(material!.proverKey.length).toBe(0);
+    expect(calls[0].url).toBe('https://prover.example/keys/buyTickets.verifier');
+    await p.lookupKey('buyTickets'); // cached
+    expect(calls.length).toBe(1);
   });
 
   it("reads the prover's health", async () => {

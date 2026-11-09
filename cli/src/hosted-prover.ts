@@ -68,6 +68,7 @@ const poster = (base: string, opts: HostedProverOptions) => async (path: string,
 export const hostedProvingProvider = (url: string, opts: HostedProverOptions = {}) => {
   const base = baseOf(url);
   const post = poster(base, opts);
+  const verifiers = new Map<string, Promise<Uint8Array>>();
   return {
     async check(preimage: Uint8Array, keyLocation: string) {
       return parseCheckResult(await post(`/check/${encodeURIComponent(keyLocation)}`, preimage));
@@ -76,9 +77,26 @@ export const hostedProvingProvider = (url: string, opts: HostedProverOptions = {
       const q = overwriteBindingInput === undefined ? '' : `?binding=${overwriteBindingInput.toString()}`;
       return post(`/prove/${encodeURIComponent(keyLocation)}${q}`, preimage);
     },
-    /** The keys live on the player prover; the ledger sends it the preimage only. */
-    async lookupKey() {
-      return undefined;
+    /**
+     * Ledger 9 asks for a circuit's key material before it sends the proof request and refuses to
+     * prove without it ("couldn't find keys with ID KeyLocation(...)"). It only needs the verifier
+     * key, which the player prover publishes (`GET /keys/<circuit>.verifier`); the proving key
+     * stays on the prover.
+     */
+    async lookupKey(keyLocation: string) {
+      const circuit = /(?:^|\/)([A-Za-z0-9_]+)(?:\?|$)/.exec(keyLocation)?.[1];
+      if (!circuit) return undefined;
+      let p = verifiers.get(circuit);
+      if (!p) {
+        p = (async () => {
+          const r = await (opts.fetcher ?? fetch)(`${base}/keys/${encodeURIComponent(circuit)}.verifier`, { signal: AbortSignal.timeout(30_000) });
+          if (!r.ok) throw new Error(`Lunardraw's prover has no verifier key for ${circuit} (HTTP ${r.status})`);
+          return new Uint8Array(await r.arrayBuffer());
+        })();
+        p.catch(() => verifiers.delete(circuit));
+        verifiers.set(circuit, p);
+      }
+      return { proverKey: new Uint8Array(0), verifierKey: await p, ir: new Uint8Array(0) };
     },
   };
 };
