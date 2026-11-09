@@ -11,7 +11,10 @@
  *
  * Same protocol as the website's purchase engine (siteProvingProvider).
  */
-import { CostModel, parseCheckResult } from '@midnight-ntwrk/midnight-js-protocol/ledger';
+import { CostModel, parseCheckResult, Transaction } from '@midnight-ntwrk/midnight-js-protocol/v9';
+import { loadLedger8Protocol } from '@midnight-ntwrk/midnight-js-protocol';
+import { proveLedger8Transaction } from '@midnight-ntwrk/midnight-js-protocol/prove';
+import { createProofProviderFromHandlers, type ProofProvider } from '@midnight-ntwrk/midnight-js/types';
 
 /** Lunardraw's player prover. */
 export const DEFAULT_PROVER = 'https://prover.207-180-249-120.sslip.io';
@@ -73,23 +76,26 @@ export const hostedProvingProvider = (url: string, opts: HostedProverOptions = {
       const q = overwriteBindingInput === undefined ? '' : `?binding=${overwriteBindingInput.toString()}`;
       return post(`/prove/${encodeURIComponent(keyLocation)}${q}`, preimage);
     },
+    /** The keys live on the player prover; the ledger sends it the preimage only. */
+    async lookupKey() {
+      return undefined;
+    },
   };
 };
-
-type Provable = { prove(provider: ReturnType<typeof hostedProvingProvider>, costModel: unknown): Promise<unknown> };
 
 /**
  * midnight-js's ProofProvider, proving through the player prover: use it in
  * place of `httpClientProofProvider` for buying tickets (the only circuit the
- * player prover proves).
+ * player prover proves). One handler per ledger era, as Midnight.js 5's own
+ * HTTP proof provider has: the circuit-level check and prove are the same on
+ * both sides of the hard fork; the transaction around them is each era's.
  */
-export const hostedProofProvider = (url: string, opts: HostedProverOptions = {}) => {
+export const hostedProofProvider = (url: string, opts: HostedProverOptions = {}): ProofProvider => {
   const provider = hostedProvingProvider(url, opts);
-  return {
-    async proveTx(unproven: Provable) {
-      return unproven.prove(provider, CostModel.initialCostModel());
-    },
-  };
+  return createProofProviderFromHandlers({
+    v8: async (tx) => proveLedger8Transaction(tx.deserialize({ v8: (await loadLedger8Protocol()).Transaction }), provider),
+    v9: (tx) => tx.deserialize({ v9: Transaction }).prove(provider, CostModel.initialCostModel()),
+  });
 };
 
 /** Whether the prover is up (its /health says ok). */

@@ -282,7 +282,7 @@ export const signedListing = (signer: Signer, p: Omit<ListingPayload, 'v' | 'key
  */
 export const walletSigner = async (seed: string, network: string): Promise<Signer> => {
   const { WalletSeeds } = await import('@midnight-ntwrk/testkit-js');
-  const ledger = await import('@midnight-ntwrk/midnight-js-protocol/ledger');
+  const ledger = await import('@midnight-ntwrk/midnight-js-protocol/v8');
   const sk = Buffer.from(WalletSeeds.fromMasterSeed(seed).unshielded).toString('hex');
   const key = ledger.signatureVerifyingKey(sk) as unknown as string;
   return {
@@ -294,6 +294,6 @@ export const walletSigner = async (seed: string, network: string): Promise<Signe
 
 /** mn_addr_... for a 32-byte address in hex. */
 export const bech32Address = async (hex: string, network: string): Promise<string> => {
-  const { UnshieldedAddress } = await import('@midnight-ntwrk/wallet-sdk-address-format');
+  const { UnshieldedAddress } = await import('@midnightntwrk/wallet-sdk-address-format');
   return UnshieldedAddress.codec.encode(network as never, new UnshieldedAddress(Buffer.from(hex, 'hex'))).asString();
 };

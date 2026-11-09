@@ -4,7 +4,7 @@ import { quickPick, Starfall } from '@lunardraw/contract';
 import { DerivedSeeds, every, StarfallKeeper, type StarfallView } from '@lunardraw/keeper';
 import { generateOperatorSecret, generateOracleSecretKey, oraclePublicKey } from '@nightcast/contract';
 import { onChainFingerprints } from '@nightcast/deploy';
-import { MidnightBech32m, UnshieldedAddress } from '@midnight-ntwrk/wallet-sdk-address-format';
+import { MidnightBech32m, UnshieldedAddress } from '@midnightntwrk/wallet-sdk-address-format';
 import { pureCircuits as v0 } from '@lunardraw/contract';
 import { buyEntries, describeEntry, describeTickets, drawRoom, entriesBought, lastDrawMarker, organiserCheck, parseUserAddress, starfallOrganiserCommitment, windDownStatus } from '../starfall-commands.js';
 import {
@@ -50,12 +50,14 @@ const fakeMidnight = (sim: InstanceType<typeof Starfall.SettlementSimulator>, in
   let state: PrivateState = initial;
   const seen: PrivateState[] = [];
   const store = {
-    setContractAddress(address: string) {
+    forContract(address: string) {
       expect(address).toBe(sim.address);
-    },
-    async set(id: string, s: PrivateState) {
-      expect(id).toBe(STARFALL_PRIVATE_STATE_ID);
-      state = s;
+      return {
+        async set(id: string, s: PrivateState) {
+          expect(id).toBe(STARFALL_PRIVATE_STATE_ID);
+          state = s;
+        },
+      };
     },
   };
   const calls: StarfallCalls = {
@@ -109,10 +111,10 @@ describe('MidnightStarfallChain', () => {
     const count = Number(Starfall.pureCircuits.batchSize()) + 8;
     const games = Array.from({ length: count }, () => Starfall.makeTicket(1n, quickPick(), buyer));
     for (let i = 0; i < games.length; i += 2) {
-      await m.store.set(STARFALL_PRIVATE_STATE_ID, { pendingTickets: games.slice(i, i + 2) });
+      await m.store.forContract(sim.address).set(STARFALL_PRIVATE_STATE_ID, { pendingTickets: games.slice(i, i + 2) });
       await m.calls.callTx.buyTickets(BigInt(games.slice(i, i + 2).length), { bytes: buyer });
     }
-    await m.store.set(STARFALL_PRIVATE_STATE_ID, base);
+    await m.store.forContract(sim.address).set(STARFALL_PRIVATE_STATE_ID, base);
     sim.advance(Number(sim.getLedger().draws.lookup(1n).salesClose) - sim.now + 31);
     expect((await keeper.tick()).done).toEqual(['reveal 1']);
     sim.fulfilDraw(1n);
@@ -287,7 +289,7 @@ describe('winding a deployment down', () => {
 });
 
 describe('buyGames', () => {
-  const store = { setContractAddress() {}, async set() {} };
+  const store = { forContract: () => ({ async set() {} }) };
   // 40 tickets: 7 a purchase, so 7, 7, 7, 7, 7, then 5.
   const M = Number(Starfall.pureCircuits.maxTickets());
   const games = Array.from({ length: 40 }, () => Starfall.makeTicket(1n, quickPick(), OPERATOR));

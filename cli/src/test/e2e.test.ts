@@ -10,11 +10,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { inspect } from 'node:util';
 import type { MidnightWalletProvider } from '@midnight-ntwrk/testkit-js';
-import { DrawStatus, ledger } from '@lunardraw/contract';
+import { DrawStatus, ledgerOf } from '@lunardraw/contract';
 import { commitmentOf, DrawOracle, Keeper, MemorySeedStore, type Schedule } from '@lunardraw/keeper';
 import { generateOperatorSecret, generateOracleSecretKey, oraclePublicKey, pureCircuits as nightcast } from '@nightcast/contract';
 import { combineDrawSeed, drawStarfall } from '@nightcast/sdk';
-import { connect, localFingerprints, openWallet, type Session } from '@nightcast/deploy';
+import { connect, localFingerprints, openWallet, readContractState, type Session } from '@nightcast/deploy';
 import { compiledLunardraw, joinLunardraw, lunardrawProviders, type LunardrawProviders, MidnightLunardrawChain, zkConfigPath } from '../contract.js';
 import { acceptOracleKey, deployLunardraw, type DeploymentRecord, organiserCommitmentOf, recordParameters, verifyDeployment } from '../deployment.js';
 
@@ -88,7 +88,7 @@ describe.runIf(enabled)('Lunardraw on a local Midnight network', () => {
       transactions: {},
       verifierKeys: fps,
     };
-    const state = await providers.publicDataProvider.queryContractState(address);
+    const state = await readContractState(providers.publicDataProvider, address);
     expect(verifyDeployment(record, state, fps).filter((c) => !c.ok)).toEqual([]);
   }, 15 * 60_000);
 
@@ -127,8 +127,8 @@ describe.runIf(enabled)('Lunardraw on a local Midnight network', () => {
     expect(d1.status).toBe(DrawStatus.drawn);
 
     // The numbers are the published rule applied to the revealed seed and the VRF output.
-    const state = await providers.publicDataProvider.queryContractState(address);
-    const draw = ledger(state!.data).draws.lookup(1n);
+    const state = await readContractState(providers.publicDataProvider, address);
+    const draw = ledgerOf(state!).draws.lookup(1n);
     // The revealed seed matches the commitment published when the draw opened
     // (the keeper has dropped its own copy by now: it's public).
     const seed = draw.seed;
@@ -138,6 +138,6 @@ describe.runIf(enabled)('Lunardraw on a local Midnight network', () => {
     const expected = drawStarfall(combineDrawSeed(hex(seed), draw.output));
     expect(draw.numbers.map(Number)).toEqual(expected.numbers);
     expect(Number(draw.moonball)).toBe(expected.moonball);
-    expect(ledger(state!.data).lastDraw).toBe(2n);
+    expect(ledgerOf(state!).lastDraw).toBe(2n);
   }, 40 * 60_000);
 });

@@ -170,7 +170,7 @@ describe('the agent kit', () => {
       },
     } as never;
     const providers = {
-      privateStateProvider: { setContractAddress() {}, async set() {} },
+      privateStateProvider: { forContract: () => ({ async set() {} }) },
       publicDataProvider: {
         async queryContractState() {
           throw new Error('offline');

@@ -114,7 +114,9 @@ const walk = (dir, depth) => {
   if (depth > 8 || !existsSync(dir)) return;
   for (const f of readdirSync(dir)) {
     const p = join(dir, f);
-    if (f === 'ledger-v8' && dir.endsWith('@midnight-ntwrk')) {
+    // One copy of the ledger (WASM) the kit transacts with: two copies would
+    // make its classes fail `instanceof` checks across the boundary.
+    if (f === 'ledger-v9' && dir.endsWith('@midnightntwrk')) {
       const v = JSON.parse(readFileSync(join(p, 'package.json'), 'utf8')).version;
       versions.set(p, v);
     }
@@ -123,7 +125,7 @@ const walk = (dir, depth) => {
 };
 walk(join(stage, 'node_modules'), 0);
 const kinds = new Set(versions.values());
-if (versions.size !== 1 || !kinds.has('8.1.0')) fail(`expected one @midnight-ntwrk/ledger-v8 8.1.0, found ${[...versions].map(([p, v]) => `${v} at ${p}`).join(', ')}`);
+if (versions.size !== 1 || !kinds.has('1.0.0')) fail(`expected one @midnightntwrk/ledger-v9 1.0.0, found ${[...versions].map(([p, v]) => `${v} at ${p}`).join(', ')}`);
 // Native add-ons that compile when installed would fail on a machine with no
 // C compiler, and bundled ones fail the whole install. cpu-features is
 // optional for ssh2 (it carries on without it), and the kit never uses ssh2.

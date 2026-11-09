@@ -444,7 +444,7 @@ const cleanStats = (x: unknown): AgentStats => {
 
 /** Midnight's signature check (ledger-v8): the key, the signature, and the address it makes. */
 export const ledgerVerifier = async (network: string): Promise<Verifier> => {
-  const ledger = await import('@midnight-ntwrk/midnight-js-protocol/ledger');
+  const ledger = await import('@midnight-ntwrk/midnight-js-protocol/v8');
   const { bech32Address } = await import('./listing.js');
   return {
     verify: (key, data, signature) => {

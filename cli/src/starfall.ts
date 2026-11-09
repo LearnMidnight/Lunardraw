@@ -7,11 +7,10 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
-import { type ChargedState, encodeContractAddress } from '@midnight-ntwrk/compact-runtime';
-import { CompiledContract, type ProvableCircuitId } from '@midnight-ntwrk/compact-js';
-import { findDeployedContract } from '@midnight-ntwrk/midnight-js/contracts';
-import type { MidnightProviders } from '@midnight-ntwrk/midnight-js/types';
-import { sampleSigningKey } from '@midnight-ntwrk/midnight-js-protocol/ledger';
+import { encodeContractAddress } from '@midnight-ntwrk/compact-runtime';
+import { findDeployedContract, type Ledger8CircuitId } from '@midnight-ntwrk/midnight-js/contracts';
+import type { ContractStateRead, MidnightProviders } from '@midnight-ntwrk/midnight-js/types';
+import { sampleSigningKey } from '@midnight-ntwrk/midnight-js-protocol/v9';
 import type { MidnightWalletProvider } from '@midnight-ntwrk/testkit-js';
 import { Starfall } from '@lunardraw/contract';
 import {
@@ -28,6 +27,7 @@ import {
   compareFingerprints,
   type CompilerInfo,
   contractProviders,
+  decodeContractState,
   deployLocked,
   type Fingerprints,
   isLocked,
@@ -43,7 +43,7 @@ type NextDraw = Starfall.NextDraw;
 export const STARFALL_PRIVATE_STATE_ID = 'starfall';
 
 export type StarfallContract = Starfall.Contract.Contract<PrivateState>;
-export type StarfallCircuits = ProvableCircuitId<StarfallContract>;
+export type StarfallCircuits = Ledger8CircuitId<StarfallContract>;
 export type StarfallProviders = MidnightProviders<StarfallCircuits, typeof STARFALL_PRIVATE_STATE_ID, PrivateState>;
 
 const hex = (b: Uint8Array): string => Buffer.from(b).toString('hex');
@@ -62,11 +62,13 @@ export const starfallZkConfigPath = (override = process.env.LUNARDRAW_STARFALL_Z
   throw new Error('No compiled Starfall contract with proving keys found. Run `npm run compact:starfall` then `npm run build`.');
 };
 
-export const compiledStarfall = (dir = starfallZkConfigPath()) =>
-  CompiledContract.make('starfall', Starfall.Contract.Contract<PrivateState>).pipe(
-    CompiledContract.withWitnesses(Starfall.settlementWitnesses),
-    CompiledContract.withCompiledFileAssets(dir),
-  );
+/**
+ * The Starfall contract with its witnesses, as Midnight.js 5 takes a contract
+ * compiled by the previous toolchain (Compact 0.31): the generated instance
+ * itself. Its proving keys come from the providers' ZK config provider
+ * (`starfallZkConfigPath`).
+ */
+export const compiledStarfall = (): StarfallContract => new Starfall.Contract.Contract<PrivateState>(Starfall.settlementWitnesses);
 
 export const starfallProviders = (session: Session, wallet: MidnightWalletProvider, dir = starfallZkConfigPath()): StarfallProviders =>
   contractProviders<StarfallCircuits, typeof STARFALL_PRIVATE_STATE_ID, PrivateState>(session, wallet, dir);
@@ -96,22 +98,30 @@ export interface StarfallCalls {
   };
 }
 
+/**
+ * Where the contract's state is read from: a Midnight.js public data provider
+ * (its reads are decoded here) or an adapter that already answers decoded
+ * ledger states (`decodedPublicData`, the simulator in tests).
+ */
 export interface ContractStateSource {
-  queryContractState(address: string): Promise<{ data: ChargedState } | null | undefined>;
+  queryContractState(address: string): Promise<Starfall.EncodableContractState | ContractStateRead | null | undefined>;
 }
 
-/** The private state store the witnesses read (midnight-js's). */
+/** A decoded ledger state from either kind of read (see {@link ContractStateSource}). */
+export const decodedState = (read: Awaited<ReturnType<ContractStateSource['queryContractState']>>): Starfall.EncodableContractState | null =>
+  read ? ('contractState' in read ? decodeContractState(read) : read) : null;
+
+/** The private state store the witnesses read (midnight-js's), per contract address. */
 export interface PrivateStateStore {
-  setContractAddress(address: string): void;
-  set(id: typeof STARFALL_PRIVATE_STATE_ID, state: PrivateState): Promise<void>;
+  forContract(address: string): { set(id: typeof STARFALL_PRIVATE_STATE_ID, state: PrivateState): Promise<void> };
 }
 
 const NO_NEXT = { is_some: false, value: { salesClose: 0n, seedCommitment: new Uint8Array(32), final: false } };
 
 export const readStarfallLedger = async (publicData: ContractStateSource, contractAddress: string): Promise<Starfall.Ledger> => {
-  const state = await publicData.queryContractState(contractAddress);
+  const state = decodedState(await publicData.queryContractState(contractAddress));
   if (!state) throw new Error(`no Starfall contract at ${contractAddress}`);
-  return Starfall.ledger(state.data);
+  return Starfall.ledgerOf(state);
 };
 
 export const readStarfallView = async (publicData: ContractStateSource, contractAddress: string): Promise<StarfallView> =>
@@ -180,14 +190,13 @@ export class MidnightStarfallChain implements StarfallChain, DrawOracleChain {
 
   /** The settlement witness reads the decrypted tickets from the private state, so put them there first. */
   async settleBatch(n: bigint, tickets: readonly TicketPreimage[]): Promise<void> {
-    this.privateState.setContractAddress(this.contractAddress);
-    await this.privateState.set(STARFALL_PRIVATE_STATE_ID, { ...this.base, settling: { drawId: n, tickets } });
+    const store = this.privateState.forContract(this.contractAddress);
+    await store.set(STARFALL_PRIVATE_STATE_ID, { ...this.base, settling: { drawId: n, tickets } });
     try {
       await this.tx(() => this.contract.callTx.settleBatch(n));
     } finally {
       // Don't keep a draw's decrypted tickets around any longer than needed.
-      this.privateState.setContractAddress(this.contractAddress);
-      await this.privateState.set(STARFALL_PRIVATE_STATE_ID, { ...this.base });
+      await store.set(STARFALL_PRIVATE_STATE_ID, { ...this.base });
     }
   }
 
@@ -319,8 +328,7 @@ export const buyGames = async (
       throw new BuyStopped(i, games.length, 'sales close in under a minute, so no more purchases were sent');
     }
     const part = games.slice(i, i + max);
-    privateState.setContractAddress(contractAddress);
-    await privateState.set(STARFALL_PRIVATE_STATE_ID, { pendingTickets: part });
+    await privateState.forContract(contractAddress).set(STARFALL_PRIVATE_STATE_ID, { pendingTickets: part });
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timedOut = new Promise<never>((_, reject) => {
       timer = setTimeout(
@@ -423,6 +431,7 @@ export const STARFALL_WEEKLY_DEFAULTS = {
 export const deployStarfall = (providers: StarfallProviders, p: StarfallDeployParams) =>
   deployLocked(providers, {
     compiledContract: compiledStarfall(),
+    privateStateId: STARFALL_PRIVATE_STATE_ID,
     initialPrivateState: {},
     signingKey: sampleSigningKey(), // never used: the authority is replaced before anything is sent
     args: [
@@ -546,7 +555,7 @@ export const verifyStarfall = (
     const vl = compareFingerprints(record.verifierKeys, local);
     checks.push({ name: 'this checkout compiles to the deployed code', ok: vl.length === 0, detail: vl.length === 0 ? 'identical' : vl.join('; ') });
   }
-  const l = Starfall.ledger(state.data as ChargedState);
+  const l = Starfall.ledgerOf(state);
   const p = record.parameters;
   const keyMatches = l.oracleKey.x.toString() === p.oraclePublicKey.x && l.oracleKey.y.toString() === p.oraclePublicKey.y;
   checks.push({

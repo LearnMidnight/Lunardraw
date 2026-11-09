@@ -7,8 +7,8 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { sampleSigningKey } from '@midnight-ntwrk/midnight-js-protocol/ledger';
-import { ledger, pureCircuits } from '@lunardraw/contract';
+import { sampleSigningKey } from '@midnight-ntwrk/midnight-js-protocol/v9';
+import { type EncodableContractState, ledgerOf, pureCircuits } from '@lunardraw/contract';
 import { oraclePublicKey } from '@nightcast/contract';
 import {
   type AuthorityView,
@@ -20,7 +20,8 @@ import {
   onChainFingerprints,
   type OperationsSource,
 } from '@nightcast/deploy';
-import { compiledLunardraw, joinLunardraw, type LunardrawProviders } from './contract.js';
+import { decodedPublicData } from '@nightcast/deploy';
+import { compiledLunardraw, joinLunardraw, LUNARDRAW_PRIVATE_STATE_ID, type LunardrawProviders } from './contract.js';
 
 const hex = (b: Uint8Array): string => Buffer.from(b).toString('hex');
 
@@ -58,6 +59,7 @@ export const organiserCommitmentOf = (secret: Uint8Array): Uint8Array => pureCir
 export const deployLunardraw = (providers: LunardrawProviders, p: DeployParams) =>
   deployLocked(providers, {
     compiledContract: compiledLunardraw(),
+    privateStateId: LUNARDRAW_PRIVATE_STATE_ID,
     initialPrivateState: {},
     signingKey: sampleSigningKey(), // never used: the authority is replaced before anything is sent
     args: [
@@ -77,9 +79,9 @@ export const deployLunardraw = (providers: LunardrawProviders, p: DeployParams) 
 export const acceptOracleKey = async (providers: LunardrawProviders, contractAddress: string, oracleSecretKey: bigint) => {
   const joined = await joinLunardraw(providers, contractAddress, { oracleSecretKey });
   const result = await joined.callTx.acceptOracleKey();
-  const state = await providers.publicDataProvider.queryContractState(contractAddress);
+  const state = await decodedPublicData(providers.publicDataProvider).queryContractState(contractAddress);
   const expected = oraclePublicKey(oracleSecretKey);
-  const l = state ? ledger(state.data) : undefined;
+  const l = state ? ledgerOf(state) : undefined;
   if (!l?.oracleKeyReady || l.oracleKey.x !== expected.x || l.oracleKey.y !== expected.y) {
     throw new Error('acceptOracleKey was accepted but the contract does not show the key as active');
   }
@@ -154,10 +156,10 @@ export const currentCommit = (): string | undefined => {
 
 export type Check = { name: string; ok: boolean; detail: string };
 
-export type ContractStateView = OperationsSource & {
-  maintenanceAuthority: AuthorityView;
-  data: Parameters<typeof ledger>[0];
-};
+export type ContractStateView = OperationsSource &
+  EncodableContractState & {
+    maintenanceAuthority: AuthorityView;
+  };
 
 /** Check a live deployment against its record, from public data only. */
 export const verifyDeployment = (
@@ -188,7 +190,7 @@ export const verifyDeployment = (
       detail: vl.length === 0 ? 'identical' : vl.join('; '),
     });
   }
-  const l = ledger(state.data);
+  const l = ledgerOf(state);
   const p = record.parameters;
   const keyMatches = l.oracleKey.x.toString() === p.oraclePublicKey.x && l.oracleKey.y.toString() === p.oraclePublicKey.y;
   checks.push({

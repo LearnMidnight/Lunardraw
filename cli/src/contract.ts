@@ -5,19 +5,17 @@
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
-import type { ChargedState } from '@midnight-ntwrk/compact-runtime';
-import { CompiledContract, type ProvableCircuitId } from '@midnight-ntwrk/compact-js';
-import { findDeployedContract } from '@midnight-ntwrk/midnight-js/contracts';
-import type { MidnightProviders } from '@midnight-ntwrk/midnight-js/types';
+import { findDeployedContract, type Ledger8CircuitId } from '@midnight-ntwrk/midnight-js/contracts';
+import type { ContractStateRead, MidnightProviders } from '@midnight-ntwrk/midnight-js/types';
 import type { MidnightWalletProvider } from '@midnight-ntwrk/testkit-js';
-import { ledger, Lunardraw, type LottoPrivateState, type NextDraw, witnesses } from '@lunardraw/contract';
+import { type EncodableContractState, ledgerOf, Lunardraw, type LottoPrivateState, type NextDraw, witnesses } from '@lunardraw/contract';
 import { type ChainView, type DrawOracleChain, type LunardrawChain, viewOf } from '@lunardraw/keeper';
-import { contractProviders, type Session } from '@nightcast/deploy';
+import { contractProviders, decodeContractState, type Session } from '@nightcast/deploy';
 
 export const LUNARDRAW_PRIVATE_STATE_ID = 'lunardraw';
 
 export type LunardrawContract = Lunardraw.Contract<LottoPrivateState>;
-export type LunardrawCircuits = ProvableCircuitId<LunardrawContract>;
+export type LunardrawCircuits = Ledger8CircuitId<LunardrawContract>;
 export type LunardrawProviders = MidnightProviders<LunardrawCircuits, typeof LUNARDRAW_PRIVATE_STATE_ID, LottoPrivateState>;
 
 /**
@@ -34,11 +32,12 @@ export const zkConfigPath = (override = process.env.LUNARDRAW_ZK_CONFIG_PATH): s
   throw new Error('No compiled Lunardraw contract with proving keys found. Run `npm run compact:keys` then `npm run build`.');
 };
 
-export const compiledLunardraw = (dir = zkConfigPath()) =>
-  CompiledContract.make('lunardraw', Lunardraw.Contract<LottoPrivateState>).pipe(
-    CompiledContract.withWitnesses(witnesses),
-    CompiledContract.withCompiledFileAssets(dir),
-  );
+/**
+ * The contract with its witnesses, as Midnight.js 5 takes a contract compiled
+ * by the previous toolchain (Compact 0.31): the generated instance itself. Its
+ * proving keys come from the providers' ZK config provider (`zkConfigPath`).
+ */
+export const compiledLunardraw = (): LunardrawContract => new Lunardraw.Contract<LottoPrivateState>(witnesses);
 
 export const lunardrawProviders = (session: Session, wallet: MidnightWalletProvider, dir = zkConfigPath()): LunardrawProviders =>
   contractProviders<LunardrawCircuits, typeof LUNARDRAW_PRIVATE_STATE_ID, LottoPrivateState>(session, wallet, dir);
@@ -64,17 +63,19 @@ export interface LunardrawCalls {
   };
 }
 
+/** Where the contract's state is read from: a Midnight.js public data provider, or an adapter answering decoded ledger states. */
 export interface ContractStateSource {
-  queryContractState(address: string): Promise<{ data: ChargedState } | null | undefined>;
+  queryContractState(address: string): Promise<EncodableContractState | ContractStateRead | null | undefined>;
 }
 
 const NO_NEXT = { is_some: false, value: { salesClose: 0n, seedCommitment: new Uint8Array(32) } };
 
 /** Read the contract's public state. */
 export const readView = async (publicData: ContractStateSource, contractAddress: string): Promise<ChainView> => {
-  const state = await publicData.queryContractState(contractAddress);
+  const read = await publicData.queryContractState(contractAddress);
+  const state = read ? ('contractState' in read ? decodeContractState(read) : read) : null;
   if (!state) throw new Error(`no Lunardraw contract at ${contractAddress}`);
-  return viewOf(ledger(state.data));
+  return viewOf(ledgerOf(state));
 };
 
 /**

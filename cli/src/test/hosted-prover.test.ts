@@ -52,19 +52,19 @@ describe("proving purchases with Lunardraw's player prover", () => {
     expect(() => hostedProvingProvider('prover.example')).toThrow(/not a prover address/);
   });
 
-  it('proves a transaction by handing it the hosted provider', async () => {
-    const { fetcher, calls } = fakeFetch([() => new Response(new Uint8Array([1]))]);
-    let costModel: unknown;
-    const tx = {
-      async prove(provider: { prove(pre: Uint8Array, key: string): Promise<Uint8Array> }, cm: unknown) {
-        costModel = cm;
-        await provider.prove(new Uint8Array([8]), 'buyTickets');
-        return 'proven';
-      },
-    };
-    expect(await hostedProofProvider('https://prover.example', { fetcher }).proveTx(tx as never)).toBe('proven');
-    expect(costModel).toBeDefined();
-    expect(calls[0].url).toBe('https://prover.example/prove/buyTickets');
+  it("proves a transaction of either ledger era by handing it the hosted provider (Midnight.js 5's handles)", async () => {
+    const { Intent, Transaction } = await import('@midnight-ntwrk/midnight-js-protocol/v9');
+    const { LedgerTransaction } = await import('@midnight-ntwrk/midnight-js/types');
+    const { fetcher, calls } = fakeFetch([]);
+    // An unproven ledger 9 transaction with nothing to prove: the handler runs
+    // the ledger's own prove() with our provider and answers in the same era.
+    const unproven = Transaction.fromParts('undeployed', undefined, undefined, Intent.new(new Date(Date.now() + 3_600_000)));
+    const handle = LedgerTransaction.seal('v9', 'Unproven', unproven);
+    const answer = await hostedProofProvider('https://prover.example', { fetcher }).proveTx(handle);
+    expect(answer.era).toBe('v9');
+    expect(calls).toEqual([]); // no circuit, so the prover was never asked
+    // The provider itself keeps no keys: the player prover holds them.
+    expect(await hostedProvingProvider('https://prover.example', { fetcher }).lookupKey('buyTickets')).toBeUndefined();
   });
 
   it("reads the prover's health", async () => {

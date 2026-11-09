@@ -17,3 +17,4 @@ export type {
 export * from './settlement-witnesses.js';
 export * from './settlement-tickets.js';
 export * from './settlement-simulator.js';
+export { type EncodableContractState, starfallLedgerOf as ledgerOf, starfallLedgerFromEncoded as ledgerFromEncoded } from './state.js';
