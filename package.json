@@ -23,7 +23,7 @@
     "build": "npm run build -w @nightcast/contract && npm run build -w @nightcast/sdk && npm run build -w @nightcast/deploy && npm run build -w @lunardraw/contract && npm run build -w @lunardraw/keeper && npm run build -w @lunardraw/cli",
     "typecheck": "npm run typecheck -w @lunardraw/contract && npm run typecheck -w @lunardraw/keeper && npm run typecheck -w @lunardraw/cli",
     "test": "npm test -w @lunardraw/contract && npm test -w @lunardraw/keeper && npm test -w @lunardraw/cli",
-    "postinstall": "node nightcast/deploy/scripts/patch-dust-fee-loop.mjs --root ."
+    "postinstall": "node nightcast/deploy/scripts/patch-dust-fee-loop.mjs --root . && node nightcast/deploy/scripts/patch-dust-two-spends.mjs --quiet --root ."
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
