@@ -26,7 +26,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { buildFeed, type ChainView, DrawOracle, every, FileSeedStore, Keeper, STARFALL_WEEKLY, writeFeed } from '@lunardraw/keeper';
-import { compilerInfo, localFingerprints, NETWORKS, walletAddress, walletBalances } from '@nightcast/deploy';
+import { compilerInfo, decodedPublicData, localFingerprints, NETWORKS, walletAddress, walletBalances } from '@nightcast/deploy';
 import { openWallet } from './wallet-lock.js';
 import { walletAddressesOf } from './wallet-address.js';
 import {
@@ -237,7 +237,7 @@ const main = async (argv: string[]): Promise<number> => {
             verifierKeys: fingerprints,
           });
           process.stdout.write(`\nDeployment record written to ${path}\n`);
-          const state = await providers.publicDataProvider.queryContractState(deployed.contractAddress);
+          const state = await decodedPublicData(providers.publicDataProvider).queryContractState(deployed.contractAddress);
           const checks = verifyDeployment(readRecord(network), state, fingerprints);
           process.stdout.write(`${formatChecks(checks)}\n`);
           if (!acceptTx) process.stdout.write(`\nNext, the oracle activates its key: ./lunardraw accept-key --network ${network} --oracle <oracle secret file> --wallet <file>\n`);
@@ -283,7 +283,7 @@ const main = async (argv: string[]): Promise<number> => {
           const providers = lunardrawProviders(session, wallet);
           const joined = await joinLunardraw(providers, record.contractAddress, { organiserSecret });
           const lead = values['prove-lead'] === undefined ? undefined : Number(values['prove-lead']);
-          const chain = new MidnightLunardrawChain(joined, providers.publicDataProvider, record.contractAddress, lead);
+          const chain = new MidnightLunardrawChain(joined, decodedPublicData(providers.publicDataProvider), record.contractAddress, lead);
           const feedPath = values.feed;
           const onView = feedPath
             ? (view: ChainView, nowSecs: number) => writeFeed(feedPath, buildFeed(view, { network, contract: record.contractAddress, nowSecs }))
@@ -319,10 +319,10 @@ const main = async (argv: string[]): Promise<number> => {
         const wallet = await openWallet(session, { seed: walletSeed(values.wallet) });
         try {
           const providers = lunardrawProviders(session, wallet);
-          const view = await readView(providers.publicDataProvider, record.contractAddress);
+          const view = await readView(decodedPublicData(providers.publicDataProvider), record.contractAddress);
           if (!view.oracleKeyReady) throw new Error('the oracle key is not active yet: run `./lunardraw accept-key` first');
           const joined = await joinLunardraw(providers, record.contractAddress, { oracleSecretKey: sk });
-          const chain = new MidnightLunardrawChain(joined, providers.publicDataProvider, record.contractAddress);
+          const chain = new MidnightLunardrawChain(joined, decodedPublicData(providers.publicDataProvider), record.contractAddress);
           const oracle = new DrawOracle({ chain, publicKey: pk, logger: session.logger });
           oracle.start();
           session.logger.info(`Draw oracle running for ${record.contractAddress}. Press Ctrl+C to stop.`);

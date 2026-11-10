@@ -12,7 +12,8 @@
  * (`<feed>.backfill.json`), which the keeper's feed merges in (its own
  * records win).
  */
-import { ContractState } from '@midnight-ntwrk/compact-runtime';
+import { ContractState as Ledger8ContractState } from '@midnight-ntwrk/midnight-js-protocol/v8';
+import { ContractState as Ledger9ContractState } from '@midnight-ntwrk/midnight-js-protocol/v9';
 import { Starfall } from '@lunardraw/contract';
 import { starfallViewOf, type StarfallTxStep, type StarfallView } from '@lunardraw/keeper';
 
@@ -300,9 +301,24 @@ export const namingLike = (actions: readonly Action[], known: ReadonlySet<string
 /** The actions filed under a naming (the hash where it has no such identifier). */
 export const named = (actions: readonly Action[], naming: Naming): Action[] => actions.map((a) => ({ ...a, tx: naming.name(a) ?? a.hash }));
 
+/**
+ * A contract state the indexer serialized, of either ledger era: states from
+ * after the ledger 9 hard fork are ledger 9's, older ones ledger 8's.
+ */
+export const contractStateOf = (bytes: Uint8Array): Ledger9ContractState | Ledger8ContractState => {
+  try {
+    return Ledger9ContractState.deserialize(bytes);
+  } catch (v9) {
+    try {
+      return Ledger8ContractState.deserialize(bytes);
+    } catch {
+      throw v9;
+    }
+  }
+};
+
 /** The view of the contract from an action's state (hex). */
-export const viewOfState = (hex: string): StarfallView =>
-  starfallViewOf(Starfall.ledger(ContractState.deserialize(Buffer.from(bare(hex), 'hex')).data));
+export const viewOfState = (hex: string): StarfallView => starfallViewOf(Starfall.ledgerOf(contractStateOf(Buffer.from(bare(hex), 'hex'))));
 
 const MOVES: Record<string, true> = { requestDraw: true, fulfilDraw: true, computeNumbers: true, finaliseDraw: true, voidDraw: true };
 

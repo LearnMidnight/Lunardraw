@@ -6,3 +6,4 @@ export * from './tickets.js';
 export * from './simulator.js';
 // The private-settlement prototype (docs/SETTLEMENT.md).
 export * as Starfall from './settlement-exports.js';
+export * from './state.js';

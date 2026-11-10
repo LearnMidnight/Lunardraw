@@ -7,9 +7,9 @@
  *   this one's fees without sending it NIGHT.
  * Both are public.
  */
-import { DustSecretKey } from '@midnight-ntwrk/midnight-js-protocol/ledger';
+import { DustSecretKey } from '@midnight-ntwrk/midnight-js-protocol/v9';
 import { WalletSeeds } from '@midnight-ntwrk/testkit-js';
-import { DustAddress } from '@midnight-ntwrk/wallet-sdk-address-format';
+import { DustAddress } from '@midnightntwrk/wallet-sdk-address-format';
 import { walletAddressOf } from '@nightcast/deploy';
 
 export const walletAddressesOf = (network: 'preprod' | 'preview', seed: string): { night: string; dust: string } => {

@@ -4,13 +4,13 @@
  */
 import { readFileSync } from 'node:fs';
 import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
-import { setNetworkId } from '@midnight-ntwrk/midnight-js/network-id';
 import { oraclePublicKey, parseOracleSecretKey } from '@nightcast/contract';
 import {
   BLOCKFROST,
   blockfrostProjectId,
   connect,
   createLogger,
+  decodedPublicData,
   isNetwork,
   localFingerprints,
   type Network,
@@ -99,8 +99,7 @@ export const withSession = async <T>(network: Network, run: (s: Session) => Prom
 export const publicDataFor = (network: Network) => {
   if (network === 'local') throw new Error('this command on `local` must run in the same session as the deploy');
   const config = publicEndpoints(network, createLogger('warn'), BLOCKFROST[network] ? blockfrostProjectId(network) : undefined);
-  setNetworkId(config.networkId);
-  return indexerPublicDataProvider(config.indexer, config.indexerWS);
+  return decodedPublicData(indexerPublicDataProvider(config.indexer, config.indexerWS));
 };
 
 /** The network's indexer GraphQL addresses, HTTP and WebSocket (with the Blockfrost project id where needed). */

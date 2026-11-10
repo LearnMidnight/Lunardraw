@@ -11,7 +11,10 @@
  *
  * Same protocol as the website's purchase engine (siteProvingProvider).
  */
-import { CostModel, parseCheckResult } from '@midnight-ntwrk/midnight-js-protocol/ledger';
+import { CostModel, parseCheckResult, Transaction } from '@midnight-ntwrk/midnight-js-protocol/v9';
+import { loadLedger8Protocol } from '@midnight-ntwrk/midnight-js-protocol';
+import { proveLedger8Transaction } from '@midnight-ntwrk/midnight-js-protocol/prove';
+import { createProofProviderFromHandlers, type ProofProvider } from '@midnight-ntwrk/midnight-js/types';
 
 /** Lunardraw's player prover. */
 export const DEFAULT_PROVER = 'https://prover.207-180-249-120.sslip.io';
@@ -65,6 +68,7 @@ const poster = (base: string, opts: HostedProverOptions) => async (path: string,
 export const hostedProvingProvider = (url: string, opts: HostedProverOptions = {}) => {
   const base = baseOf(url);
   const post = poster(base, opts);
+  const verifiers = new Map<string, Promise<Uint8Array>>();
   return {
     async check(preimage: Uint8Array, keyLocation: string) {
       return parseCheckResult(await post(`/check/${encodeURIComponent(keyLocation)}`, preimage));
@@ -73,23 +77,43 @@ export const hostedProvingProvider = (url: string, opts: HostedProverOptions = {
       const q = overwriteBindingInput === undefined ? '' : `?binding=${overwriteBindingInput.toString()}`;
       return post(`/prove/${encodeURIComponent(keyLocation)}${q}`, preimage);
     },
+    /**
+     * Ledger 9 asks for a circuit's key material before it sends the proof request and refuses to
+     * prove without it ("couldn't find keys with ID KeyLocation(...)"). It only needs the verifier
+     * key, which the player prover publishes (`GET /keys/<circuit>.verifier`); the proving key
+     * stays on the prover.
+     */
+    async lookupKey(keyLocation: string) {
+      const circuit = /(?:^|\/)([A-Za-z0-9_]+)(?:\?|$)/.exec(keyLocation)?.[1];
+      if (!circuit) return undefined;
+      let p = verifiers.get(circuit);
+      if (!p) {
+        p = (async () => {
+          const r = await (opts.fetcher ?? fetch)(`${base}/keys/${encodeURIComponent(circuit)}.verifier`, { signal: AbortSignal.timeout(30_000) });
+          if (!r.ok) throw new Error(`Lunardraw's prover has no verifier key for ${circuit} (HTTP ${r.status})`);
+          return new Uint8Array(await r.arrayBuffer());
+        })();
+        p.catch(() => verifiers.delete(circuit));
+        verifiers.set(circuit, p);
+      }
+      return { proverKey: new Uint8Array(0), verifierKey: await p, ir: new Uint8Array(0) };
+    },
   };
 };
-
-type Provable = { prove(provider: ReturnType<typeof hostedProvingProvider>, costModel: unknown): Promise<unknown> };
 
 /**
  * midnight-js's ProofProvider, proving through the player prover: use it in
  * place of `httpClientProofProvider` for buying tickets (the only circuit the
- * player prover proves).
+ * player prover proves). One handler per ledger era, as Midnight.js 5's own
+ * HTTP proof provider has: the circuit-level check and prove are the same on
+ * both sides of the hard fork; the transaction around them is each era's.
  */
-export const hostedProofProvider = (url: string, opts: HostedProverOptions = {}) => {
+export const hostedProofProvider = (url: string, opts: HostedProverOptions = {}): ProofProvider => {
   const provider = hostedProvingProvider(url, opts);
-  return {
-    async proveTx(unproven: Provable) {
-      return unproven.prove(provider, CostModel.initialCostModel());
-    },
-  };
+  return createProofProviderFromHandlers({
+    v8: async (tx) => proveLedger8Transaction(tx.deserialize({ v8: (await loadLedger8Protocol()).Transaction }), provider),
+    v9: (tx) => tx.deserialize({ v9: Transaction }).prove(provider, CostModel.initialCostModel()),
+  });
 };
 
 /** Whether the prover is up (its /health says ok). */

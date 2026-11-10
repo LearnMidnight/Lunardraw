@@ -9,14 +9,14 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { encodeContractAddress } from '@midnight-ntwrk/compact-runtime';
-import { unshieldedToken } from '@midnight-ntwrk/midnight-js-protocol/ledger';
-import { MidnightBech32m } from '@midnight-ntwrk/wallet-sdk-address-format';
+import { unshieldedToken } from '@midnight-ntwrk/midnight-js-protocol/v9';
+import { MidnightBech32m } from '@midnightntwrk/wallet-sdk-address-format';
 import { quickPick, Starfall } from '@lunardraw/contract';
 import { buildStarfallFeed, DerivedSeeds, DrawOracle, every, isStaleDustProof, mustBeWonStatus, PurchaseLog, STARFALL_DAILY, STARFALL_WEEKLY, StarfallKeeper, type StarfallView, StepTimes, woundDown, writeFeed } from '@lunardraw/keeper';
 import { declareFeesAtDustTime, type DustTimeWallet } from './dust-time.js';
 import { DustMeter, meterDustFees } from './dust-meter.js';
 import { withFreshFees } from './fresh-fees.js';
-import { compilerInfo, localFingerprints, NETWORKS, type Session, walletAddress, walletBalances } from '@nightcast/deploy';
+import { compilerInfo, decodedPublicData, localFingerprints, NETWORKS, type Session, walletAddress, walletBalances } from '@nightcast/deploy';
 import { openWallet } from './wallet-lock.js';
 import { statusWriter } from './status-file.js';
 import { buyerProviders, buyWithRetry, proverArg } from './buyer.js';
@@ -554,7 +554,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
             verifierKeys: fingerprints,
           });
           process.stdout.write(`\nDeployment record written to ${path}\n`);
-          const state = await providers.publicDataProvider.queryContractState(deployed.contractAddress);
+          const state = await decodedPublicData(providers.publicDataProvider).queryContractState(deployed.contractAddress);
           const checks = [...verifyStarfall(readStarfallRecord(network), state, fingerprints), organiserCheck(Starfall.ledger(state!.data), organiserSecret)];
           process.stdout.write(`${formatChecks(checks)}\n`);
           if (!acceptTx) process.stdout.write(`\nNext, the oracle activates its key: ./lunardraw starfall accept-key --network ${network} --oracle <file> --wallet <file>\n`);
@@ -607,12 +607,12 @@ export const starfall = async (argv: string[]): Promise<number> => {
           const meter = new DustMeter(values.status ? `${values.status}.fees.json` : undefined);
           const { providers, stuck } = freshFees(starfallProviders(session, wallet), wallet, session.logger, meter);
           // The contract is the judge: its stored organiser must be this secret's Starfall commitment.
-          const opens = organiserCheck(await readStarfallLedger(providers.publicDataProvider, record.contractAddress), organiserSecret);
+          const opens = organiserCheck(await readStarfallLedger(decodedPublicData(providers.publicDataProvider), record.contractAddress), organiserSecret);
           if (!opens.ok) throw new Error(`${values.organiser} can't run this deployment: ${opens.detail}`);
           const base = { organiserSecret };
           const joined = await joinStarfall(providers, record.contractAddress, base);
           const lead = values['prove-lead'] === undefined ? undefined : Number(values['prove-lead']);
-          const chain = new MidnightStarfallChain(joined, providers.publicDataProvider, providers.privateStateProvider, record.contractAddress, base, lead);
+          const chain = new MidnightStarfallChain(joined, decodedPublicData(providers.publicDataProvider), providers.privateStateProvider, record.contractAddress, base, lead);
           const feedPath = values.feed;
           // When each draw's steps happened, as seen from here (kept beside the feed across restarts).
           // (with the transaction ids of older draws, read back from the chain by `starfall backfill-tx`)
@@ -688,10 +688,10 @@ export const starfall = async (argv: string[]): Promise<number> => {
           // what each transaction costs in DUST, kept beside the status file (or in memory)
           const meter = new DustMeter(values.status ? `${values.status}.fees.json` : undefined);
           const { providers, stuck } = freshFees(starfallProviders(session, wallet), wallet, session.logger, meter);
-          const view = await readStarfallView(providers.publicDataProvider, record.contractAddress);
+          const view = await readStarfallView(decodedPublicData(providers.publicDataProvider), record.contractAddress);
           if (!view.oracleKeyReady) throw new Error('the oracle key is not active yet: run `./lunardraw starfall accept-key` first');
           const joined = await joinStarfall(providers, record.contractAddress, { oracleSecretKey: sk });
-          const chain = new MidnightStarfallChain(joined, providers.publicDataProvider, providers.privateStateProvider, record.contractAddress);
+          const chain = new MidnightStarfallChain(joined, decodedPublicData(providers.publicDataProvider), providers.privateStateProvider, record.contractAddress);
           const oracle = new DrawOracle({ chain, publicKey: pk, logger: session.logger });
           oracle.start();
           session.logger.info(`Starfall draw oracle running for ${record.contractAddress}. Press Ctrl+C to stop.`);
@@ -725,7 +725,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
         const wallet = await openWallet(session, { seed: walletSeed(values.wallet) });
         try {
           const providers = buyerProviders(session, wallet, prover);
-          const view = await readStarfallView(providers.publicDataProvider, record.contractAddress);
+          const view = await readStarfallView(decodedPublicData(providers.publicDataProvider), record.contractAddress);
           const now = BigInt(Math.floor(Date.now() / 1000));
           const selling = view.draws.find((d) => d.status === Starfall.DrawStatus.open && d.salesClose > now + 120n);
           if (!selling) throw new Error('no draw is on sale right now (or sales close in under 2 minutes): try again when the next one opens');
@@ -848,7 +848,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
           const attempts = new Map<string, { n: number; nextAt: number }>();
           while (!stop) {
             try {
-              const view = await readStarfallView(providers.publicDataProvider, record.contractAddress);
+              const view = await readStarfallView(decodedPublicData(providers.publicDataProvider), record.contractAddress);
               for (const r of settledResults(view, state)) {
                 log(`draw ${r.draw}: ${r.numbers.join(' ')} + ${r.moonball}: ${describeResult(r)}${r.won.length ? '; the prize is paid to this wallet by itself' : ''}`);
                 state.reported.push(r.draw.toString());
@@ -905,7 +905,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
                       onEach: (done, of) => log(`bought ${done} of ${of} ticket(s)`),
                       stopAt: Number(plan.salesClose) - 60,
                       // a purchase that timed out but did land counts (and isn't bought again)
-                      onChain: onChainCheck(providers.publicDataProvider, record.contractAddress),
+                      onChain: onChainCheck(decodedPublicData(providers.publicDataProvider), record.contractAddress),
                       // and one that didn't gives the wallet its DUST back at once
                       onNotLanded: pendingReverter(wallet.wallet as unknown as RevertableWallet, log),
                     });

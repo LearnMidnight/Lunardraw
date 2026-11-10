@@ -3,7 +3,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { webcrypto } from 'node:crypto';
-import { DustAddress, MidnightBech32m } from '@midnight-ntwrk/wallet-sdk-address-format';
+import { DustAddress, MidnightBech32m } from '@midnightntwrk/wallet-sdk-address-format';
 import { walletAddressOf } from '@nightcast/deploy';
 import { DUST_PER_NIGHT_DAY as METER_RATE, DustMeter, dustFeeOf, meterDustFees } from '../dust-meter.js';
 import { DUST_PER_NIGHT_DAY, dustBudget } from '../monitor.js';

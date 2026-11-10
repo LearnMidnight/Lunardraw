@@ -16,7 +16,7 @@ import { quickPick, type PlainLine, Starfall } from '@lunardraw/contract';
 import { commitmentOf, DerivedSeeds, DrawOracle, type Schedule, StarfallKeeper, type StarfallView } from '@lunardraw/keeper';
 import { generateOperatorSecret, generateOracleSecretKey, oraclePublicKey, pureCircuits as nightcast } from '@nightcast/contract';
 import { combineDrawSeed, drawStarfall } from '@nightcast/sdk';
-import { connect, localFingerprints, openWallet, type Session } from '@nightcast/deploy';
+import { connect, localFingerprints, openWallet, readContractState, type Session } from '@nightcast/deploy';
 import { ProofServer } from '../proof-server.js';
 import {
   acceptStarfallOracleKey,
@@ -157,7 +157,7 @@ describe.runIf(enabled)('Starfall on a local Midnight network', () => {
       transactions: {},
       verifierKeys: fps,
     };
-    const state = await providers.publicDataProvider.queryContractState(address);
+    const state = await readContractState(providers.publicDataProvider, address);
     expect(verifyStarfall(record, state, fps).filter((c) => !c.ok)).toEqual([]);
   }, 20 * 60_000);
 
