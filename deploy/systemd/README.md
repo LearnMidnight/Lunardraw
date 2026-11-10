@@ -93,11 +93,17 @@ when Starfall needs a person:
 | A draw near its reveal, oracle or settlement deadline | 5 minutes before the reveal or oracle deadline, or the oracle 10 minutes late; an hour before the settlement deadline |
 | A draw voided | each one, once, with the reason |
 | The site feed is stale, the disk nearly full | no new feed for 10 minutes; under 10% or 5 GB free |
+| A health endpoint isn't well (`--health`) | it doesn't answer, isn't `ok`, or says `canRequest: false`: the private Nightcast MCP server LunaSpin's spins go through |
 
 A problem is emailed once it has been seen on two runs in a row (so a service
 that restarts itself doesn't page anyone), reminded every 6 hours while it
 lasts, and followed by a "resolved" email. A daily summary comes at 08:00
 Brisbane (`--digest-hour`): **if it stops arriving, the monitor or the VM is down.**
+
+The unit also watches Nightcast's own services, `nightcast-oracle` and
+`nightcast-mcp` (set up by the Nightcast v1 script in `/root/nightcast-v1`), and
+the MCP server's `/health` on 127.0.0.1:6350. **Install this unit only once
+those two services exist**, or it reports them as not running.
 
 The keeper and the oracle write the health files it reads with
 `--status /root/lunardraw-status/keeper.json` and `oracle.json` (in their unit
