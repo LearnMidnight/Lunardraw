@@ -125,7 +125,9 @@ const walk = (dir, depth) => {
 };
 walk(join(stage, 'node_modules'), 0);
 const kinds = new Set(versions.values());
-if (versions.size !== 1 || !kinds.has('1.0.0')) fail(`expected one @midnightntwrk/ledger-v9 1.0.0, found ${[...versions].map(([p, v]) => `${v} at ${p}`).join(', ')}`);
+// The version this repo pins (package.json "overrides"): the one the network's node runs.
+const ledgerPin = rootPkg.overrides['@midnightntwrk/ledger-v9'];
+if (versions.size !== 1 || !kinds.has(ledgerPin)) fail(`expected one @midnightntwrk/ledger-v9 ${ledgerPin}, found ${[...versions].map(([p, v]) => `${v} at ${p}`).join(', ')}`);
 // Native add-ons that compile when installed would fail on a machine with no
 // C compiler, and bundled ones fail the whole install. cpu-features is
 // optional for ssh2 (it carries on without it), and the kit never uses ssh2.
