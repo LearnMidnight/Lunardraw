@@ -41,7 +41,12 @@ export type Inputs = {
   feedPath?: string;
   feedError?: string;
   disk?: { path: string; free: number; total: number };
+  /** HTTP health endpoints (`--health name=url`), e.g. the private Nightcast MCP server LunaSpin uses. */
+  health?: HealthInput[];
 };
+
+/** What one health endpoint answered: `{ ok, canRequest?, ... }` (Nightcast's MCP server), or why it didn't. */
+export type HealthInput = { name: string; url: string; body?: Record<string, unknown>; error?: string };
 
 export type MonitorConfig = {
   /** A wallet below this much DUST (in DUST) is low. */
@@ -186,6 +191,26 @@ export const evaluate = (inp: Inputs, state: MonitorState, cfg: MonitorConfig = 
         title: `${u.name} has restarted ${n} times in the last hour`,
         detail: 'Its watchdogs restart it when transactions keep failing, its wallet stops syncing or a pass hangs. Restarting this often means the restart isn\'t fixing the cause.',
         check: [journal(u.name)],
+      });
+    }
+  }
+
+  for (const h of inp.health ?? []) {
+    if (down.has(h.name)) continue; // its unit is already reported as not running
+    const why = h.error
+      ? `doesn't answer (${h.error})`
+      : h.body?.ok !== true
+        ? 'answers, but not ok'
+        : h.body.canRequest === false
+          ? `can't make requests yet${typeof h.body.reason === 'string' ? ` (${h.body.reason})` : ''}`
+          : '';
+    if (why) {
+      out.push({
+        key: `health:${h.name}`,
+        kind: 'problem',
+        title: `${h.name} ${why}`,
+        detail: h.body?.canRequest === false ? 'Its wallet is opening, syncing or out of DUST, or its daily limit is used up. New requests (LunaSpin spins) are refused until it can.' : undefined,
+        check: [`curl -s ${h.url}`, journal(h.name)],
       });
     }
   }
@@ -489,6 +514,10 @@ export const digest = (inp: Inputs, state: MonitorState, cfg: MonitorConfig = DE
   };
   lines.push('SERVICES');
   for (const u of inp.units) lines.push(`  ${u.active === 'active' ? '✓' : '✗'} ${u.name}: ${u.active}${restarts(u) ? `, ${restarts(u)} restart(s) in 24 h` : ''}`);
+  for (const h of inp.health ?? []) {
+    const good = !h.error && h.body?.ok === true && h.body.canRequest !== false;
+    lines.push(`  ${good ? '✓' : '✗'} ${h.name} health: ${h.error ? `no answer (${h.error})` : h.body?.canRequest === false ? "up, can't make requests yet" : 'ok'}`);
+  }
   const wallets = inp.services.filter((s) => s.status?.wallet);
   if (wallets.length) {
     lines.push('', 'WALLETS');

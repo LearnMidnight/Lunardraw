@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { StarfallFeed, StarfallFeedDraw } from '@lunardraw/keeper';
 import { DEFAULT_CONFIG, decide, digest, emptyState, evaluate, type Inputs, noteRestarts, restartsInHour, type Unit } from '../monitor.js';
-import { parseShow, sendEmail } from '../monitor-command.js';
+import { parseHealth, parseShow, readHealth, sendEmail } from '../monitor-command.js';
 import { serviceStatus, type ServiceStatus } from '../status-file.js';
 
 const MIN = 60_000;
@@ -197,6 +197,39 @@ describe('the monitor', () => {
     expect(d.text).toContain('Oracle: answered 1, typical 3 min, slowest 3 min');
     expect(state.digestDate).toBe('2026-11-02');
     expect(digest(inputs({ now: NOW + 60 * MIN }), state, DEFAULT_CONFIG)).toBeUndefined();
+  });
+
+  it('checks health endpoints: an answer that is ok, one that cannot request, one that is down, and its stopped unit', () => {
+    const url = 'http://127.0.0.1:6350/health';
+    const at = (body?: Record<string, unknown>, error?: string) => inputs({ health: [{ name: 'nightcast-mcp', url, body, error }] });
+    expect(keys(at({ ok: true, canRequest: true }))).toEqual([]);
+    expect(keys(at({ ok: true, network: 'preprod' }))).toEqual([]); // read-only servers don't say canRequest
+    const cant = evaluate(at({ ok: true, canRequest: false }), { ...emptyState(), lastVoid: 0 });
+    expect(cant.map((a) => a.key)).toEqual(['health:nightcast-mcp']);
+    expect(cant[0].title).toMatch(/can't make requests yet/);
+    const down = evaluate(at(undefined, 'fetch failed'), { ...emptyState(), lastVoid: 0 });
+    expect(down[0].title).toBe("nightcast-mcp doesn't answer (fetch failed)");
+    expect(down[0].check).toContain(`curl -s ${url}`);
+    expect(keys(at({ ok: false }))).toEqual(['health:nightcast-mcp']);
+    // a stopped unit is reported once, as the unit
+    const stopped = inputs({ units: [...UNITS, unit('nightcast-mcp', 'failed')], health: [{ name: 'nightcast-mcp', url, error: 'fetch failed' }] });
+    expect(keys(stopped)).toEqual(['unit:nightcast-mcp']);
+  });
+
+  it('reads --health and fetches an endpoint', async () => {
+    expect(parseHealth('nightcast-mcp=http://127.0.0.1:6350/health, x=https://a.b/h')).toEqual([
+      { name: 'nightcast-mcp', url: 'http://127.0.0.1:6350/health' },
+      { name: 'x', url: 'https://a.b/h' },
+    ]);
+    expect(parseHealth(undefined)).toEqual([]);
+    expect(() => parseHealth('nightcast-mcp')).toThrow(/name=url/);
+    const answer = (status: number, text: string) => (async () => new Response(text, { status })) as unknown as typeof fetch;
+    expect(await readHealth('m', 'http://h', answer(200, '{"ok":true,"canRequest":true}'))).toEqual({ name: 'm', url: 'http://h', body: { ok: true, canRequest: true } });
+    expect((await readHealth('m', 'http://h', answer(502, 'Bad gateway'))).error).toBe('HTTP 502, not JSON');
+    const failing = (async () => {
+      throw new Error('connect ECONNREFUSED 127.0.0.1:6350');
+    }) as unknown as typeof fetch;
+    expect((await readHealth('m', 'http://h', failing)).error).toMatch(/ECONNREFUSED/);
   });
 
   it("reads systemd's view of a unit and sends through Resend", async () => {
