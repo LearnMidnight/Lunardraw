@@ -133,7 +133,8 @@ describe.runIf(enabled)('Starfall proofs on the real proof server', () => {
 
   it('proves each circuit once and reports its peak memory and time', async () => {
     const runs = circuitRuns();
-    const zk = new NodeZkConfigProvider<string>(starfallZkConfigPath());
+    // Compact 0.31.1 emits no contract-manifest.json (Midnight's ledger 9 notes: use 'require-if-present').
+    const zk = new NodeZkConfigProvider<string>(starfallZkConfigPath(), { verify: 'require-if-present' });
     const prover = httpClientProvingProvider(`http://127.0.0.1:${PORT}`, zk, { timeout: 60 * 60_000 });
     const rows: { circuit: string; note: string; ok: boolean; secs: number; peakMiB: number; error?: string }[] = [];
     for (const r of runs) {
