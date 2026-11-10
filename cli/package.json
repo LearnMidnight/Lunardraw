@@ -1,6 +1,6 @@
 {
   "name": "@lunardraw/cli",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Run Lunardraw on Midnight: deploy the Starfall contract locked, activate the oracle key, run the keeper and the draw oracle, and check a deployment.",
   "license": "MIT",
   "private": true,
