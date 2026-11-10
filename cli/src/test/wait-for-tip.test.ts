@@ -30,6 +30,10 @@ describe('atTip', () => {
     expect(atTip({ isSynced: true, dust: { state: { progress: { ...progress(5, 5), isStrictlyComplete: () => false } } } })).toBe(false);
     expect(atTip({ isSynced: true, dust: { state: { progress: { ...progress(3, 5), isStrictlyComplete: () => true } } } })).toBe(true);
   });
+  it("reads wallet SDK 2's state (progress on the part itself)", () => {
+    expect(atTip({ isSynced: true, dust: { progress: progress(4, 5) } })).toBe(false);
+    expect(atTip({ isSynced: true, dust: { progress: progress(5, 5) }, shielded: { progress: progress(9, 9) } })).toBe(true);
+  });
   it('does not hold on parts the wallet reports nothing about', () => {
     expect(atTip({ isSynced: true })).toBe(true);
   });

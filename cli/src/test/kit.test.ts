@@ -324,6 +324,8 @@ describe('the guided setup', () => {
     expect(syncFraction({ isSynced: true })).toBe(1);
     expect(syncFraction({ shielded: { state: { progress: { isStrictlyComplete: () => true } } }, dust: part(5n, 10n) })).toBe(0.5);
     expect(syncFraction({})).toBe(0);
+    // wallet SDK 2 has the progress on the part itself
+    expect(syncFraction({ shielded: { progress: { appliedIndex: 90n, highestIndex: 100n } }, dust: { progress: { appliedIndex: 1n, highestIndex: 4n } } })).toBe(0.25);
     expect(bar(0.4, 10)).toBe('[####------]  40%');
     expect(eta({ at: 0, f: 0.1 }, { at: 30_000, f: 0.2 })).toBe('working out how long');
     expect(eta({ at: 0, f: 0.1 }, { at: 10 * 60_000, f: 0.2 })).toBe('about 1 h 20 min left');

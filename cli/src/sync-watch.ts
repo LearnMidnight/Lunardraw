@@ -12,11 +12,22 @@
  */
 
 type Progress = { appliedIndex?: bigint; appliedId?: bigint; highestIndex?: bigint; highestRelevantWalletIndex?: bigint; highestTransactionId?: bigint };
+/** A wallet part: wallet SDK 2 has `progress` on the part itself, SDK 1 had it under `state`. */
+type Part = { progress?: Progress; state?: { progress?: Progress } };
 type StateLike = {
   isSynced?: boolean;
-  shielded?: { state?: { progress?: Progress } };
-  dust?: { state?: { progress?: Progress } };
-  unshielded?: { progress?: Progress };
+  shielded?: Part;
+  dust?: Part;
+  unshielded?: Part;
+};
+
+/** A part's progress, from wallet SDK 2's state or SDK 1's (undefined before the part has started). */
+export const progressOf = (p: Part | undefined): (Progress & { isStrictlyComplete?: () => boolean }) | undefined => {
+  try {
+    return (p?.progress ?? p?.state?.progress) as never;
+  } catch {
+    return undefined; // a getter that throws before its part has started
+  }
 };
 type Subscribable = { subscribe(next: (s: unknown) => void): { unsubscribe(): void } };
 
@@ -24,7 +35,7 @@ type Subscribable = { subscribe(next: (s: unknown) => void): { unsubscribe(): vo
 export const positionsOf = (state: unknown): string => {
   const s = state as StateLike;
   const pos = (p: Progress | undefined) => String(p?.appliedIndex ?? p?.appliedId ?? '?');
-  return `shielded:${pos(s.shielded?.state?.progress)}|unshielded:${pos(s.unshielded?.progress)}|dust:${pos(s.dust?.state?.progress)}`;
+  return `shielded:${pos(progressOf(s.shielded))}|unshielded:${pos(progressOf(s.unshielded))}|dust:${pos(progressOf(s.dust))}`;
 };
 
 /** Whether one part of the wallet has applied everything the indexer has (its progress is complete). */
@@ -38,8 +49,8 @@ const partAtTip = (p: (Progress & { isStrictlyComplete?: () => boolean }) | unde
 
 /** Synced, with the DUST and shielded parts at the tip: a fee proof built now refers to the current DUST state. */
 export const atTip = (state: unknown): boolean => {
-  const s = state as StateLike & { dust?: { state?: { progress?: Progress & { isStrictlyComplete?: () => boolean } } } };
-  return s.isSynced === true && partAtTip(s.dust?.state?.progress) && partAtTip(s.shielded?.state?.progress as never);
+  const s = state as StateLike;
+  return s.isSynced === true && partAtTip(progressOf(s.dust)) && partAtTip(progressOf(s.shielded));
 };
 
 /**

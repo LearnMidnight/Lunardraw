@@ -10,6 +10,7 @@ import { readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
+import { progressOf } from '../sync-watch.js';
 import { DEFAULT_CONFIG, ensureWallet, hasBlockfrost, type KitConfig, kitHome, kitPaths, loadConfig, saveBlockfrost, saveConfig, useHome } from './home.js';
 
 const BLOCKFROST_SIGNUP = 'https://blockfrost.io/';
@@ -25,7 +26,8 @@ type Progress = { appliedIndex?: bigint; appliedId?: bigint; highestIndex?: bigi
 
 /** How far a wallet has synced, 0 to 1: the slower of its shielded and DUST parts (the unshielded part is quick). */
 export const syncFraction = (state: unknown): number => {
-  const s = state as { isSynced?: boolean; shielded?: { state?: { progress?: Progress } }; dust?: { state?: { progress?: Progress } } };
+  type Part = { progress?: Progress; state?: { progress?: Progress } };
+  const s = state as { isSynced?: boolean; shielded?: Part; dust?: Part };
   if (s?.isSynced) return 1;
   const part = (p: Progress | undefined): number => {
     if (!p) return 0;
@@ -35,7 +37,7 @@ export const syncFraction = (state: unknown): number => {
     if (applied === undefined || target === undefined || target === 0n) return 0;
     return Math.min(1, Number((applied * 10_000n) / target) / 10_000);
   };
-  return Math.min(part(s?.shielded?.state?.progress), part(s?.dust?.state?.progress));
+  return Math.min(part(progressOf(s?.shielded)), part(progressOf(s?.dust)));
 };
 
 /** "about 2 h 10 min left", from the progress made since `start`. */
