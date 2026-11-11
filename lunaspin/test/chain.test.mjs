@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { DEPLOYMENTS, checkSpin, init, pad32, readRequest, requestIdFor, requestIds, toHex } from '../src/chain.js';
+import { DEPLOYMENTS, checkSpin, fetchState, fetchStateFromNode, init, pad32, readRequest, requestIdFor, requestIds, toHex } from '../src/chain.js';
 
 const fx = JSON.parse(readFileSync(new URL('./fixtures/preprod-state.json', import.meta.url), 'utf8'));
 const wasm = readFileSync(new URL('../node_modules/@midnightntwrk/onchain-runtime-v4/midnight_onchain_runtime_wasm_bg.wasm', import.meta.url));
@@ -69,4 +69,54 @@ test('every request in the state reads as a v1 request', () => {
     if (req.status === 'fulfilled') fulfilled++;
   }
   assert.ok(fulfilled >= 20);
+});
+
+// The two ways of reading the state, against stand-ins for the node and the indexer.
+const answering = (handler) => {
+  const real = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const out = handler(String(url), JSON.parse(init.body));
+    return { ok: out.status === undefined || out.status === 200, status: out.status ?? 200, json: async () => out.body };
+  };
+  return () => { globalThis.fetch = real; };
+};
+
+test('the state reads from a node: finalized head, then the contract state at it', async () => {
+  const asked = [];
+  const undo = answering((url, body) => {
+    asked.push(body.method + ' ' + JSON.stringify(body.params));
+    if (body.method === 'chain_getFinalizedHead') return { body: { jsonrpc: '2.0', id: body.id, result: '0xabc' } };
+    if (body.method === 'chain_getHeader') return { body: { jsonrpc: '2.0', id: body.id, result: { number: '0x337ee5' } } };
+    return { body: { jsonrpc: '2.0', id: body.id, result: fx.state.toUpperCase() } };
+  });
+  try {
+    const st = await fetchStateFromNode('https://node.example', dep.contract);
+    assert.deepEqual(st.block, { height: 3374821, hash: '0xabc' });
+    assert.equal(st.state, fx.state);
+    assert.ok(asked.includes('midnight_contractState ' + JSON.stringify([dep.contract, '0xabc'])));
+    assert.equal((await checkSpin(st.state, fx.spin, dep)).ok, true);
+  } finally { undo(); }
+});
+
+test('a node with no contract there, or an error, is an error (not a pass)', async () => {
+  const undo = answering((url, body) => body.method === 'midnight_contractState'
+    ? { body: { jsonrpc: '2.0', id: body.id, error: { code: -32602, message: 'Contract not present at the requested address' } } }
+    : { body: { jsonrpc: '2.0', id: body.id, result: body.method === 'chain_getHeader' ? { number: '0x1' } : '0xabc' } });
+  try {
+    await assert.rejects(fetchStateFromNode('https://node.example', dep.contract), /Contract not present/);
+  } finally { undo(); }
+  const undo2 = answering(() => ({ status: 503, body: {} }));
+  try {
+    await assert.rejects(fetchStateFromNode('https://node.example', dep.contract), /HTTP 503/);
+    await assert.rejects(fetchState('https://indexer.example', dep.contract), /HTTP 503/);
+  } finally { undo2(); }
+});
+
+test('the state reads from an indexer', async () => {
+  const undo = answering(() => ({ body: { data: { contractAction: { state: fx.state, transaction: { hash: fx.tx, block: fx.block } } } } }));
+  try {
+    const st = await fetchState('https://indexer.example', dep.contract);
+    assert.equal(st.block.height, fx.block.height);
+    assert.equal((await checkSpin(st.state, fx.spin, dep)).ok, true);
+  } finally { undo(); }
 });

@@ -5,7 +5,9 @@
 // output, under the published oracle key?" This file does that in the
 // visitor's browser, with no LunaSpin server in the answer:
 //
-//   1. read the Nightcast contract's state from a Midnight indexer (GraphQL);
+//   1. read the Nightcast contract's state from Midnight's own public node
+//      (`midnight_contractState`, at the latest finalized block), or from a
+//      Midnight indexer (GraphQL);
 //   2. decode it with Midnight's own on-chain runtime (WebAssembly, 1.6 MB);
 //   3. look the request up by its id and compare what the chain holds.
 //
@@ -22,8 +24,8 @@
 //     published Nightcast deployment (both pinned below, from Nightcast's
 //     deployments/preprod.json).
 //
-// What it does not show: that the indexer told the truth about the chain (ask
-// a second indexer, or run `./nightcast check`), or who runs the oracle.
+// What it does not show: that the node or indexer told the truth about the
+// chain (ask another one, or run `./nightcast check`), or who runs the oracle.
 
 import * as rt from '../node_modules/@midnightntwrk/onchain-runtime-v4/midnight_onchain_runtime_wasm_bg.js';
 
@@ -35,6 +37,8 @@ export const DEPLOYMENTS = {
       x: '32993920963106060157182722391396204195876652346556573714871675241262963030490',
       y: '2970426460907353687275298249844606722016022192568680380589640846132638876538',
     },
+    // Midnight's own public node for this network: no key, answers browsers.
+    node: 'https://rpc.preprod.midnight.network',
     indexer: 'https://midnight-preprod.blockfrost.io/api/v0',
   },
 };
@@ -124,6 +128,32 @@ export function init(source) {
     });
   }
   return started;
+}
+
+// ---------------------------------------------------------------- the node
+
+/**
+ * Read a contract's state from a Midnight node (JSON-RPC over HTTPS), at the latest finalized block.
+ * Returns { state (hex), block: { height, hash }, tx: null }.
+ */
+export async function fetchStateFromNode(rpc, contract, options) {
+  let n = 0;
+  const call = async (method, params) => {
+    const res = await fetch(rpc, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: ++n, method, params }),
+      signal: options && options.signal,
+    });
+    if (!res.ok) throw new Error('The Midnight node answered HTTP ' + res.status + '.');
+    const json = await res.json();
+    if (!json || json.error || json.result == null) throw new Error(json && json.error && json.error.message ? String(json.error.message) : 'The Midnight node gave no answer.');
+    return json.result;
+  };
+  const head = await call('chain_getFinalizedHead', []);
+  const [state, header] = await Promise.all([call('midnight_contractState', [contract, head]), call('chain_getHeader', [head])]);
+  if (typeof state !== 'string' || !/^[0-9a-f]+$/i.test(state)) throw new Error('The Midnight node gave no contract state.');
+  return { state: state.toLowerCase(), block: { height: parseInt(header.number, 16), hash: head }, tx: null };
 }
 
 // ---------------------------------------------------------------- the indexer

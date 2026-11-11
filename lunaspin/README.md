@@ -23,7 +23,7 @@
 
 ## The chain check (the certificate's second tick)
 
-`src/chain.js` checks a spin against Midnight itself, in the visitor's browser: it reads the Nightcast contract's state from a Midnight indexer, decodes it with Midnight's on-chain runtime (`@midnightntwrk/onchain-runtime-v4` 4.0.0, WebAssembly), finds the request by its id and compares what the chain holds.
+`src/chain.js` checks a spin against Midnight itself, in the visitor's browser: it reads the Nightcast contract's state from Midnight's own public node (`midnight_contractState` at the latest finalized block; no key, answers browsers) or from a Midnight indexer, decodes it with Midnight's on-chain runtime (`@midnightntwrk/onchain-runtime-v4` 4.0.0, WebAssembly), finds the request by its id and compares what the chain holds.
 
 | Check | What it shows |
 |---|---|
@@ -38,7 +38,7 @@ A request is stored as 14 values in the order of the contract's `Request` struct
 
 `test/fixtures/preprod-state.json` is a real copy of the contract's state on Preprod (11 Nov 2026) with one real spin in it; `test/chain.test.mjs` checks that spin passes, and that a different output, seed, request, oracle key or contract fails.
 
-What it doesn't show: that the indexer told the truth about the chain (ask another one, or run `./nightcast check`), or who runs the oracle.
+What it doesn't show: that the node or indexer told the truth about the chain (ask another one, or run `./nightcast check`), or who runs the oracle.
 
 ## Checks
 
