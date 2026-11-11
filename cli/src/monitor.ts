@@ -20,6 +20,7 @@
  */
 import type { StarfallFeed } from '@lunardraw/keeper';
 import type { ServiceStatus } from './status-file.js';
+import { type NightcastInput, nightcastAlerts, nightcastDigest } from './monitor-nightcast.js';
 
 export type Unit = { name: string; active: string; sub: string; restarts: number };
 
@@ -43,6 +44,8 @@ export type Inputs = {
   disk?: { path: string; free: number; total: number };
   /** HTTP health endpoints (`--health name=url`), e.g. the private Nightcast MCP server LunaSpin uses. */
   health?: HealthInput[];
+  /** Nightcast's oracle status file and LunaSpin's soak log (`--nightcast-status`, `--soak-log`). */
+  nightcast?: NightcastInput;
 };
 
 /** What one health endpoint answered: `{ ok, canRequest?, ... }` (Nightcast's MCP server), or why it didn't. */
@@ -339,6 +342,10 @@ export const evaluate = (inp: Inputs, state: MonitorState, cfg: MonitorConfig = 
       });
     }
   }
+  if (inp.nightcast) {
+    const unit = inp.units.find((u) => u.name === 'nightcast-oracle');
+    out.push(...nightcastAlerts({ ...inp.nightcast, oracleActive: unit ? unit.active === 'active' : undefined }, now));
+  }
   return out;
 };
 
@@ -553,6 +560,7 @@ export const digest = (inp: Inputs, state: MonitorState, cfg: MonitorConfig = DE
       lines.push(`  Oracle: answered ${answered.length}, typical ${Math.round(secs[Math.floor(secs.length / 2)] / 60)} min, slowest ${Math.round(secs.at(-1)! / 60)} min`);
     }
   }
+  if (inp.nightcast) lines.push(...nightcastDigest(inp.nightcast, inp.now));
   if (inp.disk) lines.push('', `DISK  ${(inp.disk.free / 2 ** 30).toFixed(0)} GB free of ${(inp.disk.total / 2 ** 30).toFixed(0)} GB`);
   const open = openProblems(state);
   lines.push('', open.length ? `OPEN PROBLEMS\n${open.map((r) => `  • ${r.title}`).join('\n')}` : 'No open problems.');
