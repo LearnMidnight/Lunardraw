@@ -1,0 +1,3 @@
+# The browser bundle is committed: the theme copies it (assets/js/lunaspin-core.js).
+!dist/
+node_modules/
