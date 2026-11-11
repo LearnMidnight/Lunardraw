@@ -19,6 +19,8 @@ ExecStart=/root/Lunardraw/lunardraw monitor \
   --status-dir /root/lunardraw-status \
   --units lunardraw-proof,lunardraw-starfall-keeper,lunardraw-starfall-oracle,lunardraw-agent@nova,lunardraw-agent@orbit,lunardraw-agent@pixel,lunardraw-registry,lunardraw-relay,nightcast-oracle,nightcast-mcp \
   --health nightcast-mcp=http://127.0.0.1:6350/health \
+  --nightcast-status /root/lunardraw-status/nightcast-oracle.json \
+  --soak-log /root/spin-test/soak.log \
   --from "Lunardraw alerts <alerts@lunardraw.io>" \
   --to ops@lunardraw.io \
   --mail-key /root/.lunardraw-mail \

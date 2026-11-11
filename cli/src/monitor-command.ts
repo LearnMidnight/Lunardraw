@@ -11,9 +11,10 @@ import { parseArgs } from 'node:util';
 import type { StarfallFeed } from '@lunardraw/keeper';
 import { DEFAULT_CONFIG, decide, digest, type Email, emptyState, evaluate, type HealthInput, type Inputs, type MonitorConfig, type MonitorState, noteRestarts, type Unit } from './monitor.js';
 import type { ServiceStatus } from './status-file.js';
+import { type OracleStatus, parseSoak, type SoakRun } from './monitor-nightcast.js';
 
 export const MONITOR_USAGE = `usage: ./lunardraw monitor --feed <file> --status-dir <dir> --to <address> --from <address> --mail-key <file>
-       [--units <unit,unit,...>] [--health <name=url,...>] [--state <file>] [--min-dust <DUST>] [--digest-hour <0-23|-1>] [--tz <zone>]
+       [--units <unit,unit,...>] [--health <name=url,...>] [--nightcast-status <file>] [--soak-log <file>] [--state <file>] [--min-dust <DUST>] [--digest-hour <0-23|-1>] [--tz <zone>]
        [--dry-run] [--test]
 
 Checks Starfall once and emails what needs a person: a service stopped or restarting over and over,
@@ -27,7 +28,9 @@ lasts, and followed by a "resolved" email; a summary comes every day at --digest
 (default lunardraw-proof, lunardraw-starfall-keeper, lunardraw-starfall-oracle). --mail-key is a file
 holding a Resend API key (sending access). --health are HTTP health endpoints to check, named after
 their unit (e.g. nightcast-mcp=http://127.0.0.1:6350/health): an alert when one doesn't answer, isn't ok,
-or reports canRequest false (Nightcast's MCP server, which LunaSpin's spins go through). --dry-run prints the email instead of sending it and leaves
+or reports canRequest false (Nightcast's MCP server, which LunaSpin's spins go through). --nightcast-status is
+the Nightcast oracle's status file (NIGHTCAST_STATUS_FILE) and --soak-log LunaSpin's hourly test log: alerts for a
+low bond or wallet, a missed request, a failed top-up and failing test spins. --dry-run prints the email instead of sending it and leaves
 the state alone; --test sends a test email and exits.`;
 
 const DEFAULT_UNITS = ['lunardraw-proof', 'lunardraw-starfall-keeper', 'lunardraw-starfall-oracle'];
@@ -128,6 +131,8 @@ export const monitor = async (argv: string[]): Promise<number> => {
       'mail-key': { type: 'string' },
       units: { type: 'string' },
       health: { type: 'string' },
+      'nightcast-status': { type: 'string' },
+      'soak-log': { type: 'string' },
       state: { type: 'string' },
       'min-dust': { type: 'string' },
       'digest-hour': { type: 'string' },
@@ -184,7 +189,21 @@ export const monitor = async (argv: string[]): Promise<number> => {
     disk = undefined;
   }
   const health = await Promise.all(parseHealth(values.health).map((h) => readHealth(h.name, h.url)));
-  const inputs: Inputs = { now, units, services, feed: feed?.value, feedPath: values.feed, feedError: feed?.error, disk, health };
+  const ncStatus = values['nightcast-status'] ? readJson<OracleStatus>(values['nightcast-status']) : undefined;
+  let soak: SoakRun[] | undefined;
+  let soakError: string | undefined;
+  if (values['soak-log']) {
+    try {
+      soak = parseSoak(readFileSync(values['soak-log'], 'utf8'));
+    } catch (err) {
+      soakError = existsSync(values['soak-log']) ? (err instanceof Error ? err.message : String(err)) : undefined; // not there yet: no runs so far
+    }
+  }
+  const nightcast =
+    values['nightcast-status'] || values['soak-log']
+      ? { statusPath: values['nightcast-status'], status: ncStatus?.value, statusError: ncStatus?.error, soakPath: values['soak-log'], soak, soakError }
+      : undefined;
+  const inputs: Inputs = { now, units, services, feed: feed?.value, feedPath: values.feed, feedError: feed?.error, disk, health, nightcast };
 
   const loaded = readJson<MonitorState>(statePath);
   const state: MonitorState = loaded.value ?? emptyState();

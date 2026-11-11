@@ -250,7 +250,7 @@ describe('the monitor', () => {
   it("loads nothing but Node's own modules (it runs every 5 minutes, apart from main.js)", () => {
     const loads = (file: string) =>
       [...readFileSync(new URL(`../${file}`, import.meta.url), 'utf8').matchAll(/^import (?!type )[^;]*? from '([^']+)'/gm)].map((m) => m[1]);
-    const files = ['monitor-main.ts', 'monitor-command.ts', 'monitor.ts', 'status-file.ts'];
+    const files = ['monitor-main.ts', 'monitor-command.ts', 'monitor.ts', 'status-file.ts', 'monitor-nightcast.ts'];
     for (const f of files) for (const m of loads(f)) expect(m.startsWith('node:') || files.includes(m.replace(/^\.\//, '').replace(/\.js$/, '.ts')), `${f} loads ${m}`).toBe(true);
   });
 
