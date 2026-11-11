@@ -21,16 +21,35 @@
 
 `pad32(s)` is Compact's `pad(32, s)`: the UTF-8 bytes, then zeros. Results are 0-based positions; pages show them as entry #1, #2, …
 
+## The chain check (the certificate's second tick)
+
+`src/chain.js` checks a spin against Midnight itself, in the visitor's browser: it reads the Nightcast contract's state from a Midnight indexer, decodes it with Midnight's on-chain runtime (`@midnightntwrk/onchain-runtime-v4` 4.0.0, WebAssembly), finds the request by its id and compares what the chain holds.
+
+| Check | What it shows |
+|---|---|
+| Request id | `SHA-256(pad32("nightcast:alpha:v0") ‖ contract ‖ requester ‖ pad32(tag) ‖ seed)`, the contract's `requestId`, recomputed from the certificate's seed and the requester stored on chain: this is the request for this list, not another one |
+| Fulfilled, with this output | the contract only stores an output whose VRF proof the network verified against the oracle key the request was bound to |
+| Tag | `lunaspin|v1` |
+| Oracle key and contract | the published Nightcast deployment (`DEPLOYMENTS`, from Nightcast's `deployments/preprod.json`) |
+
+A request is stored as 14 values in the order of the contract's `Request` struct (v1): status, requester, tag, point (x, y), oracle key (x, y), deadline, output, fee, collateral, refund address, payout address, term. Each value is little-endian with its trailing zero bytes left off.
+
+`dist/lunaspin-chain.js` is its browser build (`window.LunaSpinChain`, about 41 kB). It needs the runtime's `.wasm` file beside it (`npm run build` copies it to `dist/lunaspin-chain.wasm`, 1.6 MB, not committed; SHA-256 `a10579365a8bf303abdcedef906f4bdf4a159f189f19c86c654bd75d0a0c870d`, the package's own file, unchanged). The theme copies both to `assets/js/`.
+
+`test/fixtures/preprod-state.json` is a real copy of the contract's state on Preprod (11 Nov 2026) with one real spin in it; `test/chain.test.mjs` checks that spin passes, and that a different output, seed, request, oracle key or contract fails.
+
+What it doesn't show: that the indexer told the truth about the chain (ask another one, or run `./nightcast check`), or who runs the oracle.
+
 ## Checks
 
 ```
 npm ci
-npm test            # the JS rules against @nightcast/sdk 0.1.0 and the compiled @nightcast/contract 0.1.0
+npm test            # the JS rules against @nightcast/sdk 0.1.0 and the compiled @nightcast/contract 0.1.0, and the chain check against the saved state
 npm run vectors     # rewrite test/vectors.json (fixed inputs and answers, mostly from the SDK)
 php test/php-vectors.php   # the PHP twin against the same values
-npm run build       # dist/lunaspin-core.js
+npm run build       # dist/lunaspin-core.js, dist/lunaspin-chain.js and the runtime's .wasm
 ```
 
-CI (`.github/workflows/lunaspin.yml`) runs all four and fails if `test/vectors.json` or the bundle is out of date.
+CI (`.github/workflows/lunaspin.yml`) runs all four and fails if `test/vectors.json` or a bundle is out of date.
 
 Design: `claude/lunaspin.md` in the Lunardraw project, tracked in issue #98.

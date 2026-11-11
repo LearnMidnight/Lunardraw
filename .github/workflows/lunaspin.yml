@@ -28,7 +28,7 @@ jobs:
       - name: Install
         run: npm ci --no-audit --no-fund
 
-      - name: JS rules match @nightcast/sdk and the compiled contract
+      - name: JS rules match @nightcast/sdk and the compiled contract; the chain check reads the saved state
         run: npm test
 
       - name: Test values are up to date
@@ -41,7 +41,8 @@ jobs:
           php --version | head -1
           php test/php-vectors.php
 
-      - name: Browser bundle is up to date
+      - name: Browser bundles are up to date
         run: |
           npm run build
-          git diff --exit-code dist/lunaspin-core.js || { echo "::error title=LunaSpin::dist/lunaspin-core.js is out of date: run npm run build"; exit 1; }
+          git diff --exit-code dist/lunaspin-core.js dist/lunaspin-chain.js || { echo "::error title=LunaSpin::a bundle in dist/ is out of date: run npm run build"; exit 1; }
+          echo "a10579365a8bf303abdcedef906f4bdf4a159f189f19c86c654bd75d0a0c870d  dist/lunaspin-chain.wasm" | sha256sum -c -
