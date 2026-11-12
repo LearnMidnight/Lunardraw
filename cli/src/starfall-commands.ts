@@ -16,7 +16,7 @@ import { buildStarfallFeed, DerivedSeeds, DrawOracle, every, isStaleDustProof, m
 import { declareFeesAtDustTime, type DustTimeWallet } from './dust-time.js';
 import { DustMeter, meterDustFees } from './dust-meter.js';
 import { withFreshFees } from './fresh-fees.js';
-import { compilerInfo, decodedPublicData, localFingerprints, NETWORKS, type Session, walletAddress, walletBalances } from '@nightcast/deploy';
+import { BLOCKFROST, compilerInfo, decodedPublicData, localFingerprints, NETWORKS, type Session, walletAddress, walletBalances } from '@nightcast/deploy';
 import { openWallet } from './wallet-lock.js';
 import { statusWriter } from './status-file.js';
 import { buyerProviders, buyWithRetry, proverArg } from './buyer.js';
@@ -49,6 +49,8 @@ import {
   type AgentStyle,
   describeResult,
   loadAgentState,
+  MAX_ROUNDS,
+  parseLines,
   planPurchase,
   saveAgentState,
   settledResults,
@@ -97,7 +99,8 @@ export const STARFALL_USAGE = `usage: ./lunardraw starfall <command>
                [--games <n> | --package <${Object.keys(Starfall.QUICK_PICK_PACKAGES).join('|')}>] [--sweep]
                | [--system <8-12> | --pick <5|6>] [--numbers "<n n n ...>"] [--moonball <1-20> | --sweep]
   agent        --network <network> --wallet <file> --name <name> [--style quickpick|lucky|moonhit|system|mix]
-               [--games <n>] [--numbers "<7 numbers>" --moonball <1-20>] [--budget <tNIGHT a draw>] [--max-draws <n>]
+               [--games <n>] [--numbers "<7 numbers>" --moonball <1-20> | --lines "<set>; <set>; ..."] [--rounds <n>]
+               [--budget <tNIGHT a draw>] [--max-draws <n>]
                [--daily-limit <tNIGHT a day>] [--buy-every <minutes> [--buy-at <minute>]] [--state <file>] [--proof-server-port <port> | --prover <url|hosted>] [--dust-wait <min>]
   status       --network <network>
   last-draw    --network <network> [--undo]   (the next draw is the final draw, then nothing more opens: see below)
@@ -110,8 +113,10 @@ export const STARFALL_USAGE = `usage: ./lunardraw starfall <command>
 An agent (\`agent\`) is a player with its own wallet that buys into every draw in its style and reports
 what it won; what it bought is kept in --state (default ~/lunardraw-agents/<name>.state.json), so a
 restart never buys twice. Styles: quickpick (--games random games), lucky (the same --numbers and
---moonball every draw), moonhit (7 random numbers with every Moonball), system (a System 8), mix
-(a random style each draw, mostly small QuickPicks). --budget caps one draw's spend (default 60).
+--moonball every draw, or several sets with --lines "3,11,17,23,26,30,34+7; 1,2,3,4,5,6,7+12"),
+moonhit (7 random numbers with every Moonball), system (a System 8), mix (a random style each draw,
+mostly small QuickPicks). --budget caps one draw's spend (default 60). --rounds <n> buys n purchases'
+worth in one go, trimmed to the budget: for an agent that is only started for a while each day.
 
 Deploy defaults: a game costs 1.3 tNIGHT (1 to the prize pool, 0.3 to the operator), sales of
 6 hours to 14 days, 1 hour to reveal, 2 hours for the oracle, 1 day to settle once the numbers are
@@ -472,6 +477,8 @@ export const starfall = async (argv: string[]): Promise<number> => {
       'max-draws': { type: 'string' },
       'buy-every': { type: 'string' },
       'buy-at': { type: 'string' },
+      rounds: { type: 'string' },
+      lines: { type: 'string' },
       state: { type: 'string' },
       undo: { type: 'boolean', default: false },
     },
@@ -692,9 +699,14 @@ export const starfall = async (argv: string[]): Promise<number> => {
           if (!view.oracleKeyReady) throw new Error('the oracle key is not active yet: run `./lunardraw starfall accept-key` first');
           const joined = await joinStarfall(providers, record.contractAddress, { oracleSecretKey: sk });
           const chain = new MidnightStarfallChain(joined, decodedPublicData(providers.publicDataProvider), providers.privateStateProvider, record.contractAddress);
-          const oracle = new DrawOracle({ chain, publicKey: pk, logger: session.logger });
+          // A draw needs its answer once a day. Every look is a Blockfrost request on Preprod (15,500 a day at
+          // 5 s): look once a minute there, and every 5 s while a draw is waiting for its answer.
+          const pollMs = BLOCKFROST[network] ? 60_000 : 5_000;
+          const oracle = new DrawOracle({ chain, publicKey: pk, logger: session.logger, pollMs, busyPollMs: 5_000 });
           oracle.start();
-          session.logger.info(`Starfall draw oracle running for ${record.contractAddress}. Press Ctrl+C to stop.`);
+          session.logger.info(
+            `Starfall draw oracle running for ${record.contractAddress}; looking every ${pollMs / 1000} s${pollMs > 5_000 ? ' (every 5 s while a draw waits for its answer)' : ''}. Press Ctrl+C to stop.`,
+          );
           const watchdog = untilFailingFor(restartAfter(values['restart-after']), () => oracle.status().streak, session.logger);
           const sync = watchSync(wallet, { stallMinutes: stallAfter(values['stall-after']), logger: session.logger });
           const silence = untilSilentFor(silentAfter(values['silent-after']), () => oracle.status().lastTickAt, session.logger);
@@ -791,7 +803,13 @@ export const starfall = async (argv: string[]): Promise<number> => {
         maxDraws: values['max-draws'] !== undefined ? Number(values['max-draws']) : 0,
         dailyLimit: values['daily-limit'] !== undefined ? BigInt(Math.round(Number(values['daily-limit']) * 1e6)) : undefined,
         buyEverySecs: values['buy-every'] !== undefined ? Math.round(Number(values['buy-every']) * 60) : undefined,
+        rounds: values.rounds !== undefined ? Number(values.rounds) : undefined,
+        lines: values.lines !== undefined ? parseLines(values.lines) : undefined,
       };
+      if (opts.rounds !== undefined && !(Number.isInteger(opts.rounds) && opts.rounds >= 1 && opts.rounds <= MAX_ROUNDS)) {
+        throw new Error(`--rounds takes a whole number from 1 to ${MAX_ROUNDS} (24: a day of hourly purchases in one)`);
+      }
+      if (opts.lines && style !== 'lucky') throw new Error('--lines goes with --style lucky');
       if (opts.buyEverySecs !== undefined && !(opts.buyEverySecs >= 60)) throw new Error('--buy-every takes minutes, 1 or more (60: each hour)');
       if (values['buy-at'] !== undefined) {
         const at = Number(values['buy-at']);
@@ -803,8 +821,13 @@ export const starfall = async (argv: string[]): Promise<number> => {
         opts.buyOffsetSecs = slotOffsetFor(name, opts.buyEverySecs);
       }
       if (style === 'lucky') {
-        if (!opts.numbers || opts.numbers.length !== 7 || !opts.moonball) throw new Error('--style lucky needs --numbers "<7 numbers>" and --moonball');
-        Starfall.checkEntry({ numbers: opts.numbers, moonball: opts.moonball });
+        if (opts.lines) {
+          if (!opts.lines.length) throw new Error('--lines needs at least one set, like "3,11,17,23,26,30,34+7"');
+          if (opts.numbers || opts.moonball) throw new Error('give --lines, or --numbers with --moonball, not both');
+        } else {
+          if (!opts.numbers || opts.numbers.length !== 7 || !opts.moonball) throw new Error('--style lucky needs --numbers "<7 numbers>" and --moonball, or --lines "<set>; <set>"');
+          Starfall.checkEntry({ numbers: opts.numbers, moonball: opts.moonball });
+        }
       }
       const prover = proverArg(values.prover);
       const statePath = values.state ?? `${homedir()}/lunardraw-agents/${name}.state.json`;
