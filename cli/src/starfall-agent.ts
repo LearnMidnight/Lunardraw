@@ -14,9 +14,15 @@
  * what it reported are kept in a small state file, so a restart doesn't buy
  * twice or report twice.
  *
- * Styles: `quickpick` (n random games), `lucky` (the same numbers every draw),
- * `moonhit` (7 numbers with every Moonball), `system` (a System 8), `mix`
- * (a random style each draw, weighted towards small QuickPicks).
+ * Styles: `quickpick` (n random games), `lucky` (the same numbers every draw:
+ * one set, or a list of sets), `moonhit` (7 numbers with every Moonball),
+ * `system` (a System 8), `mix` (a random style each draw, weighted towards
+ * small QuickPicks).
+ *
+ * An agent that is only awake for a short while each day (every open wallet
+ * costs Blockfrost requests, bought or not: 13 Nov 2026) can buy its whole
+ * day in one purchase with `rounds`: that many purchases' worth at once,
+ * trimmed to what the budget for the draw still allows.
  *
  * The planning is pure (`planPurchase`, `settledResults`) so it can be tested
  * without a chain; `runAgent` wires it to a wallet.
@@ -37,6 +43,14 @@ export type AgentOptions = {
   /** The lucky numbers (7) and Moonball, for `lucky`. */
   numbers?: number[];
   moonball?: number;
+  /** For `lucky`: several sets of numbers, each played once a purchase (instead of `numbers` and `moonball`). */
+  lines?: LuckyLine[];
+  /**
+   * Buy this many purchases' worth in one go (default 1): a QuickPick agent
+   * with `games: 4` and `rounds: 24` buys 96 games. Trimmed to whole entries
+   * that fit the budget for the draw.
+   */
+  rounds?: number;
   /** Most to spend on one draw, in STAR. Default 60 tNIGHT. */
   budget?: bigint;
   /** Don't buy when sales close within this many seconds. Default 180. */
@@ -53,6 +67,29 @@ export type AgentOptions = {
   /** With buyEverySecs: the slots start this many seconds into each period (default 0). */
   buyOffsetSecs?: number;
 };
+
+export type LuckyLine = { numbers: number[]; moonball: number };
+
+/** The most rounds one purchase may hold (two days of hourly purchases). */
+export const MAX_ROUNDS = 48;
+
+/**
+ * Lucky sets from text: `3,11,17,23,26,30,34+7; 1,2,3,4,5,6,7+12` (seven
+ * numbers, a plus, the Moonball; sets separated by semicolons or new lines).
+ */
+export const parseLines = (text: string): LuckyLine[] =>
+  text
+    .split(/[;\n]+/)
+    .map((s) => s.trim())
+    .filter((s) => s !== '')
+    .map((s) => {
+      const m = /^([\d\s,]+)\+\s*(\d+)$/.exec(s);
+      if (!m) throw new Error(`a lucky set looks like "3,11,17,23,26,30,34+7" (seven numbers, a plus, the Moonball), not "${s}"`);
+      const line = { numbers: m[1].split(/[\s,]+/).filter((x) => x !== '').map(Number), moonball: Number(m[2]) };
+      if (line.numbers.length !== 7) throw new Error(`a lucky set has seven numbers: "${s}" has ${line.numbers.length}`);
+      Starfall.checkEntry(line);
+      return line;
+    });
 
 export type AgentPurchase = {
   draw: string; // bigint as string, for JSON
@@ -130,6 +167,7 @@ export const composeEntries = (o: AgentOptions, pick: (n: number) => number = ra
     case 'quickpick':
       return Array.from({ length: games }, () => ({ ...quickPick() }));
     case 'lucky': {
+      if (o.lines?.length) return o.lines.map((l) => ({ numbers: [...l.numbers], moonball: l.moonball }));
       if (!o.numbers || o.numbers.length !== 7 || !o.moonball) throw new Error('the lucky style needs 7 numbers and a Moonball');
       return [{ numbers: [...o.numbers], moonball: o.moonball }];
     }
@@ -148,6 +186,13 @@ export const composeEntries = (o: AgentOptions, pick: (n: number) => number = ra
       throw new Error(`unknown style ${String(o.style)}`);
   }
 };
+
+/** How many purchases' worth one purchase holds: `rounds`, from 1 to MAX_ROUNDS. */
+export const roundsOf = (o: AgentOptions): number => Math.max(1, Math.min(MAX_ROUNDS, Math.floor(o.rounds ?? 1) || 1));
+
+/** What one purchase holds: `rounds` times the style's entries, in order. */
+export const composePurchase = (o: AgentOptions, pick?: (n: number) => number): Starfall.PlainEntry[] =>
+  Array.from({ length: roundsOf(o) }, () => composeEntries(o, pick)).flat();
 
 export type Plan = { draw: bigint; salesClose: bigint; entries: Starfall.PlainEntry[]; games: number; cost: bigint };
 
@@ -184,7 +229,7 @@ export const planPurchase = (
   nowSecs: number,
   state: AgentState,
   o: AgentOptions,
-  entries: Starfall.PlainEntry[] = composeEntries(o),
+  wanted: Starfall.PlainEntry[] = composePurchase(o),
 ): Plan | null | { skipped: string } => {
   const now = BigInt(Math.floor(nowSecs));
   const margin = BigInt(o.marginSecs ?? 180);
@@ -201,10 +246,22 @@ export const planPurchase = (
   } else if (o.maxDraws && drawsPlayed(state) >= o.maxDraws) {
     return { skipped: `played ${o.maxDraws} draw(s), the limit` };
   }
-  const games = entries.reduce((a, e) => a + Starfall.gamesOf(e), 0);
-  const cost = view.ticketPrice * BigInt(games);
   const budget = o.budget ?? 60_000_000n;
   const spent = spentOnDraw(state, selling.id);
+  const costOf = (list: Starfall.PlainEntry[]): bigint => view.ticketPrice * BigInt(list.reduce((a, e) => a + Starfall.gamesOf(e), 0));
+  // A purchase of several rounds is trimmed to the whole entries the budget still allows, from the
+  // front (a day's worth that is 10 tNIGHT over shouldn't buy nothing). One round is all or nothing, as before.
+  let entries = wanted;
+  if (roundsOf(o) > 1 && spent + costOf(entries) > budget) {
+    const fits: Starfall.PlainEntry[] = [];
+    for (const e of wanted) {
+      if (spent + costOf([...fits, e]) > budget) break;
+      fits.push(e);
+    }
+    if (fits.length) entries = fits;
+  }
+  const games = entries.reduce((a, e) => a + Starfall.gamesOf(e), 0);
+  const cost = view.ticketPrice * BigInt(games);
   if (spent + cost > budget) {
     return {
       skipped: spent

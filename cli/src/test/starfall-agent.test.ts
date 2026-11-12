@@ -6,11 +6,15 @@ import { Starfall } from '@lunardraw/contract';
 import type { StarfallDrawView, StarfallView } from '@lunardraw/keeper';
 import {
   composeEntries,
+  composePurchase,
   describeResult,
   drawsPlayed,
   emptyAgentState,
   loadAgentState,
+  MAX_ROUNDS,
+  parseLines,
   planPurchase,
+  roundsOf,
   saveAgentState,
   settledResults,
   slotOffsetFor,
@@ -83,6 +87,56 @@ describe('the Starfall agent', () => {
     const p2 = planPurchase(v2, 11_000, state, o, entries);
     expect(p2 && !('skipped' in p2) ? p2.draw : p2).toBe(2n);
     expect(planPurchase(view([draw(1, DrawStatus.requested, 10_000)]), 11_000, emptyAgentState(), o, entries)).toBeNull(); // nothing on sale
+  });
+
+  it('with rounds, buys a whole day of purchases in one, trimmed to what the budget still allows', () => {
+    const v = view([draw(1, DrawStatus.open, 100_000)]); // 1.2 tNIGHT a game
+    const pixel = { name: 'pixel', style: 'quickpick' as const, games: 4, rounds: 24, budget: 130_000_000n };
+    expect(composePurchase(pixel)).toHaveLength(96);
+    const plan = planPurchase(v, 5_000, emptyAgentState(), pixel);
+    expect(plan && !('skipped' in plan) ? { games: plan.games, cost: plan.cost } : plan).toEqual({ games: 96, cost: 115_200_000n });
+
+    // over the budget: as many whole entries as fit, not nothing (100 tNIGHT buys 83 games at 1.2)
+    const tight = planPurchase(v, 5_000, emptyAgentState(), { ...pixel, budget: 100_000_000n });
+    expect(tight && !('skipped' in tight) ? { games: tight.games, cost: tight.cost } : tight).toEqual({ games: 83, cost: 99_600_000n });
+
+    // an entry is never cut in half: a Moonball sweep is 20 games, so 30 tNIGHT buys one, not one and a bit
+    const sweeps = Array.from({ length: 3 }, () => ({ numbers: [1, 2, 3, 4, 5, 6, 7], sweep: true }));
+    const one = planPurchase(v, 5_000, emptyAgentState(), { name: 'nova', style: 'mix' as const, rounds: 3, budget: 30_000_000n }, sweeps);
+    expect(one && !('skipped' in one) ? { entries: one.entries.length, games: one.games } : one).toEqual({ entries: 1, games: 20 });
+
+    // what was already spent on the draw counts, and when nothing fits it says so
+    const state = emptyAgentState();
+    state.purchases.push({ draw: '1', at: new Date(1_000_000).toISOString(), entries: [], games: 100, cost: '120000000', txs: 6 });
+    const later = { ...pixel, buyEverySecs: 3600 };
+    const rest = planPurchase(v, 5_000, state, later);
+    expect(rest && !('skipped' in rest) ? rest.games : rest).toBe(8); // 130 - 120 = 10 tNIGHT left: 8 games
+    state.purchases.push({ draw: '1', at: new Date(1_000_000).toISOString(), entries: [], games: 8, cost: '9600000', txs: 1 });
+    expect(planPurchase(v, 5_000, state, later)).toMatchObject({ skipped: expect.stringMatching(/over the budget/) });
+
+    // one round is all or nothing, as before
+    expect(planPurchase(v, 5_000, emptyAgentState(), { name: 'a', style: 'quickpick' as const, games: 4, budget: 3_000_000n })).toMatchObject({
+      skipped: expect.stringMatching(/over the budget/),
+    });
+    expect([roundsOf({ name: 'a', style: 'mix' }), roundsOf({ name: 'a', style: 'mix', rounds: 0 }), roundsOf({ name: 'a', style: 'mix', rounds: 500 })]).toEqual([1, 1, MAX_ROUNDS]);
+  });
+
+  it('plays a list of lucky sets, each once a purchase', () => {
+    const lines = parseLines('3,11,17,23,26,30,34+7; 1 2 3 4 5 6 7 + 12\n 5,10,15,20,25,30,35+20 ;');
+    expect(lines).toEqual([
+      { numbers: [3, 11, 17, 23, 26, 30, 34], moonball: 7 },
+      { numbers: [1, 2, 3, 4, 5, 6, 7], moonball: 12 },
+      { numbers: [5, 10, 15, 20, 25, 30, 35], moonball: 20 },
+    ]);
+    const orbit = { name: 'orbit', style: 'lucky' as const, lines };
+    expect(composeEntries(orbit)).toEqual(lines);
+    const plan = planPurchase(view([draw(1, DrawStatus.open, 100_000)]), 5_000, emptyAgentState(), orbit);
+    expect(plan && !('skipped' in plan) ? plan.games : plan).toBe(3);
+    // one set, as before
+    expect(composeEntries({ name: 'o', style: 'lucky', numbers: [3, 11, 17, 23, 26, 30, 34], moonball: 7 })).toEqual([{ numbers: [3, 11, 17, 23, 26, 30, 34], moonball: 7 }]);
+    for (const bad of ['3,11,17,23,26,30+7', '3,11,17,23,26,30,34', '3,11,17,23,26,30,36+7', '3,11,17,23,26,30,34+21', '3,3,17,23,26,30,34+7', 'lucky']) {
+      expect(() => parseLines(bad), bad).toThrow();
+    }
   });
 
   it('with buyOffsetSecs, each slot starts that far into the hour, so agents buy at different minutes', () => {

@@ -5,6 +5,9 @@
 #   AGENT_ARGS=--style mix --budget 30
 #   AGENT_ARGS=--style lucky --numbers 3,11,17,23,26,30,34 --moonball 7   (commas, not quotes: the
 #   value is split on spaces when it reaches the command)
+#   AGENT_ARGS=--style lucky --lines 3,11,17,23,26,30,34+7;1,12,21,23,26,31,35+16   (several sets: no spaces)
+#   AGENT_ARGS=--style quickpick --games 4 --budget 130 --rounds 24   (an agent started for a while each
+#   day by a timer, buying the day's worth at once: every open wallet costs Blockfrost requests)
 # Then: systemctl enable --now lunardraw-agent@<name>
 # It proves on the player proof server (6301), never the keeper's (6300).
 [Unit]

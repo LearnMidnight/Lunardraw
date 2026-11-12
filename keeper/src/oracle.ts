@@ -27,7 +27,16 @@ export type DrawOracleOptions = {
   answeredGraceMs?: number;
   backoffMs?: number;
   maxBackoffMs?: number;
+  /** How often to look for a draw to answer, in ms. Default 5 s. */
   pollMs?: number;
+  /**
+   * How often to look while a draw is waiting for its answer (new, or backing
+   * off after a failure), in ms. Default: pollMs. A draw needs an answer once
+   * a day, and each look is a read of the contract: where reads are metered
+   * (Blockfrost), a slow pollMs with a fast busyPollMs answers as quickly
+   * without reading every 5 s all day (15,500 requests a day, 13 Nov 2026).
+   */
+  busyPollMs?: number;
   logger?: KeeperLogger;
   clock?: () => number;
 };
@@ -35,6 +44,14 @@ export type DrawOracleOptions = {
 export type OracleReport = { fulfilled: bigint[]; failed: { draw: bigint; error: string }[]; skipped: { draw: bigint; reason: string }[] };
 
 const silent: KeeperLogger = { info() {}, warn() {}, error() {} };
+
+/**
+ * Whether a pass left something to do soon: a draw just answered or just
+ * failed, one that is new (waiting for the node to catch up) or backing off.
+ * One already answered (waiting for the indexer) or past its time isn't.
+ */
+export const hasWaitingDraw = (report: OracleReport): boolean =>
+  report.fulfilled.length > 0 || report.failed.length > 0 || report.skipped.some((s) => s.reason.startsWith('new') || s.reason === 'backing off');
 
 /** Requested draws this oracle should answer at chain time `now`. */
 export const drawsToAnswer = (view: { draws: OracleDrawView[] }, key: { x: bigint; y: bigint }, now: number, safetyMarginSecs: number) =>
@@ -65,6 +82,7 @@ export class DrawOracle {
       backoffMs: options.backoffMs ?? 5_000,
       maxBackoffMs: options.maxBackoffMs ?? 60_000,
       pollMs: options.pollMs ?? 5_000,
+      busyPollMs: Math.min(options.busyPollMs ?? options.pollMs ?? 5_000, options.pollMs ?? 5_000),
       clock: options.clock ?? Date.now,
     };
     this.logger = options.logger ?? silent;
@@ -145,12 +163,13 @@ export class DrawOracle {
     this.running = true;
     const loop = async () => {
       if (!this.running) return;
+      let waiting = false;
       try {
-        await this.tick();
+        waiting = hasWaitingDraw(await this.tick());
       } catch (err) {
         this.logger.error(`could not read the contract: ${reasonOf(err)}`);
       }
-      if (this.running) this.timer = setTimeout(loop, this.cfg.pollMs);
+      if (this.running) this.timer = setTimeout(loop, waiting ? this.cfg.busyPollMs : this.cfg.pollMs);
     };
     void loop();
   }

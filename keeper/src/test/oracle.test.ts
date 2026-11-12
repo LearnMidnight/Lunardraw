@@ -3,7 +3,7 @@ import { DrawStatus, LottoSimulator } from '@lunardraw/contract';
 import { generateOperatorSecret, generateOracleSecretKey, oraclePublicKey, pureCircuits as nightcast } from '@nightcast/contract';
 import { type ChainView, type DrawOracleChain, SimulatorChain } from '../chain.js';
 import { Keeper } from '../keeper.js';
-import { DrawOracle } from '../oracle.js';
+import { DrawOracle, hasWaitingDraw } from '../oracle.js';
 import { every } from '../schedule.js';
 import { MemorySeedStore } from '../seeds.js';
 
@@ -98,5 +98,19 @@ describe('the draw oracle', () => {
     expect(draws.length).toBeGreaterThanOrEqual(3);
     expect(draws).not.toContain(DrawStatus.voided);
     expect(draws[0]).toBe(DrawStatus.settled);
+  });
+});
+
+describe('how soon the draw oracle looks again', () => {
+  const none = { fulfilled: [], failed: [], skipped: [] };
+  it('looks again soon only while a draw is waiting for its answer', () => {
+    expect(hasWaitingDraw(none)).toBe(false);
+    expect(hasWaitingDraw({ ...none, fulfilled: [1n] })).toBe(true);
+    expect(hasWaitingDraw({ ...none, failed: [{ draw: 1n, error: 'x' }] })).toBe(true);
+    expect(hasWaitingDraw({ ...none, skipped: [{ draw: 1n, reason: 'new; letting the node catch up' }] })).toBe(true);
+    expect(hasWaitingDraw({ ...none, skipped: [{ draw: 1n, reason: 'backing off' }] })).toBe(true);
+    // answered already, or past saving: nothing to hurry for
+    expect(hasWaitingDraw({ ...none, skipped: [{ draw: 1n, reason: 'answered; waiting for the indexer' }] })).toBe(false);
+    expect(hasWaitingDraw({ ...none, skipped: [{ draw: 1n, reason: 'too close to its deadline' }] })).toBe(false);
   });
 });
