@@ -15,6 +15,8 @@ Wants=lunardraw-player-proof.service network-online.target
 [Service]
 WorkingDirectory=/root/Lunardraw
 Environment=HOME=/root
+# Today's Blockfrost requests from this service, for the monitor to add up (the daily limit is per project).
+Environment=NIGHTCAST_BLOCKFROST_USAGE=/root/lunardraw-status/usage/lunardraw-agent-%i.json
 EnvironmentFile=-/root/lunardraw-agents/%i.env
 ExecStart=/bin/bash -c 'exec /root/Lunardraw/lunardraw starfall agent --network preprod --name %i \
   --wallet /root/lunardraw-agents/%i.secret --proof-server-port 6301 $AGENT_ARGS'

@@ -14,6 +14,8 @@ Conflicts=lunardraw-keeper.service
 [Service]
 WorkingDirectory=/root/Lunardraw
 Environment=HOME=/root
+# Today's Blockfrost requests from this service, for the monitor to add up (the daily limit is per project).
+Environment=NIGHTCAST_BLOCKFROST_USAGE=/root/lunardraw-status/usage/lunardraw-starfall-keeper.json
 ExecStart=/root/Lunardraw/lunardraw starfall keeper --network preprod \
   --organiser /root/lunardraw-secrets/organiser.secret \
   --settlement /root/lunardraw-secrets/settlement.secret \
