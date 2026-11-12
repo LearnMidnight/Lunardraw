@@ -4,7 +4,7 @@ Let an AI agent play **Starfall**, [Lunardraw](https://lunardraw.io)'s lottery o
 
 > **Test tokens only.** Starfall runs on Midnight Preprod with tNIGHT, which has no value. Lunardraw never holds your keys: the wallet lives in a file on your machine.
 
-- **A game**: 7 numbers from 1–35 and a Moonball from 1–20, for a little over 1 tNIGHT (the contract sets the price: `lunardraw-agent status` shows it). Draws close on the hour on Preprod; the numbers come from [Nightcast](https://github.com/LearnMidnight/Nightcast) verifiable randomness, and anyone can check every draw.
+- **A game**: 7 numbers from 1–35 and a Moonball from 1–20, for 1.3 tNIGHT (the contract sets the price: `lunardraw-agent status` shows it). A draw closes every day at 20:00 Brisbane time (10:00 UTC) on Preprod; the numbers come from [Nightcast](https://github.com/LearnMidnight/Nightcast) verifiable randomness, and anyone can check every draw.
 - **Nothing to claim.** Prizes, and refunds if a draw is cancelled, are paid to the wallet automatically.
 - **No proof server needed.** Ticket purchases are proved by Lunardraw's hosted prover (it sees the ticket being bought, never the draw), and the wallet proves its own fees on your machine.
 - **Spending limits** (25 tNIGHT a draw and 100 a day by default) are set by the owner: in the Claude extension's settings, or with `lunardraw-agent limits --per-draw 25 --per-day 100` (they're kept in `config.json`). An AI using the MCP server can read them but can't change them. A change takes effect at the next purchase, without restarting anything.
@@ -135,10 +135,10 @@ Downloaded proving keys for the wallet's own proofs are cached in `~/.cache/nigh
 | "the wallet has no DUST yet" | DUST builds up a few minutes after tNIGHT arrives. Try again shortly. |
 | "not buying: … over the owner's limit" | The purchase would pass the limits (the extension's settings, or `config.json`): raise them with `lunardraw-agent limits --per-day <tNIGHT>` or in the extension's settings. |
 | "this agent plays an old Starfall contract" | Starfall was deployed again and this copy of the kit still has the old contract. Update it: reinstall the Claude extension from [lunardraw.io/play-with-ai](https://lunardraw.io/play-with-ai/), or `npm install -g @lunardraw/agent`. The wallet stays. |
-| "no draw is on sale right now" | Between a draw closing and the next opening (on the hour). |
+| "no draw is on sale right now" | Between a draw closing (20:00 Brisbane time, 10:00 UTC) and the next opening, a few minutes later. |
 | "wallet in use" | Another program has the wallet open (`lunardraw-agent play`, say, or an older kit). Stop it first. Connected apps and `buy` share the agent that's running, so they don't clash. |
 | ChatGPT or Claude on the web says the agent isn't connected | The computer is off or asleep, or the agent isn't running: `lunardraw-agent remote` starts it. |
 | Something else | `lunardraw-agent doctor` checks everything and says what to fix. |
-| "the connection to the Midnight node dropped for a moment" | Blockfrost's node connection blipped; it reconnects by itself. `LUNARDRAW_AGENT_DEBUG=1` shows the details. |
+| "the connection to the Midnight node dropped for a moment" | The connection to Midnight's Preprod node blipped; it reconnects by itself. `LUNARDRAW_AGENT_DEBUG=1` shows the details. |
 
 Source and issues: [LearnMidnight/Lunardraw](https://github.com/LearnMidnight/Lunardraw). MIT licence.

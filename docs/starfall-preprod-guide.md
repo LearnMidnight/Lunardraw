@@ -50,7 +50,7 @@ nightcast/nightcast wallet new --out ~/lunardraw-secrets/player-wallet.secret
 nightcast/nightcast wallet show --network preprod --wallet ~/lunardraw-secrets/player-wallet.secret
 ```
 
-It prints an address starting `mn_addr_preprod1...`. Paste it into the Preprod faucet, <https://midnight-tmnight-preprod.nethermind.dev/>, and request tNIGHT. 100 games cost 120 tNIGHT plus fees; if the faucet gives less, buy fewer.
+It prints an address starting `mn_addr_preprod1...`. Paste it into the Preprod faucet, <https://midnight-tmnight-preprod.nethermind.dev/>, and request tNIGHT. 100 games cost 130 tNIGHT plus fees; if the faucet gives less, buy fewer.
 
 ## Part 5: Deploy
 
@@ -90,7 +90,9 @@ It uses the default settings, the real weekly game's, so the same contract runs 
 
 `--min-sales`, `--max-sales`, `--reveal`, `--draw`, `--settle`, `--final-sales` (seconds), `--max-tickets` and `--must-be-won-after` change them. Keep `--max-tickets` below what can be settled within `--settle`: about 14 tickets a minute.
 
-It ends with a checklist that should be all **PASS**, including `the organiser secret can open draws`, and writes `deployments/starfall-preprod.json`. Send me the output (it's all public).
+It ends with a checklist that should be all **PASS**, including `the organiser secret can open draws`, and writes `deployments/starfall-preprod.json`. All of the output is public.
+
+(Since Preprod moved to ledger 9 on 9 Nov 2026, a *new* deployment needs the contract recompiled with Compact 0.36, which is still to do. The live contract, deployed this way on 7 Nov 2026, carried over.)
 
 ## Part 6: Run it
 
@@ -103,7 +105,7 @@ systemctl enable --now lunardraw-starfall-keeper lunardraw-starfall-oracle
 journalctl -u lunardraw-starfall-keeper -f
 ```
 
-Within a minute: `opened draw 1, selling until ...` (the next hour). The site feed carries on at the same address, now in Starfall's format.
+Within a minute: `opened draw 1, selling until ...` (the next 20:00 Brisbane). The site feed carries on at the same address, now in Starfall's format.
 
 ## Part 7: Buy games
 
@@ -130,9 +132,9 @@ Or `--games <n>` for any number. Standard games go 12 to a ticket (a contract wi
 System, Pick and Moonball Sweep entries are **one ticket each**, however many games they hold (a contract with entries, PR #41 and later):
 
 ```bash
-# A System 9 (36 games, 43.2 tNIGHT), random numbers, or your own with --numbers "3 9 14 21 27 33 35 2 18"
+# A System 9 (36 games, 46.8 tNIGHT), random numbers, or your own with --numbers "3 9 14 21 27 33 35 2 18"
 ./lunardraw starfall buy --network preprod --wallet ~/lunardraw-secrets/player-wallet.secret --system 9 --proof-server-port 6300
-# A Pick 6 with your numbers (29 games), and with every Moonball (580 games, 696 tNIGHT)
+# A Pick 6 with your numbers (29 games), and with every Moonball (580 games, 754 tNIGHT)
 ./lunardraw starfall buy ... --pick 6 --numbers "4 8 15 16 23 34" --moonball 7
 ./lunardraw starfall buy ... --pick 6 --numbers "4 8 15 16 23 34" --sweep
 # Four PowerHit-style QuickPicks (20 games each)
@@ -168,11 +170,11 @@ Styles: `quickpick` (`--games` random games), `lucky` (the same `--numbers` and 
 
 The same command runs anywhere with a proof server: `./lunardraw starfall agent --network preprod --name nova --wallet nova.secret --style mix --proof-server-port 6300`.
 
-## What happens each hour
+## What happens each draw
 
 | Who | Log line | About |
 |---|---|---|
-| keeper | `done: reveal draw N's seed and open the next draw` | right after the hour |
+| keeper | `done: reveal draw N's seed and open the next draw` | right after sales close |
 | oracle | `answered draw N` | within a minute |
 | keeper | `done: compute draw N's numbers` | a few minutes later |
 | keeper | `decrypted draw N's 100 ticket(s)`, then `done: settle draw N's tickets 1-25 of 100` ... `76-100 of 100` | one batch every couple of minutes |
@@ -197,7 +199,7 @@ A draw that misses a deadline is voided, then `refund ticket i of void draw N` f
 | `No compiled Starfall contract with proving keys found` | `npm run compact:starfall && npm run build` |
 | `no Starfall deployment on preprod yet` | Do Part 5 first. |
 | `... is not this deployment's settlement key` | The keeper was given a different settlement file from the deploy's. |
-| `no draw is on sale right now` (buy) | Sales close on the hour; wait for the next draw to open. |
+| `no draw is on sale right now` (buy) | Sales have just closed; the next draw opens a few minutes later, when the keeper reveals the seed. |
 | `N game(s) cost ... but the wallet holds ...` | Faucet more tNIGHT, or buy fewer. |
 | `this wallet is already open in another program` | Another `buy` (or a keeper, oracle or agent) is using that wallet: two at once fight over the same coins and one gets stuck. Let the other finish, or stop it. Buy from one window at a time. A lock left by a program that has stopped is taken over by itself. |
 | `Stopped after N of M ticket(s)` | `buy` checks the chain before saying this, so N is what really went in. Run buy again for the rest. |

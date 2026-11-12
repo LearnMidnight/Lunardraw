@@ -2,7 +2,7 @@
 
 **LunaSpin** is Lunardraw's free, verifiable name draw, powered by Nightcast: *every spin, random, verifiable, fair.* This folder holds the rules every spin's certificate depends on, in two twins that must agree exactly:
 
-- `src/core.js`: plain JavaScript for the browser and Node. `dist/lunaspin-core.js` is its browser build (`window.LunaSpinCore`, about 11 kB), which the Lunardraw theme copies to `assets/js/lunaspin-core.js`.
+- `src/core.js`: plain JavaScript for the browser and Node. `dist/lunaspin-core.js` is its browser build (`window.LunaSpinCore`, about 11 kB), which the lunardraw.io theme copies to `assets/js/lunaspin-core.js`.
 - `php/lunaspin-core.php`: the PHP twin the theme's server side uses.
 
 ## The rules (scheme `lunaspin:v1`, tag `lunaspin|v1`)
@@ -33,4 +33,4 @@ npm run build       # dist/lunaspin-core.js
 
 CI (`.github/workflows/lunaspin.yml`) runs all four and fails if `test/vectors.json` or the bundle is out of date.
 
-Design: `claude/lunaspin.md` in the Lunardraw project, tracked in issue #98.
+LunaSpin is live at [lunardraw.io/spin](https://lunardraw.io/spin/); the site's pages aren't in this repository. Design and progress: [issue #98](https://github.com/LearnMidnight/Lunardraw/issues/98).

@@ -1,6 +1,6 @@
 # Starfall: private, automatic settlement
 
-Status: 27 Oct 2026 (entries: PR #41). Contract `contract/src/settlement.compact`, tested in the simulator (`contract/src/test/settlement.test.ts`). Trimmed to **12 circuits** so it can be deployed (see "The circuit budget"), with v0's security-review fixes ported. Not deployed yet. It sits next to the v0 contract (`lunardraw.compact`, [DESIGN.md](DESIGN.md)), which runs the Preprod soak and is unchanged.
+Status: 27 Oct 2026 (entries: PR #41). Contract `contract/src/settlement.compact`, tested in the simulator (`contract/src/test/settlement.test.ts`). Trimmed to **12 circuits** so it can be deployed (see "The circuit budget"), with v0's security-review fixes ported. **Live on Preprod** since 27 Oct 2026; the current deployment is `8d9f297f…dc75` (7 Nov 2026, [deployments/starfall-preprod.json](../deployments/starfall-preprod.json)), where a game costs 1.3 tNIGHT. It sits next to the v0 contract (`lunardraw.compact`, [DESIGN.md](DESIGN.md)), which ran the first Preprod soak and is unchanged.
 
 The goal is the rule at the centre of Lunardraw:
 
@@ -35,12 +35,12 @@ The game is Australian Powerball's, as the Starfall spec asks: 7 numbers from 35
 
 A ticket is one **entry**, `Entry { kind, count, numbers[12], moonball, sweep }`:
 
-| Entry | Numbers | Games | Price at 1.2 tNIGHT (before 6 Nov 2026; ×1.3/1.2 now) |
+| Entry | Numbers | Games | Price at 1.3 tNIGHT a game |
 |---|---|---|---|
-| Standard | 7 | 1 | 1.2 |
-| System 8 / 9 / 10 / 11 / 12 | 8–12, every 7 of them | 8 / 36 / 120 / 330 / 792 | 9.6 / 43.2 / 144 / 396 / 950.4 |
-| Pick 6 | 6, plus each of the other 29 | 29 | 34.8 |
-| Pick 5 | 5, plus each pair of the other 30 | 435 | 522 |
+| Standard | 7 | 1 | 1.3 |
+| System 8 / 9 / 10 / 11 / 12 | 8–12, every 7 of them | 8 / 36 / 120 / 330 / 792 | 10.4 / 46.8 / 156 / 429 / 1,029.6 |
+| Pick 6 | 6, plus each of the other 29 | 29 | 37.7 |
+| Pick 5 | 5, plus each pair of the other 30 | 435 | 565.5 |
 | Moonball Sweep (any of the above) | every Moonball | × 20 | × 20 |
 
 A PowerHit-style ticket is a standard game with Moonball Sweep (20 games). The largest entry, a System 12 with Moonball Sweep, is 15,840 games.
@@ -106,7 +106,7 @@ The fee is a constructor parameter. A flat fee per game (decided 22 Oct 2026, re
 
 ### Must be won after 5 rollovers (7 Nov 2026)
 
-Jack's decision, from the lottery comparison (`claude/lottery-comparison-nov-2026.md`): after `mustBeWonAfter` jackpot rollovers in a row (a sealed deploy setting, 5 by default, `--must-be-won-after`, 0 for never), the next draw's jackpot must be won.
+A decision taken after comparing real lotteries' rules (Nov 2026): after `mustBeWonAfter` jackpot rollovers in a row (a sealed deploy setting, 5 by default, `--must-be-won-after`, 0 for never), the next draw's jackpot must be won.
 
 - **Counting.** The ledger's `rollovers` counts finalised draws in a row whose jackpot rolled over; void draws don't count.
 - **The must-be-won draw.** Once `rollovers` reaches `mustBeWonAfter`, the next draw finalised drops an unwon Division 1 (its share and all the rollover) to the next division with a winner. That's the same rolldown the final draw uses. What no division takes rolls over as usual, so the game goes on.
