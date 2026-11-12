@@ -15,6 +15,7 @@ import {
   localFingerprints,
   type Network,
   NETWORKS,
+  overLimitReason,
   publicEndpoints,
   type Session,
 } from '@nightcast/deploy';
@@ -86,12 +87,35 @@ export const networkArg = (value: string | undefined): Network => {
  * or a remote prover at `proverUrl` (Lunardraw's player prover for ticket
  * purchases), or else one started in Docker.
  */
-export const withSession = async <T>(network: Network, run: (s: Session) => Promise<T>, proofServerPort?: number, proverUrl?: string): Promise<T> => {
+export const withSession = async <T>(
+  network: Network,
+  run: (s: Session) => Promise<T>,
+  proofServerPort?: number,
+  proverUrl?: string,
+  /**
+   * A long-running service (keeper, oracle, agent). If Blockfrost refuses the
+   * project for its daily request limit, a service waits at the door, asking
+   * once every 15 minutes, instead of failing; and one that starts being
+   * refused while running exits for a restart, to wait there. On 12 Nov 2026
+   * every service sat at "connecting" for 17 hours, retrying non-stop.
+   */
+  opts: { service?: boolean } = {},
+): Promise<T> => {
   const projectId = BLOCKFROST[network] ? blockfrostProjectId(network) : undefined;
-  const session = await connect(network, { projectId, proofServerPort, proofServerUrl: proverUrl });
+  const session = await connect(network, { projectId, proofServerPort, proofServerUrl: proverUrl, waitForBlockfrost: opts.service === true });
+  const guard = opts.service
+    ? setInterval(() => {
+        const refused = overLimitReason(undefined, Date.now(), 3 * 60_000);
+        if (!refused) return;
+        process.stderr.write(`Stopping to wait: ${refused}.\n`);
+        process.exit(RESTART);
+      }, 30_000)
+    : undefined;
+  guard?.unref();
   try {
     return await run(session);
   } finally {
+    clearInterval(guard);
     await session.shutdown().catch((e) => session.logger.warn(`shutdown: ${e}`));
   }
 };

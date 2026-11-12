@@ -672,7 +672,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
         } finally {
           await wallet.stop().catch(() => undefined);
         }
-      }, proofServerPort(values['proof-server-port']));
+      }, proofServerPort(values['proof-server-port']), undefined, { service: true });
     }
 
     case 'oracle': {
@@ -713,7 +713,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
         } finally {
           await wallet.stop().catch(() => undefined);
         }
-      }, proofServerPort(values['proof-server-port']));
+      }, proofServerPort(values['proof-server-port']), undefined, { service: true });
     }
 
     case 'buy': {
@@ -952,7 +952,7 @@ export const starfall = async (argv: string[]): Promise<number> => {
         } finally {
           await wallet.stop().catch(() => undefined);
         }
-      }, proofServerPort(values['proof-server-port']), prover);
+      }, proofServerPort(values['proof-server-port']), prover, { service: true });
     }
 
     case 'status': {

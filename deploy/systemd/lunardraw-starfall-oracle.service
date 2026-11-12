@@ -9,6 +9,8 @@ Conflicts=lunardraw-oracle.service
 [Service]
 WorkingDirectory=/root/Lunardraw
 Environment=HOME=/root
+# Today's Blockfrost requests from this service, for the monitor to add up (the daily limit is per project).
+Environment=NIGHTCAST_BLOCKFROST_USAGE=/root/lunardraw-status/usage/lunardraw-starfall-oracle.json
 ExecStart=/root/Lunardraw/lunardraw starfall oracle --network preprod \
   --oracle /root/lunardraw-secrets/oracle.secret \
   --wallet /root/nightcast-secrets/oracle-wallet.secret \
