@@ -11,7 +11,7 @@ which the other watchdogs can't see; it exits hard 30 s later if the stuck pass
 blocks a graceful stop), and their logs are kept by the journal. Every 30 minutes each logs a `wallet sync:` line with its positions.
 
 The unit files assume the repository in `/root/Lunardraw`, secrets in
-`/root/lunardraw-secrets` and `/root/nightcast-secrets`, Preprod, and hourly draws.
+`/root/lunardraw-secrets` and `/root/nightcast-secrets`, and Preprod. The v0 units run hourly draws; the Starfall keeper runs a draw every day at 20:00 Brisbane (`--daily`).
 Edit them first if yours differ.
 
 ## Install
@@ -62,7 +62,7 @@ systemctl enable --now lunardraw-starfall-keeper lunardraw-starfall-oracle
 |---|---|
 | Watch the keeper's log live | `journalctl -u lunardraw-starfall-keeper -f` |
 | Is everything running? | `systemctl is-active lunardraw-proof lunardraw-starfall-keeper lunardraw-starfall-oracle` |
-| After `git pull && npm run build` (between :30 and :55 past the hour) | `systemctl restart lunardraw-starfall-keeper lunardraw-starfall-oracle` |
+| After `git pull && npm run build` (at a quiet time: not between 19:30 and 21:00 Brisbane, when the daily draw closes and settles) | `systemctl restart lunardraw-starfall-keeper lunardraw-starfall-oracle` |
 | Stop both | `systemctl stop lunardraw-starfall-keeper lunardraw-starfall-oracle` |
 
 Don't restart `lunardraw-keeper` or `lunardraw-oracle` while Starfall is
@@ -114,7 +114,7 @@ files). Nothing in them is secret.
 1. Resend: verify the sending domain (its DNS records) and create an API key
    with sending access only. Put the key on the VM, never in the repository:
    `nano /root/.lunardraw-mail` (paste, save), then `chmod 600 /root/.lunardraw-mail`.
-2. Between :30 and :55 past the hour (the keeper and oracle restart):
+2. At a quiet time, not between 19:30 and 21:00 Brisbane when the daily draw closes and settles (the keeper and oracle restart):
    ```bash
    cd ~/Lunardraw && git pull && npm run build
    cp deploy/systemd/lunardraw-starfall-*.service deploy/systemd/lunardraw-monitor.* /etc/systemd/system/

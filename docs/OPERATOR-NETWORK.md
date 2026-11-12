@@ -26,7 +26,7 @@ Reveal, compute, settle, finalise, pay and void are all deterministic: given the
 
 ### 3. Bonds and rewards from the fee
 
-Operators **stake** (tNIGHT now, NIGHT later) to register. Each draw's operator fee (0.2 tNIGHT a game today, all to the organiser) is split between the organiser and the operators who did that draw's work: contributed a partial decryption or VRF share, or landed a step. An operator who goes dark during a draw, or submits a bad share, **loses bond**. That is what makes "decentralised" more than a word: honesty and uptime have money behind them, and a draw's cost of corruption is *t* operators' bonds, not one person's conscience.
+Operators **stake** (tNIGHT now, NIGHT later) to register. Each draw's operator fee (0.3 tNIGHT a game today, all to the organiser) is split between the organiser and the operators who did that draw's work: contributed a partial decryption or VRF share, or landed a step. An operator who goes dark during a draw, or submits a bad share, **loses bond**. That is what makes "decentralised" more than a word: honesty and uptime have money behind them, and a draw's cost of corruption is *t* operators' bonds, not one person's conscience.
 
 ## What it does and doesn't change
 
