@@ -29,10 +29,10 @@
   },
   "dependencies": {
     "@midnight-ntwrk/compact-runtime": "0.16.0",
-    "@nightcast/contract": "0.1.0"
+    "@nightcast/contract": "0.2.0"
   },
   "devDependencies": {
     "@midnight-ntwrk/zkir-v2": "2.1.0",
-    "@nightcast/sdk": "0.1.0"
+    "@nightcast/sdk": "0.2.0"
   }
 }

@@ -24,9 +24,9 @@
   },
   "dependencies": {
     "@lunardraw/contract": "0.1.0",
-    "@nightcast/sdk": "0.1.0"
+    "@nightcast/sdk": "0.2.0"
   },
   "devDependencies": {
-    "@nightcast/contract": "0.1.0"
+    "@nightcast/contract": "0.2.0"
   }
 }
