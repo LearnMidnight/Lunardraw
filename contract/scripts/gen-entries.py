@@ -4,16 +4,29 @@ has with each number of matches.
 
 A Starfall ticket is one entry: a standard game (7 numbers), a System (8 to 12
 numbers: every 7 of them), or a Pick (5 or 6 numbers: completed with every
-choice of the rest), with one Moonball or all 20 (Moonball Sweep). Settling an
-entry doesn't enumerate its games. If h of the entry's numbers are among the 7
-drawn, the number of its games with exactly m main numbers right is fixed by
-the entry's type and h, so the contract looks it up in this table:
+choice of the rest), with one Moonball or all of them (Moonball Sweep).
+Settling an entry doesn't enumerate its games. If h of the entry's numbers are
+among the 7 drawn, the number of its games with exactly m main numbers right
+is fixed by the entry's type and h.
+
+A standard game or a System only uses its own numbers, so its counts don't
+depend on the draw's number range N, and the contract looks them up in this
+table:
 
     System n (7..12):  C(h, m) * C(n - h, 7 - m)
-    Pick f (5, 6):     C(7 - h, m - h) * C(28 - f + h, 7 - f - (m - h))   (m >= h)
 
-Only m = 2..7 can win a prize. Every row is checked against a brute-force
-enumeration of the games before the file is written.
+A Pick is completed from the other N - f numbers, so its counts depend on N
+(Starfall v2: N is the draw's). The contract works them out (gamesByDivision
+in settlement.compact) from N and the rung's pick5 = C(N - 5, 2), with
+d = 7 - h of the other numbers drawn:
+
+    Pick 6:  d games with h + 1 right, N - 6 - d with h
+    Pick 5:  C(d, 2) with h + 2, d * (N - 5 - d) with h + 1,
+             pick5 - C(d, 2) - d * (N - 5 - d) with h      (no division needed)
+
+Only m = 2..7 can win a prize. Every table row, and the Pick arithmetic for
+every N from 14 to 60, is checked against a brute-force enumeration of the
+games before the file is written.
 
     python3 contract/scripts/gen-entries.py
 """
@@ -24,7 +37,7 @@ from math import comb
 # Entry types, in the order of the table: (kind, count). kind 0 is a standard
 # game or a System (count numbers, every 7 of them); kind 1 is a Pick (count
 # fixed numbers, completed every way).
-TYPES = [(0, 7), (0, 8), (0, 9), (0, 10), (0, 11), (0, 12), (1, 6), (1, 5)]
+TYPES = [(0, 7), (0, 8), (0, 9), (0, 10), (0, 11), (0, 12)]
 MAX_NUMBERS = 12
 
 
@@ -32,8 +45,36 @@ def c(n, k):
     return comb(n, k) if 0 <= k <= n else 0
 
 
-def games(kind, count):
-    return c(count, 7) if kind == 0 else c(35 - count, 7 - count)
+def games(kind, count, n=35):
+    return c(count, 7) if kind == 0 else c(n - count, 7 - count)
+
+
+def pick_by_circuit(count, h, n):
+    """Games with exactly m main numbers right (m = 0..7), by the circuit's arithmetic."""
+    d = 7 - h
+    out = [0] * 10
+    if count == 6:
+        out[h + 1] += d
+        out[h] += n - 6 - d
+    else:
+        pick5 = (n - 5) * (n - 6) // 2
+        dd = [0, 0, 1, 3, 6, 10, 15, 21][d]
+        du = d * (n - 5 - d)
+        out[h + 2] += dd
+        out[h + 1] += du
+        out[h] += pick5 - dd - du
+    assert all(x >= 0 for x in out) and sum(out[8:]) == 0, (count, h, n, out)
+    return out[:8]
+
+
+def pick_by_enumeration(count, h, n):
+    drawn = set(range(1, 8))
+    chosen = list(range(1, h + 1)) + list(range(8, 8 + count - h))
+    rest = [x for x in range(1, n + 1) if x not in chosen]
+    out = [0] * 8
+    for extra in itertools.combinations(rest, 7 - count):
+        out[len(drawn.intersection(chosen + list(extra)))] += 1
+    return out
 
 
 def by_formula(kind, count, h):
@@ -73,6 +114,13 @@ for kind, count in TYPES:
         rows.append(f[2:])  # m = 2..7
 
 assert max(max(r) for r in rows) < 2**16
+checked = 0
+for n in range(14, 61):
+    for count in (6, 5):
+        for h in range(count + 1):
+            f, e = pick_by_circuit(count, h, n), pick_by_enumeration(count, h, n)
+            assert f == e and sum(f) == games(1, count, n), (n, count, h, f, e)
+            checked += 1
 gw = ", ".join(str(games(k, n)) for k, n in TYPES)
 table = ",\n    ".join("[" + ", ".join(str(x) for x in r) + "]" for r in rows)
 names = ", ".join(("standard" if n == 7 else f"System {n}") if k == 0 else f"Pick {n}" for k, n in TYPES)
@@ -87,14 +135,17 @@ export pure circuit maxNumbers(): Uint<8> {{
   return {MAX_NUMBERS};
 }}
 
-// Games in one entry of each type (before Moonball Sweep multiplies by 20).
+// Games in a standard game or a System (before Moonball Sweep multiplies by
+// the draw's Moonball range). A Pick 6 is N - 6 games and a Pick 5 is
+// C(N - 5, 2), N the draw's number range (gamesIn in settlement.compact).
 pure circuit gamesPerType(): Vector<{len(TYPES)}, Uint<16>> {{
   return [{gw}];
 }}
 
-// Row type * 8 + h: of an entry's games, how many have exactly m = 2, 3, 4,
-// 5, 6, 7 main numbers right when h of its numbers are drawn. Checked against
-// a brute-force enumeration of every row's games when generated.
+// Row type * 8 + h: of a standard game's or a System's games, how many have
+// exactly m = 2, 3, 4, 5, 6, 7 main numbers right when h of its numbers are
+// drawn. Checked against a brute-force enumeration of every row's games when
+// generated. Picks are worked out from the draw's number range instead.
 pure circuit matchTable(): Vector<{len(rows)}, Vector<6, Uint<16>>> {{
   return [
     {table}
@@ -103,4 +154,4 @@ pure circuit matchTable(): Vector<{len(rows)}, Vector<6, Uint<16>>> {{
 """
 target = pathlib.Path(__file__).resolve().parent.parent / "src" / "entries.compact"
 target.write_text(out)
-print(f"wrote {target} ({len(TYPES)} entry types, {len(rows)} rows, every row checked by enumeration)")
+print(f"wrote {target} ({len(TYPES)} table types, {len(rows)} rows, every row and {checked} Pick cases checked by enumeration)")
