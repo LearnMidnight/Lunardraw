@@ -48,7 +48,16 @@
 //      jackpot must be won: unwon, it falls to the next division with a winner.
 //      Starfall v2 deploys with mustBeWonAfter = 0: an adaptive jackpot is won
 //      on its own rhythm and never forced out.
-//   8. To end the game, the organiser opens a final draw, marked as such
+//   8. Syndicates: anyone opens one for a draw (share price, number of
+//      shares, number of games, join deadline). Members pay for their shares
+//      into this contract; once every share is sold the creator buys the
+//      games from the syndicate's funds (buySyndicateTickets), with the
+//      syndicate as the ticket's only payee. Its prizes are kept for it
+//      (syndicatePots) and paid to each member in proportion to their shares
+//      (paySyndicateMember). An unfilled syndicate, what the creator didn't
+//      spend, and a void draw are refunded to the members (refundSyndicate);
+//      the creator never holds the money. Not on a final draw.
+//   9. To end the game, the organiser opens a final draw, marked as such
 //      before it sells (and selling for at least finalSales). It takes
 //      everything the Treasury holds into its jackpot, which must be won: an
 //      unwon one falls to the next division with a winner, and what no
@@ -61,11 +70,15 @@
 // decrypts; the settlement key is sealed for the life of this contract.
 //
 // A deploy transaction carries every circuit's verifier key and has to fit
-// Midnight's block limits: on ledger 8, 12 circuits fitted and 16 were
-// rejected. This contract has exactly 12, so circuits are merged by role as in
-// v0 (acceptOracleKey also approves a hand-over, changeOrganiser proposes,
-// accepts and recovers, requestDraw(0, ...) opens a draw, finaliseDraw pays
-// the fees and settles with the Treasury).
+// Midnight's block limits: on ledger 9 (Preprod, 14 Nov 2026) 12 circuits of
+// this size fitted and 15 were refused. The game's 12 circuits are merged by
+// role as in v0 (acceptOracleKey also approves a hand-over, changeOrganiser
+// proposes, accepts and recovers, requestDraw(0, ...) opens a draw,
+// finaliseDraw pays the fees and settles with the Treasury). The 5 syndicate
+// circuits are added after the deploy by maintenance transactions, and only
+// then is the contract locked (its maintenance authority replaced by one
+// nobody can use) and the first draw opened: tested on Preprod on 15 Nov 2026
+// with 18 circuits (contract/v2-probe).
 
 pragma language_version >= 0.28;
 
@@ -136,6 +149,12 @@ export struct Entry {
 // value byte by byte (that cost about 11,000 rows per value, nearly all of a
 // purchase's proof). The address is put back together only when a prize is
 // paid (`addressOf`).
+//
+// A payee can also be a syndicate: `hi` all ones (2^128 - 1, which no real
+// address half is) and `lo` the syndicate's id. Its part of a prize is kept
+// for the syndicate's members instead of sent (payEntitlement). Naming a
+// syndicate is a gift to its members; naming one that doesn't exist loses the
+// prize, as naming a wrong address would.
 export struct Payee {
   lo: Uint<128>;
   hi: Uint<128>;
@@ -285,6 +304,42 @@ export struct NextDraw {
   final: Boolean;
 }
 
+export enum SyndicateStatus { filling, funded }
+
+// A group buying games together for one draw. Shares x share price = games x
+// ticket price: what members pay in, held by this contract until the creator
+// buys the games or the members are refunded.
+export struct Syndicate {
+  drawId: Uint<32>;
+  status: SyndicateStatus;
+  // Commitment to the creator's secret (syndicateCommitmentOf): only the creator buys the games.
+  creator: Bytes<32>;
+  sharePrice: Uint<128>;
+  totalShares: Uint<32>;
+  sold: Uint<32>;
+  games: Uint<32>;
+  // Games bought so far (a System 12 ticket is 792).
+  bought: Uint<32>;
+  // Members must join before this; never after the draw's sales close.
+  joinDeadline: Uint<64>;
+  // Member records so far, keyed memberKey(syndicate, 0 .. members - 1).
+  members: Uint<32>;
+}
+
+export struct Member {
+  payTo: UserAddress;
+  shares: Uint<32>;
+  // Refunded to this member so far (refundSyndicate pays the difference).
+  refunded: Uint<128>;
+}
+
+struct MemberPaymentPreimage {
+  domain: Bytes<32>;
+  entitlement: Bytes<32>;
+  payee: Uint<8>;
+  member: Uint<32>;
+}
+
 // A batch slot: the ticket the settler supplied and its offset in the batch.
 struct Slot {
   ticket: TicketPreimage;
@@ -327,6 +382,16 @@ export ledger carry: Uint<128>;
 // Set once a final draw that sold games is finalised: the game is over and no
 // draw can open again.
 export ledger ended: Boolean;
+// ---- syndicates
+export ledger syndicates: Map<Uint<32>, Syndicate>;
+// The newest syndicate's id (0 before the first).
+export ledger lastSyndicate: Uint<32>;
+export ledger members: Map<Uint<64>, Member>;
+// What an entitlement's payees owe syndicates, per payee (0 for an address),
+// keyed by the entitlement's id. Set when the entitlement is paid.
+export ledger syndicatePots: Map<Bytes<32>, Vector<3, Uint<128>>>;
+// Member payments made from pots, keyed memberPaymentId(), so each is paid once.
+export ledger memberPayments: Set<Bytes<32>>;
 // ---- the adaptive format
 // The ladder of formats, easiest first (odds strictly increasing), and how
 // many of its 12 slots are used.
@@ -427,6 +492,8 @@ witness oracleSecretKey(): Field;
 witness organiserSecret(): Bytes<32>;
 // floor(n / d) and n mod d for prize arithmetic.
 witness divModWide(n: Field, d: Uint<128>): [Uint<128>, Uint<128>];
+// The secret behind a syndicate's creator commitment.
+witness syndicateSecret(): Bytes<32>;
 
 // ----------------------------------------------------------- constructor
 
@@ -529,6 +596,34 @@ constructor(key: JubjubPoint, organiserCommitment: Bytes<32>, backupCommitment: 
 
 export pure circuit organiserCommitmentOf(secret: Bytes<32>): Bytes<32> {
   return persistentHash<[Bytes<32>, Bytes<32>]>([pad(32, "starfall:organiser:v1"), secret]);
+}
+
+export pure circuit syndicateCommitmentOf(secret: Bytes<32>): Bytes<32> {
+  return persistentHash<[Bytes<32>, Bytes<32>]>([pad(32, "starfall:syndicate:v1"), secret]);
+}
+
+// The `hi` half that marks a payee as a syndicate (2^128 - 1).
+export pure circuit syndicateMark(): Uint<128> {
+  return 340282366920938463463374607431768211455;
+}
+
+// The payees of a syndicate's ticket: the syndicate alone.
+export pure circuit syndicatePayees(id: Uint<32>): Vector<3, Payee> {
+  return [Payee { lo: id as Uint<128>, hi: syndicateMark(), share: 10000 },
+          Payee { lo: 0, hi: 0, share: 0 },
+          Payee { lo: 0, hi: 0, share: 0 }];
+}
+
+// Key of a syndicate's member in `members`.
+export pure circuit memberKey(syndicate: Uint<32>, index: Uint<32>): Uint<64> {
+  return ((syndicate as Uint<64>) * 4294967296 + index) as Uint<64>;
+}
+
+// Id of one member's payment from one entitlement payee's syndicate pot.
+export pure circuit memberPaymentId(entitlement: Bytes<32>, payee: Uint<8>, member: Uint<32>): Bytes<32> {
+  return persistentHash<MemberPaymentPreimage>(MemberPaymentPreimage {
+    domain: pad(32, "starfall:member-pay:v1"), entitlement: entitlement, payee: payee, member: member
+  });
 }
 
 // Ticket commitments and entitlement ids use Poseidon (transientHash), not
@@ -1453,15 +1548,204 @@ export circuit payEntitlement(id: Bytes<32>): [] {
   const a2 = quotient((prize as Field) * (e.payees[2].share as Field), 10000);
   const a0 = (prize - a1 - a2) as Uint<128>;
   entitlements.insert(eid, Entitlement { ...e, paid: true });
-  if (a0 > 0) {
+  // A syndicate payee's part is kept for its members (paySyndicateMember).
+  const k0 = e.payees[0].hi == syndicateMark();
+  const k1 = e.payees[1].hi == syndicateMark();
+  const k2 = e.payees[2].hi == syndicateMark();
+  if ((k0 && a0 > 0) || (k1 && a1 > 0) || (k2 && a2 > 0)) {
+    syndicatePots.insert(eid, [k0 ? a0 : 0, k1 ? a1 : 0, k2 ? a2 : 0]);
+  }
+  if (!k0 && a0 > 0) {
     sendUnshielded(nativeToken(), a0, right<ContractAddress, UserAddress>(addressOf(e.payees[0])));
   }
-  if (a1 > 0) {
+  if (!k1 && a1 > 0) {
     sendUnshielded(nativeToken(), a1, right<ContractAddress, UserAddress>(addressOf(e.payees[1])));
   }
-  if (a2 > 0) {
+  if (!k2 && a2 > 0) {
     sendUnshielded(nativeToken(), a2, right<ContractAddress, UserAddress>(addressOf(e.payees[2])));
   }
+}
+
+// ------------------------------------------------------------- syndicates
+
+// Open a syndicate for an open draw (not a final draw). Members join before
+// `joinDeadline` (at the latest when the draw's sales close); the games are
+// bought before sales close, by whoever holds the creator secret. Returns the
+// syndicate's id.
+export circuit createSyndicate(drawId: Uint<32>, creatorCommitment: Bytes<32>, sharePrice: Uint<128>,
+                               totalShares: Uint<32>, games: Uint<32>, joinDeadline: Uint<64>): Uint<32> {
+  const id = disclose(drawId);
+  const d = drawFor(id);
+  assert(d.status == DrawStatus.open, "draw is not open");
+  assert(!d.final, "no syndicates in a final draw");
+  const price = disclose(sharePrice);
+  const shares = disclose(totalShares);
+  const g = disclose(games);
+  const by = disclose(joinDeadline);
+  assert(shares >= 1 && g >= 1 && price > 0, "a syndicate has at least one share and one game");
+  assert((price as Field) * (shares as Field) == (ticketPrice as Field) * (g as Field),
+         "shares x share price must equal games x ticket price");
+  assert(by <= d.salesClose, "members must join before sales close");
+  assert(blockTimeLt(by), "the join deadline has passed");
+  const sid = (lastSyndicate + 1) as Uint<32>;
+  syndicates.insert(sid, Syndicate {
+    drawId: id,
+    status: SyndicateStatus.filling,
+    creator: disclose(creatorCommitment),
+    sharePrice: price,
+    totalShares: shares,
+    sold: 0,
+    games: g,
+    bought: 0,
+    joinDeadline: by,
+    members: 0
+  });
+  lastSyndicate = sid;
+  return sid;
+}
+
+pure circuit samePayees(a: Vector<3, Payee>, b: Vector<3, Payee>): Boolean {
+  return fold((acc: Boolean, x: Payee, y: Payee): Boolean => acc && x.lo == y.lo && x.hi == y.hi && x.share == y.share,
+              true, a, b);
+}
+
+circuit syndicateFor(id: Uint<32>): Syndicate {
+  assert(syndicates.member(id), "unknown syndicate");
+  return syndicates.lookup(id);
+}
+
+circuit memberFor(sid: Uint<32>, index: Uint<32>): Member {
+  const key = memberKey(sid, index);
+  assert(members.member(key), "unknown member");
+  return members.lookup(key);
+}
+
+// Buy `shares` shares, paying share price x shares; prizes and refunds go to
+// `payTo`. Returns the member's index. The last share sold funds the syndicate.
+export circuit joinSyndicate(syndicate: Uint<32>, shares: Uint<32>, payTo: UserAddress): Uint<32> {
+  const sid = disclose(syndicate);
+  const n = disclose(shares);
+  const sy = syndicateFor(sid);
+  assert(sy.status == SyndicateStatus.filling, "the syndicate is already funded");
+  assert(blockTimeLt(sy.joinDeadline), "the join deadline has passed");
+  assert(drawFor(sy.drawId).status == DrawStatus.open, "draw is not open");
+  assert(n >= 1 && (sy.sold as Uint<64>) + (n as Uint<64>) <= (sy.totalShares as Uint<64>), "not that many shares left");
+  receiveUnshielded(nativeToken(), (sy.sharePrice * n) as Uint<128>);
+  const index = sy.members;
+  members.insert(memberKey(sid, index), Member { payTo: disclose(payTo), shares: n, refunded: 0 });
+  const sold = (sy.sold + n) as Uint<32>;
+  syndicates.insert(sid, Syndicate {
+    ...sy,
+    sold: sold,
+    status: sold == sy.totalShares ? SyndicateStatus.funded : SyndicateStatus.filling,
+    members: (index + 1) as Uint<32>
+  });
+  return index;
+}
+
+// The creator buys 1 to maxTickets() of the syndicate's tickets in one
+// transaction, paid from its funds, each naming the syndicate as its only
+// payee and with no refund address. They are ordinary tickets of the draw,
+// settled like any other. Returns the index of the first ticket bought.
+export circuit buySyndicateTickets(syndicate: Uint<32>, count: Uint<8>): Uint<64> {
+  const sid = disclose(syndicate);
+  const n = disclose(count);
+  const sy = syndicateFor(sid);
+  assert(disclose(syndicateCommitmentOf(syndicateSecret()) == sy.creator), "not the syndicate's creator");
+  assert(sy.status == SyndicateStatus.funded, "the syndicate is not funded");
+  assert(n >= 1 && n <= maxTickets(), "1 to maxTickets() tickets per purchase");
+  const ts = newTickets();
+  const rs = sealingRandomnessFor();
+  const id = sy.drawId;
+  const d = drawFor(id);
+  assert(d.status == DrawStatus.open, "draw is not open");
+  assert(blockTimeLt(d.salesClose), "sales have closed");
+  const first = ticketCount.lookup(id);
+  assert(first + (n as Uint<64>) <= maxTicketsPerDraw, "draw is full");
+  const f = d.format;
+  const games = map((t: TicketPreimage, j: Uint<8>): Uint<32> => j < n ? ticketGames(t, f) : 0, ts, ticketSlots());
+  const bought = disclose(fold((acc: Uint<64>, g: Uint<32>): Uint<64> => (acc + g) as Uint<64>, 0, games));
+  assert((sy.bought as Uint<64>) + bought <= (sy.games as Uint<64>), "more games than the syndicate funded");
+  const key = settlementKey;
+  const payees = syndicatePayees(sid);
+  for (const j of ticketSlots()) {
+    if (j < n) {
+      const t = ts[j];
+      assert(disclose(validTicket(t, f) && t.drawId == id && samePayees(t.payees, payees)), "invalid syndicate ticket");
+      const c = disclose(ticketCommitment(kernel.self(), t));
+      assert(!ticketCommitments.member(c), "ticket already bought");
+      ticketCommitments.insert(c);
+      tickets.insert(ticketKey(id, (first + (j as Uint<64>)) as Uint<64>), TicketRecord {
+        commitment: c,
+        games: disclose(games[j]),
+        refundTo: default<UserAddress>,
+        cipher: disclose(sealTicket(key, rs[j], t)),
+        refunded: false
+      });
+    }
+  }
+  ticketCount.insert(id, (first + (n as Uint<64>)) as Uint<64>);
+  gamesSold.insert(id, (gamesSold.lookup(id) + bought) as Uint<64>);
+  syndicates.insert(sid, Syndicate { ...sy, bought: (sy.bought + bought) as Uint<32> });
+  return first;
+}
+
+// A member's part of an amount owed to the syndicate: in proportion to the
+// shares sold (all of them once it's funded), so an unfilled syndicate's
+// members get back exactly what they paid. Rounding dust stays here.
+circuit memberPart(amount: Uint<128>, m: Member, sy: Syndicate): Uint<128> {
+  return quotient((amount as Field) * (m.shares as Field), sy.sold as Uint<128>);
+}
+
+// Pay a member its part of a prize kept for the syndicate (one entitlement
+// payee). Anyone may call this; each part is paid once.
+export circuit paySyndicateMember(entitlement: Bytes<32>, payee: Uint<8>, member: Uint<32>): Uint<128> {
+  const eid = disclose(entitlement);
+  const pi = disclose(payee);
+  const mi = disclose(member);
+  assert(pi < 3, "no such payee");
+  assert(syndicatePots.member(eid), "nothing owed to a syndicate");
+  const owed = fold((acc: Uint<128>, x: Uint<128>, k: Uint<8>): Uint<128> => k == pi ? x : acc, 0,
+                    syndicatePots.lookup(eid), [0, 1, 2]);
+  assert(owed > 0, "nothing owed to a syndicate");
+  const e = entitlements.lookup(eid);
+  const p = fold((acc: Payee, x: Payee, k: Uint<8>): Payee => k == pi ? x : acc, e.payees[0], e.payees, [0, 1, 2]);
+  const sid = p.lo as Uint<32>;
+  const sy = syndicateFor(sid);
+  const m = memberFor(sid, mi);
+  const pay = memberPaymentId(eid, pi, mi);
+  assert(!memberPayments.member(pay), "member already paid");
+  memberPayments.insert(pay);
+  const amount = memberPart(owed, m, sy);
+  if (amount > 0) {
+    sendUnshielded(nativeToken(), amount, right<ContractAddress, UserAddress>(m.payTo));
+  }
+  return amount;
+}
+
+// Refund a member's part of the syndicate's money that wasn't played: all of
+// it if the syndicate never filled (after its join deadline) or the draw was
+// void, else what the creator didn't spend on games (after sales close).
+// Anyone may call this; a member called again is paid only what has become
+// due since (a draw voided after its unspent money was refunded).
+export circuit refundSyndicate(syndicate: Uint<32>, member: Uint<32>): Uint<128> {
+  const sid = disclose(syndicate);
+  const mi = disclose(member);
+  const sy = syndicateFor(sid);
+  const d = drawFor(sy.drawId);
+  const isVoid = d.status == DrawStatus.voided;
+  const unfilled = sy.status == SyndicateStatus.filling && blockTimeGte(sy.joinDeadline);
+  const closed = blockTimeGte(d.salesClose);
+  assert(isVoid || unfilled || closed, "the syndicate is still filling or buying");
+  const m = memberFor(sid, mi);
+  const funded = (sy.sharePrice * sy.sold) as Uint<128>;
+  const spent = (ticketPrice * sy.bought) as Uint<128>;
+  const due = memberPart(isVoid ? funded : (funded - spent) as Uint<128>, m, sy);
+  assert(due > m.refunded, "nothing more to refund");
+  const amount = (due - m.refunded) as Uint<128>;
+  members.insert(memberKey(sid, mi), Member { ...m, refunded: due });
+  sendUnshielded(nativeToken(), amount, right<ContractAddress, UserAddress>(m.payTo));
+  return amount;
 }
 
 // ---------------------------------------------------------------- refunds
@@ -1484,7 +1768,8 @@ export circuit voidDraw(n: Uint<32>): [] {
 // Pay ticket `index` back to the address given when it was bought: for a void
 // draw, the price of every game in it; for a finalised final draw, its games'
 // share of what no division took. Anyone may call this (a keeper does, for
-// every ticket). Each ticket is paid once.
+// every ticket). Each ticket is paid once. A syndicate's ticket has no refund
+// address (all zeros): its money stays here for refundSyndicate.
 export circuit refundTicket(n: Uint<32>, index: Uint<64>): [] {
   const id = disclose(n);
   const i = disclose(index);
@@ -1497,5 +1782,7 @@ export circuit refundTicket(n: Uint<32>, index: Uint<64>): [] {
   assert(!rec.refunded, "already paid back");
   tickets.insert(key, TicketRecord { ...rec, refunded: true });
   const amount = ((isVoid ? ticketPrice : d.finalShare) * rec.games) as Uint<128>;
-  sendUnshielded(nativeToken(), amount, right<ContractAddress, UserAddress>(rec.refundTo));
+  if (rec.refundTo != default<UserAddress>) {
+    sendUnshielded(nativeToken(), amount, right<ContractAddress, UserAddress>(rec.refundTo));
+  }
 }

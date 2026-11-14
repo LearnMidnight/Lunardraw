@@ -13,3 +13,4 @@ rm -rf out out-treasury
 [ -d node_modules ] || npm install --no-audit --no-fund
 node pure.mjs
 node game.mjs
+node syndicate.mjs

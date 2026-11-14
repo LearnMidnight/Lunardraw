@@ -185,6 +185,50 @@ Division 1 share and Treasury share (there is no later draw for them). What no
 division takes is shared by every game sold, through `refundTicket`. The
 contract then holds nothing and opens no more draws.
 
+## Syndicates
+
+A group buying games together for one draw, as in a real lottery
+(`createSyndicate`, `joinSyndicate`, `buySyndicateTickets`,
+`paySyndicateMember`, `refundSyndicate`):
+
+- **Anyone opens one** for an open draw (not a final draw): share price,
+  number of shares, number of games, and a join deadline no later than sales
+  close. Shares × share price must equal games × the ticket price.
+- **Members pay for their shares** into the game contract, naming where their
+  winnings and refunds go. The last share sold funds the syndicate.
+- **The creator buys the games** from the syndicate's funds before sales close,
+  proving it holds the secret behind the creator commitment. Each ticket names
+  the syndicate as its only payee and has no refund address. They are ordinary
+  tickets of the draw (any entry, lines, Systems or Picks), sealed and settled
+  like any other, and count in the draw's sales and the retarget. The creator
+  never holds the money and can't spend more than the syndicate funded.
+- **A payee can be a syndicate:** `hi` all ones (2^128 − 1, which no real
+  address half is) and `lo` the syndicate's id. `payEntitlement` keeps a
+  syndicate payee's part (`syndicatePots`, per entitlement) instead of sending
+  it, and `paySyndicateMember` pays each member floor(part × shares / shares
+  sold), once per member and prize. Naming a syndicate on an ordinary ticket is
+  a gift to its members; naming one that doesn't exist loses the prize, as a
+  wrong address would.
+- **Refunds of what wasn't played** (`refundSyndicate`, by shares, anyone may
+  call it): everything if the syndicate never filled (after the join deadline)
+  or the draw is void; otherwise what the creator didn't spend (after sales
+  close). A member called again is paid only what has become due since (a draw
+  voided after the unspent money was refunded). `refundTicket` on a syndicate's
+  ticket sends nothing: its money stays for the members.
+- **Rounding dust** (under one STAR per member and prize) stays in the
+  contract.
+
+**Deploying with them.** One ledger 9 deploy carries 12 circuits of this size
+(Preprod, 14 Nov 2026; 15 were refused). The game's 12 circuits go in the
+deploy with a single-use maintenance key held only in memory; the 5 syndicate
+circuits' verifier keys are added by maintenance transactions; then the
+maintenance authority is replaced by an empty committee (nobody can ever change
+the contract), the chain is checked to show all 17 circuits and the empty
+committee, and only then is the Treasury bound and the first draw opened.
+Tested on Preprod on 15 Nov 2026 with 18 circuits (`contract/v2-probe`,
+`probe-upgrade.mjs`). Anyone can check that every verifier key on chain matches
+the published compiled contract.
+
 ## Picks follow the number range
 
 A standard game or a System only uses its own numbers, so the table in
@@ -205,7 +249,10 @@ against every game listed, for every N from 14 to 60.
 | settleBatch | 17 | 107,417 of 131,072 |
 | computeNumbers | 18 | 152,060 |
 | requestDraw | 16 | 34,779 |
-| payEntitlement | 15 | 28,021 |
+| payEntitlement | 15 | 28,068 |
+| buySyndicateTickets | 16 | 59,380 of 65,536 (real key build: k = 16) |
+| paySyndicateMember | 13 | 4,406 |
+| createSyndicate / joinSyndicate / refundSyndicate | 10 | 586 / 603 / 732 |
 | finaliseDraw | 13 | 7,122 of 8,192 |
 | Treasury: release / bind / deposit | 14 / 13 / 7 | 7,989 / 3,980 / 92 |
 
@@ -220,15 +267,19 @@ rule for unshielded tokens to every transaction:
 - `game.mjs`: the opening jackpot, a win, rollovers to the ceiling, overflow,
   the refill, a retarget up, waiting to step down and stepping down, a jump of
   four rungs, the final draw; after every stage nothing has been created or
-  lost.
+  lost;
+- `syndicate.mjs`: a syndicate that wins (the jackpot and a 4-right prize,
+  split 2/5 and 3/5), the creator's checks, unspent money refunded after sales
+  close, a syndicate that never fills, a void draw after a partial refund, and
+  no syndicate in a final draw.
 
 `bash contract/v2-check/run.sh` (needs `compactc` 0.36.0).
 
-Still to see on Preprod: the cross-contract call with unshielded payments both
-ways in one transaction, and how many circuits a ledger 9 deploy carries
-(syndicates add six to Starfall's twelve).
+Seen on Preprod (`contract/v2-probe`, 14–15 Nov 2026): the cross-contract call
+with unshielded payments both ways in one transaction works; one deploy carries
+12 circuits; deploying with 12 and adding the rest before locking works.
 
 ## Not in this contract
 
-Syndicates (decided in; to be ported from `starfall-syndicates`), pay for
-outside keepers, any way to change the settlement key, the price or the fees.
+Pay for outside keepers, and any way to change the settlement key, the price or
+the fees.

@@ -56,6 +56,9 @@ export const makeTicket = (drawId, entry, payTo, lines = []) => ({
   salt: randomScalar(),
 });
 
+/** A syndicate's ticket: as makeTicket, with the syndicate as its only payee. */
+export const syndicateTicket = (drawId, entry, sid, lines = []) => ({ ...makeTicket(drawId, entry, new Uint8Array(32), lines), payees: G.pureCircuits.syndicatePayees(BigInt(sid)) });
+
 const gameWitnesses = {
   oracleSecretKey: ({ privateState }) => [privateState, privateState.oracleSecretKey],
   organiserSecret: ({ privateState }) => [privateState, privateState.organiserSecret],
@@ -66,6 +69,7 @@ const gameWitnesses = {
   divMod16: ({ privateState }, v, m) => [privateState, [v / m, v % m]],
   sortSeven: ({ privateState }, v) => [privateState, [...v].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))],
   divModWide: ({ privateState }, n, d) => [privateState, [n / d, n % d]],
+  syndicateSecret: ({ privateState }) => [privateState, privateState.syndicateSecret ?? new Uint8Array(32)],
 };
 const treasuryWitnesses = { binderSecret: ({ privateState }) => [privateState, privateState.binderSecret] };
 
@@ -195,6 +199,17 @@ export class World {
     const l = this.ledger(); const count = l.ticketCount.lookup(n); const tickets = [];
     for (let i = 0n; i < count; i++) tickets.push(G.pureCircuits.openTicket(this.settlementSk, n, l.tickets.lookup(G.pureCircuits.ticketKey(n, i)).cipher));
     while (this.ledger().progress.lookup(n).next < count) await this.run('settleBatch', [n], { settling: { drawId: n, tickets } });
+  }
+  // ---- syndicates
+  async createSyndicate(drawId, creatorSecret, sharePrice, shares, games, joinDeadline) {
+    return this.run('createSyndicate', [BigInt(drawId), G.pureCircuits.syndicateCommitmentOf(creatorSecret), sharePrice, BigInt(shares), BigInt(games), BigInt(joinDeadline)]);
+  }
+  async join(sid, shares, payTo) {
+    const sy = this.ledger().syndicates.lookup(BigInt(sid));
+    return this.run('joinSyndicate', [BigInt(sid), BigInt(shares), { bytes: payTo }], {}, { funding: sy.sharePrice * BigInt(shares) });
+  }
+  async buySyndicate(sid, tickets, creatorSecret) {
+    return this.run('buySyndicateTickets', [BigInt(sid), BigInt(tickets.length)], { pendingTickets: tickets, syndicateSecret: creatorSecret });
   }
   async finalise(n) { await this.run('finaliseDraw', [n]); return this.ledger().draws.lookup(n); }
   async payAll(n) { let k = 0; for (const [id, e] of this.ledger().entitlements) if (e.drawId === n && !e.paid) { await this.run('payEntitlement', [id]); k++; } return k; }
