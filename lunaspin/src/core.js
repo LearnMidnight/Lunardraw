@@ -27,7 +27,8 @@ export const MAX_ENTRIES = 10000;
 export const MAX_NAME = 80;
 export const MAX_TITLE = 120;
 export const MAX_WINNERS = 100;
-export const MODES = ['pick', 'pick-many', 'shuffle'];
+export const MAX_TEAMS = 50;
+export const MODES = ['pick', 'pick-many', 'shuffle', 'teams'];
 export const LISTS = ['public', 'private'];
 
 const enc = new TextEncoder();
@@ -122,12 +123,14 @@ export const listCommitment = (items) => {
 
 /**
  * The rules as text, in a fixed order, so their fingerprint is the same
- * everywhere. `{ mode, count, list, title }`; count only for pick-many.
+ * everywhere. `{ mode, count, teams, list, title }`; count only for pick-many,
+ * teams only for teams.
  */
 export const rulesList = (rules) => {
   const r = checkRules(rules);
   const out = ['lunaspin:rules:v1', `mode=${r.mode}`];
   if (r.mode === 'pick-many') out.push(`count=${r.count}`);
+  if (r.mode === 'teams') out.push(`teams=${r.teams}`);
   out.push(`list=${r.list}`, `title=${r.title}`);
   return out;
 };
@@ -139,12 +142,18 @@ export const checkRules = (rules) => {
   if (!MODES.includes(mode)) throw new LunaSpinError('bad_mode', `mode must be one of ${MODES.join(', ')}`);
   if (!LISTS.includes(list)) throw new LunaSpinError('bad_list', 'list must be public or private');
   if (list === 'private' && mode === 'shuffle') throw new LunaSpinError('private_shuffle', 'a private list can only use pick modes: a shuffle reveals every name');
+  if (list === 'private' && mode === 'teams') throw new LunaSpinError('private_teams', 'a private list can only use pick modes: teams reveal every name');
   if (length(title) > MAX_TITLE) throw new LunaSpinError('title_too_long', `the title is over ${MAX_TITLE} characters`);
   const r = { mode, list, title };
   if (mode === 'pick-many') {
     const c = rules.count;
     if (!Number.isSafeInteger(c) || c < 2 || c > MAX_WINNERS) throw new LunaSpinError('bad_count', `winners must be 2 to ${MAX_WINNERS}`);
     r.count = c;
+  }
+  if (mode === 'teams') {
+    const t = rules.teams;
+    if (!Number.isSafeInteger(t) || t < 2 || t > MAX_TEAMS) throw new LunaSpinError('bad_teams', `teams must be 2 to ${MAX_TEAMS}`);
+    r.teams = t;
   }
   return r;
 };
@@ -182,6 +191,7 @@ export const spinSeed = (listFp, rulesFp, saltHex) =>
 export const lockSpin = ({ names, rules, salt, entrySalts }) => {
   checkEntries(names);
   const r = checkRules(rules);
+  if (r.mode === 'teams' && r.teams > names.length) throw new LunaSpinError('bad_teams', 'more teams than entries');
   const items = listItems(names, r.list, entrySalts);
   const listFp = listCommitment(items);
   const rulesFp = rulesCommitment(r);
@@ -230,7 +240,8 @@ export const pickIndex = (output, n) => Number(uniformInt(randomWord(outputOf(ou
 
 /**
  * The result of a spin: positions in the list (0-based), in order.
- * pick → [winner]; pick-many → the winners in draw order; shuffle → the whole order.
+ * pick → [winner]; pick-many → the winners in draw order; shuffle and teams →
+ * the whole order (teams are then dealt from it: see teamsOf).
  */
 export const resultIndexes = (output, rules, n) => {
   const r = checkRules(rules);
@@ -239,7 +250,20 @@ export const resultIndexes = (output, rules, n) => {
     if (r.count > n) throw new LunaSpinError('bad_count', 'more winners than entries');
     return pickManyIndexes(output, n, r.count);
   }
+  if (r.mode === 'teams' && r.teams > n) throw new LunaSpinError('bad_teams', 'more teams than entries');
   return pickManyIndexes(output, n, n);
+};
+
+/**
+ * Teams from a shuffled order, dealt round-robin like cards: the 1st, (t+1)th,
+ * (2t+1)th… go to team 1, the 2nd, (t+2)th… to team 2, and so on. Team sizes
+ * differ by at most one, and the earlier teams get the extra entries.
+ */
+export const teamsOf = (order, teams) => {
+  if (!Number.isSafeInteger(teams) || teams < 1) throw new LunaSpinError('bad_teams', 'teams must be a whole number');
+  const out = Array.from({ length: teams }, () => []);
+  order.forEach((idx, i) => out[i % teams].push(idx));
+  return out;
 };
 
 // ---------------------------------------------------------------- salts

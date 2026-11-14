@@ -22,6 +22,7 @@ const LUNASPIN_MAX_ENTRIES        = 10000;
 const LUNASPIN_MAX_NAME           = 80;
 const LUNASPIN_MAX_TITLE          = 120;
 const LUNASPIN_MAX_WINNERS        = 100;
+const LUNASPIN_MAX_TEAMS          = 50;
 const LUNASPIN_SPACE              = '\t\n\x{0B}\f\r \x{85}\x{A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}\x{FEFF}';
 
 /** A rule was broken; `code` matches the JS error codes. */
@@ -113,14 +114,17 @@ function lunaspin_check_rules( $rules ): array {
 	$mode  = $rules['mode'] ?? null;
 	$list  = $rules['list'] ?? 'public';
 	$title = lunaspin_tidy( $rules['title'] ?? '' );
-	if ( ! in_array( $mode, array( 'pick', 'pick-many', 'shuffle' ), true ) ) {
-		throw new LunaSpin_Error( 'bad_mode', 'mode must be one of pick, pick-many, shuffle' );
+	if ( ! in_array( $mode, array( 'pick', 'pick-many', 'shuffle', 'teams' ), true ) ) {
+		throw new LunaSpin_Error( 'bad_mode', 'mode must be one of pick, pick-many, shuffle, teams' );
 	}
 	if ( ! in_array( $list, array( 'public', 'private' ), true ) ) {
 		throw new LunaSpin_Error( 'bad_list', 'list must be public or private' );
 	}
 	if ( 'private' === $list && 'shuffle' === $mode ) {
 		throw new LunaSpin_Error( 'private_shuffle', 'a private list can only use pick modes: a shuffle reveals every name' );
+	}
+	if ( 'private' === $list && 'teams' === $mode ) {
+		throw new LunaSpin_Error( 'private_teams', 'a private list can only use pick modes: teams reveal every name' );
 	}
 	if ( lunaspin_length( $title ) > LUNASPIN_MAX_TITLE ) {
 		throw new LunaSpin_Error( 'title_too_long', 'the title is over ' . LUNASPIN_MAX_TITLE . ' characters' );
@@ -133,6 +137,13 @@ function lunaspin_check_rules( $rules ): array {
 		}
 		$r['count'] = $c;
 	}
+	if ( 'teams' === $mode ) {
+		$t = $rules['teams'] ?? null;
+		if ( ! is_int( $t ) || $t < 2 || $t > LUNASPIN_MAX_TEAMS ) {
+			throw new LunaSpin_Error( 'bad_teams', 'teams must be 2 to ' . LUNASPIN_MAX_TEAMS );
+		}
+		$r['teams'] = $t;
+	}
 	return $r;
 }
 
@@ -142,6 +153,9 @@ function lunaspin_rules_list( $rules ): array {
 	$out = array( 'lunaspin:rules:v1', 'mode=' . $r['mode'] );
 	if ( 'pick-many' === $r['mode'] ) {
 		$out[] = 'count=' . $r['count'];
+	}
+	if ( 'teams' === $r['mode'] ) {
+		$out[] = 'teams=' . $r['teams'];
 	}
 	$out[] = 'list=' . $r['list'];
 	$out[] = 'title=' . $r['title'];
@@ -180,6 +194,9 @@ function lunaspin_spin_seed( string $list_fp, string $rules_fp, string $salt_hex
 function lunaspin_lock_spin( array $spin ): array {
 	$names = lunaspin_check_entries( $spin['names'] ?? null );
 	$r     = lunaspin_check_rules( $spin['rules'] ?? array() );
+	if ( 'teams' === $r['mode'] && $r['teams'] > count( $names ) ) {
+		throw new LunaSpin_Error( 'bad_teams', 'more teams than entries' );
+	}
 	$items = lunaspin_list_items( $names, $r['list'], $spin['entrySalts'] ?? null );
 	$lfp   = lunaspin_list_commitment( $items );
 	$rfp   = lunaspin_rules_commitment( $r );
@@ -266,7 +283,22 @@ function lunaspin_result_indexes( string $output_hex, $rules, int $n ): array {
 		}
 		return lunaspin_pick_many_indexes( $output_hex, $n, $r['count'] );
 	}
+	if ( 'teams' === $r['mode'] && $r['teams'] > $n ) {
+		throw new LunaSpin_Error( 'bad_teams', 'more teams than entries' );
+	}
 	return lunaspin_pick_many_indexes( $output_hex, $n, $n );
+}
+
+/** Teams from a shuffled order, dealt round-robin (as src/core.js teamsOf). */
+function lunaspin_teams_of( array $order, int $teams ): array {
+	if ( $teams < 1 ) {
+		throw new LunaSpin_Error( 'bad_teams', 'teams must be a whole number' );
+	}
+	$out = array_fill( 0, $teams, array() );
+	foreach ( array_values( $order ) as $i => $idx ) {
+		$out[ $i % $teams ][] = $idx;
+	}
+	return $out;
 }
 
 function lunaspin_new_salt(): string {

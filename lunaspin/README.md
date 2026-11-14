@@ -13,11 +13,12 @@
 | Entries | 2–10,000, each 1–80 characters (code points); duplicates count twice |
 | List fingerprint | Nightcast's `listCommitment`: SHA-256("nightcast:list:v1" ‖ u32be(count) ‖ for each: u32be(len) ‖ UTF-8) |
 | Private-list entry | `SHA-256(pad32("lunaspin:entry:v1") ‖ salt16 ‖ u32be(len) ‖ UTF-8)`; the list fingerprint is then taken over these hashes (hex) |
-| Rules | `listCommitment(["lunaspin:rules:v1", "mode=…", ("count=…"), "list=…", "title=…"])` |
+| Rules | `listCommitment(["lunaspin:rules:v1", "mode=…", ("count=…" for pick-many), ("teams=…" for teams), "list=…", "title=…"])` |
 | Seed | `SHA-256(pad32("lunaspin:v1") ‖ listFp ‖ rulesFp ‖ salt32)` |
 | Word i | the contract's `randomWord`: `SHA-256(pad32("nightcast:word:v0") ‖ output ‖ u32le(i))` |
 | Number in [0, n) | `@nightcast/sdk` `uniformInt` (no modulo bias) |
 | Result | `pick` → `[pick]`; `pick-many` → the first k of a Fisher–Yates shuffle; `shuffle` → all of it, exactly as `@nightcast/sdk` `pick` / `pickMany` / `shuffle` on positions 0…n−1 |
+| Teams | mode `teams` (2–50 teams, public lists only, no more teams than entries): the result is the whole shuffle, as for `shuffle`; teams are dealt from it round-robin (`teamsOf`: position i goes to team i mod t), so team sizes differ by at most one and the first teams get the extra entries |
 
 `pad32(s)` is Compact's `pad(32, s)`: the UTF-8 bytes, then zeros. Results are 0-based positions; pages show them as entry #1, #2, …
 

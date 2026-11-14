@@ -46,7 +46,10 @@ foreach ( $v['spins'] as $i => $t ) {
 	check( "spin #{$i} seed", $lock['seed'], $t['seed'] );
 	check( "spin #{$i} result", lunaspin_result_indexes( $t['output'], $t['rules'], count( $t['names'] ) ), $t['result'] );
 }
-foreach ( array( array( 'mode' => 'shuffle', 'list' => 'private' ), array( 'mode' => 'pick-many', 'count' => 1 ), array( 'mode' => 'weighted' ) ) as $bad ) {
+foreach ( $v['teams'] as $i => $t ) {
+	check( "teams #{$i}", lunaspin_teams_of( $t['order'], $t['teams'] ), $t['out'] );
+}
+foreach ( array( array( 'mode' => 'shuffle', 'list' => 'private' ), array( 'mode' => 'pick-many', 'count' => 1 ), array( 'mode' => 'weighted' ), array( 'mode' => 'teams', 'teams' => 3, 'list' => 'private' ), array( 'mode' => 'teams', 'teams' => 1 ), array( 'mode' => 'teams', 'teams' => 51 ), array( 'mode' => 'teams' ) ) as $bad ) {
 	try {
 		lunaspin_check_rules( $bad );
 		check( 'refuses ' . json_encode( $bad ), 'accepted', 'refused' );
