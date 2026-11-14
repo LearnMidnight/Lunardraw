@@ -8,9 +8,9 @@ export pure circuit maxLines(): Uint<8> {
   return 11;
 }
 
-// Games in a ticket: its entry's, plus one per line it uses.
-export pure circuit ticketGames(t: TicketPreimage): Uint<32> {
-  return (gamesIn(t.entry)
+// Games in a ticket in a draw of format f: its entry's, plus one per line it uses.
+export pure circuit ticketGames(t: TicketPreimage, f: Format): Uint<32> {
+  return (gamesIn(t.entry, f)
        + (lineUsed(t.lines[0]) ? 1 : 0)
        + (lineUsed(t.lines[1]) ? 1 : 0)
        + (lineUsed(t.lines[2]) ? 1 : 0)
@@ -26,7 +26,7 @@ export pure circuit ticketGames(t: TicketPreimage): Uint<32> {
 
 // A ticket's winning games per division (division 1 first): its entry's and
 // its lines'. An unused line wins nothing: 0 is never drawn, nor Moonball 0.
-export pure circuit ticketDivisions(t: TicketPreimage, numbers: Vector<7, Uint<8>>, moonball: Uint<8>): Vector<9, Uint<32>> {
+export pure circuit ticketDivisions(t: TicketPreimage, numbers: Vector<7, Uint<8>>, moonball: Uint<8>, f: Format): Vector<9, Uint<32>> {
   const h0 = lineHits(t.lines[0], numbers);
   const m0 = t.lines[0].moonball == moonball;
   const h1 = lineHits(t.lines[1], numbers);
@@ -49,7 +49,7 @@ export pure circuit ticketDivisions(t: TicketPreimage, numbers: Vector<7, Uint<8
   const m9 = t.lines[9].moonball == moonball;
   const h10 = lineHits(t.lines[10], numbers);
   const m10 = t.lines[10].moonball == moonball;
-  const g = gamesByDivision(t.entry, numbers, moonball);
+  const g = gamesByDivision(t.entry, numbers, moonball, f);
   return [
     (g[0]
        + (h0 == 7 && m0 ? 1 : 0)
@@ -164,7 +164,7 @@ export pure circuit ticketDivisions(t: TicketPreimage, numbers: Vector<7, Uint<8
 
 // 256^0 .. 256^23: three lines' 24 bytes as a Field, least significant byte first.
 pure circuit weights24(): Vector<24, Field> {
-  return [1, 256, 65536, 16777216, 4294967296, 1099511627776, 281474976710656, 72057594037927936, 18446744073709551616, 4722366482869645213696, 1208925819614629174706176, 309485009821345068724781056, 79228162514264337593543950336, 20282409603651670423947251286016, 5192296858534827628530496329220096, 1329227995784915872903807060280344576, 340282366920938463463374607431768211456, 87112285931760246646623899502532662132736, 22300745198530623141535718272648361505980416, 5708990770823839524233143877797980545530986496, 1461501637330902918203684832716283019655932542976, 374144419156711147060143317175368453031918731001856, 95780971304118053647396689196894323976171195136475136, 24519928653854221733733552434404946937899825954937634816];
+  return [1 as Field, 256 as Field, 65536 as Field, 16777216 as Field, 4294967296 as Field, 1099511627776 as Field, 281474976710656 as Field, 72057594037927936 as Field, 18446744073709551616 as Field, 4722366482869645213696 as Field, 1208925819614629174706176 as Field, 309485009821345068724781056 as Field, 79228162514264337593543950336 as Field, 20282409603651670423947251286016 as Field, 5192296858534827628530496329220096 as Field, 1329227995784915872903807060280344576 as Field, 340282366920938463463374607431768211456 as Field, 87112285931760246646623899502532662132736 as Field, 22300745198530623141535718272648361505980416 as Field, 5708990770823839524233143877797980545530986496 as Field, 1461501637330902918203684832716283019655932542976 as Field, 374144419156711147060143317175368453031918731001856 as Field, 95780971304118053647396689196894323976171195136475136 as Field, 24519928653854221733733552434404946937899825954937634816 as Field];
 }
 
 // A ticket's lines as field elements, three lines (24 bytes) each.
@@ -199,5 +199,5 @@ pure circuit unpackLines(f: Vector<12, Field>): Vector<11, Line> {
 }
 
 pure circuit bodySlots(): Vector<12, Field> {
-  return [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+  return [0 as Field, 1 as Field, 2 as Field, 3 as Field, 4 as Field, 5 as Field, 6 as Field, 7 as Field, 8 as Field, 9 as Field, 10 as Field, 11 as Field];
 }
