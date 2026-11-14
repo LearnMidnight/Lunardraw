@@ -35,6 +35,18 @@ const throws = async (f) => { try { await f(); return ''; } catch (e) { return S
 ok('a ceiling of 0.79 a combination deploys with division 1 at half the pool', (await throws(() => World.create({ ceiling: 790_000n }))) === '');
 ok('a ceiling of 0.80 is refused: a game could return what it costs', /ceiling is too high/.test(await throws(() => World.create({ ceiling: 800_000n }))));
 
+// ---------------------------------------------------------------- the launch as decided (Jack, 14 Nov)
+// 7 from 20 to start, the treasury wallet's 10,000 tNIGHT as the opening deposit, and a first floor
+// for about 2,300 games a week (4 draws x 2,300 x 0.20 = 1,840): the Treasury pays the floor and
+// what it holds above a reserve of one floor, so the first jackpot is 8,160 and 1,840 stays back.
+{
+  const s = await World.create({ startRung: 0n, floor0: 1_840n * STAR });
+  await s.bind(); await s.deposit(10_000n * STAR); await s.open('launch');
+  const sl = s.ledger();
+  ok('launch: draw 1 opens on 7 from 20 with an 8,160 tNIGHT jackpot, and the Treasury keeps 1,840',
+     sl.draws.lookup(1n).format.range === 20n && sl.carry === 8_160n * STAR && s.bal[s.tAddr] === 1_840n * STAR && s.conserved(), `carry ${sl.carry} treasury ${s.bal[s.tAddr]}`);
+}
+
 // ---------------------------------------------------------------- setting up
 const w = await World.create();
 ok('the first draw cannot open before the Treasury is bound to the game', (await throws(() => w.open('early'))) !== '');

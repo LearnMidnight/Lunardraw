@@ -23,9 +23,20 @@ const comb = (n, k) => { let r = 1n; for (let i = 0n; i < BigInt(k); i++) r = (r
 // Division 1 takes half the pool (Jack, 14 Nov: bigger jackpots); the other divisions keep their proportions.
 export const FOUR = [5000n, 0n, 752n, 0n, 1241n, 3007n, 0n, 0n, 0n];            // no Moonball: 7, 6, 5, 4 right
 export const NINE = [5000n, 139n, 173n, 150n, 113n, 707n, 549n, 1165n, 2004n];  // Powerball's nine divisions, scaled
+// The four Moonball rungs below today's format have their own tables: Powerball's split there would
+// pay less than a game for 2 right + Moonball, and less for 5 + Moonball than for 5. Each prize is
+// about (1 / chance)^0.6, scaled to the other half of the pool; a division whose prize would come
+// to under three games pays nothing; where two divisions are equally likely (Moonball 1-2), the
+// one with the Moonball pays 20% more. Divisions: 7+MB, 7, 6+MB, 6, 5+MB, 4+MB, 5, 3+MB, 2+MB.
+export const MOONBALL_TABLES = {
+  '30/2':  [5000n, 30n, 272n, 227n, 1101n, 2452n, 918n, 0n, 0n],
+  '30/5':  [5000n, 25n, 110n, 191n, 445n, 1189n, 775n, 2265n, 0n],
+  '35/5':  [5000n, 19n, 92n, 160n, 404n, 1175n, 703n, 2447n, 0n],
+  '35/10': [5000n, 15n, 51n, 122n, 223n, 648n, 536n, 1348n, 2057n],
+};
 export const mkRung = (n, m = 1) => ({
   numbers: BigInt(n), moonball: BigInt(m), q: BigInt(Math.floor(65536 / n)), qm: BigInt(Math.floor(65536 / m)),
-  odds: comb(n, 7) * BigInt(m), pick5: comb(n - 5, 2), shares: m === 1 ? FOUR : NINE,
+  odds: comb(n, 7) * BigInt(m), pick5: comb(n - 5, 2), shares: m === 1 ? FOUR : (MOONBALL_TABLES[`${n}/${m}`] ?? NINE),
 });
 export const LADDER = [[20, 1], [22, 1], [25, 1], [27, 1], [30, 1], [30, 2], [30, 5], [35, 5], [35, 10], [35, 20], [40, 20], [45, 20]].map(([n, m]) => mkRung(n, m));
 export const formatOf = (r) => ({ range: r.numbers, moonballs: r.moonball, pick5: r.pick5 });

@@ -82,10 +82,24 @@ passes what cascades into it on.
   from 22 about 122, 9.6 and 3.22 (1 in 10.7). Nothing for 3 or 2 right:
   on 7 from 22 a 3-right prize would be 1.2 tNIGHT for more than a quarter of
   all games, below the price of a game. No Moonball Sweep.
-- **Moonball rungs:** still to be drawn up for rungs 5–8 (rule of thumb: the
-  smallest prize is worth at least about three games); Powerball's nine
-  divisions with Division 1 raised to half and the rest scaled (50.00 / 1.39 /
-  1.73 / 1.50 / 1.13 / 7.07 / 5.49 / 11.65 / 20.04) fit rung 9 and up.
+- **Moonball rungs 9 to 11:** Powerball's nine divisions with Division 1
+  raised to half and the rest scaled (50.00 / 1.39 / 1.73 / 1.50 / 1.13 /
+  7.07 / 5.49 / 11.65 / 20.04).
+- **Moonball rungs 5 to 8** have their own tables: Powerball's split there
+  would pay less than a game for 2 right + Moonball on 7 from 30 with a
+  Moonball from 2, and less for 5 + Moonball than for 5. Each prize is about
+  (1 / its chance)^0.6, scaled to the other half of the pool, so a rarer win
+  always pays more; a division whose prize would come to under three games
+  pays nothing; where two divisions are equally likely (Moonball 1–2), the one
+  with the Moonball pays 20% more. Shares in basis points, in division order
+  (7 + MB, 7, 6 + MB, 6, 5 + MB, 4 + MB, 5, 3 + MB, 2 + MB):
+
+  | Rung | Format | Shares | Smallest prize paid |
+  |---|---|---|---|
+  | 5 | 7 from 30, Moonball 1–2 | 5000 / 30 / 272 / 227 / 1101 / 2452 / 918 / 0 / 0 | 4 + MB, about 16 tNIGHT (1 in 66) |
+  | 6 | 7 from 30, Moonball 1–5 | 5000 / 25 / 110 / 191 / 445 / 1189 / 775 / 2265 / 0 | 3 + MB, about 7.4 (1 in 33) |
+  | 7 | 7 from 35, Moonball 1–5 | 5000 / 19 / 92 / 160 / 404 / 1175 / 703 / 2447 / 0 | 3 + MB, about 11.5 (1 in 47) |
+  | 8 | 7 from 35, Moonball 1–10 | 5000 / 15 / 51 / 122 / 223 / 648 / 536 / 1348 / 2057 | 2 + MB, about 6.7 (1 in 33) |
 
 An unwon division falls to the next lower division with a winner. What none
 takes, and rounding remainders, join the next jackpot.
