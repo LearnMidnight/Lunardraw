@@ -47,3 +47,15 @@ This folder holds the sources only. The archive Jack runs (`ledger9-probe.tar.gz
 `out/`: `treasury.compact` (the same file as `../src/treasury.compact`), `probe-game.compact` and
 the N-circuit contracts (`python3 contracts/gen-wide.py 12 15 18 21 24`, written to
 `contracts/wide/`) compiled with `compactc` 0.36.0; `probe.mjs` reads them from `out/<name>/`.
+
+## Route B for syndicates: add circuits after the deploy (15 Nov 2026)
+
+The circuit probe accepted 12 circuits in one deploy and refused 15; Starfall v2 with syndicates
+is about 18. `probe-upgrade.mjs` tests the way round it: deploy an 18-circuit contract (`wide-18`)
+with only its first 12 circuits and a maintenance authority held by a single-use key, add the other
+6 verifier keys with maintenance transactions (`submitInsertVerifierKeyTx`), call one of the added
+circuits (c17), then lock the contract (replace the authority with an empty committee, as Starfall's
+deploys do) and read it back. `probe-upgrade.sh` runs it on the VM like `probe.sh`; its archive
+(`ledger9-probe-upgrade.tar.gz` on Jack's PC) carries `out-upgrade/wide-18`: `wide-18.compact`
+compiled with `compactc` 0.36.0, all verifier keys, and the prover key for c17 only.
+`node probe-upgrade.mjs offline` builds every step against a stand-in chain (11 checks).
