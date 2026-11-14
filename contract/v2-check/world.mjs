@@ -20,8 +20,9 @@ const BLOCK = '11'.repeat(32);
 const hex = (b) => Buffer.from(b).toString('hex');
 const comb = (n, k) => { let r = 1n; for (let i = 0n; i < BigInt(k); i++) r = (r * (BigInt(n) - i)) / (i + 1n); return r; };
 
-export const FOUR = [3350n, 0n, 1000n, 0n, 1650n, 4000n, 0n, 0n, 0n];           // no Moonball: 7, 6, 5, 4 right
-export const NINE = [3350n, 185n, 230n, 200n, 150n, 940n, 730n, 1550n, 2665n];  // Powerball's nine divisions
+// Division 1 takes half the pool (Jack, 14 Nov: bigger jackpots); the other divisions keep their proportions.
+export const FOUR = [5000n, 0n, 752n, 0n, 1241n, 3007n, 0n, 0n, 0n];            // no Moonball: 7, 6, 5, 4 right
+export const NINE = [5000n, 139n, 173n, 150n, 113n, 707n, 549n, 1165n, 2004n];  // Powerball's nine divisions, scaled
 export const mkRung = (n, m = 1) => ({
   numbers: BigInt(n), moonball: BigInt(m), q: BigInt(Math.floor(65536 / n)), qm: BigInt(Math.floor(65536 / m)),
   odds: comb(n, 7) * BigInt(m), pick5: comb(n - 5, 2), shares: m === 1 ? FOUR : NINE,
@@ -82,7 +83,7 @@ export class World {
       w.tState.setOperation(name, op);
     }
     const tBytes = { bytes: rt.encodeContractAddress(w.tAddr) };
-    const o = { fee: 200_000n, price: 1_300_000n, treasuryFee: 100_000n, floorPer: 200_000n, ceiling: 550_000n, floor0: 34_000n * STAR, startRung: 1n, target: 4n, every: 4n, rolloverCap: 0n, finalNotice: 600n, ...opts };
+    const o = { fee: 200_000n, price: 1_300_000n, treasuryFee: 100_000n, floorPer: 200_000n, ceiling: 710_000n, floor0: 34_000n * STAR, startRung: 1n, target: 4n, every: 4n, rolloverCap: 0n, finalNotice: 600n, ...opts };
     const g0 = await w.game.initialState(rt.createConstructorContext({}, COIN),
       G.pureCircuits.settlementPublicKey(w.oracleSk), G.pureCircuits.organiserCommitmentOf(w.organiserSecret), G.pureCircuits.organiserCommitmentOf(w.backupSecret),
       G.pureCircuits.settlementPublicKey(w.settlementSk), { bytes: w.operator }, o.fee, o.price, 600n, 2_592_000n, 3600n, 3600n, 86_400n, 10_000n, o.finalNotice, o.rolloverCap,

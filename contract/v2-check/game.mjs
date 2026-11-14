@@ -10,7 +10,7 @@ const tn = (star) => `${(Number(star) / 1e6).toLocaleString('en', { maximumFract
 const others = (nums, range, want) => { const out = []; for (let x = 1; x <= range && out.length < want; x++) if (!nums.includes(x)) out.push(x); return out; };
 const sorted = (a) => [...a].sort((x, y) => x - y);
 const alice = address('alice'), bob = address('bob'), carol = address('carol');
-const CEIL = 550_000n, FLOOR = 200_000n;
+const CEIL = 710_000n, FLOOR = 200_000n;
 const cap = (rung) => CEIL * LADDER[rung].odds;
 // What the Treasury pays of `amount` while keeping `held` back: all of it if it can, else whole tNIGHT.
 const payable = (balance, amount, held) => (balance >= held + amount ? amount : balance > held ? ((balance - held) / STAR) * STAR < amount ? ((balance - held) / STAR) * STAR : amount : 0n);
@@ -28,6 +28,12 @@ const throws = async (f) => { try { await f(); return ''; } catch (e) { return S
   await s.open('seed-1');
   ok('a Treasury holding 10,000.5 tNIGHT, asked for the 34,000 floor, pays 10,000 and keeps the half', s.ledger().carry === 10_000n * STAR && s.bal[s.tAddr] === 500_000n && s.conserved());
 }
+
+// ---------------------------------------------------------------- the bound the constructor enforces
+// With division 1 at half the pool, the other divisions return 0.5 a game, so the ceiling must stay
+// below 0.8 a combination for a 1.3 game: 0.79 deploys, 0.80 is refused.
+ok('a ceiling of 0.79 a combination deploys with division 1 at half the pool', (await throws(() => World.create({ ceiling: 790_000n }))) === '');
+ok('a ceiling of 0.80 is refused: a game could return what it costs', /ceiling is too high/.test(await throws(() => World.create({ ceiling: 800_000n }))));
 
 // ---------------------------------------------------------------- setting up
 const w = await World.create();
@@ -60,9 +66,9 @@ await w.settle(1n);
 const tBefore1 = w.bal[w.tAddr];
 const f1 = await w.finalise(1n);
 l = w.ledger();
-const pool1 = 21n * STAR, share1 = (pool1 * 3350n) / 10000n;
+const pool1 = 21n * STAR, share1 = (pool1 * 5000n) / 10000n;
 ok(`division 1 paid the jackpot fixed before the draw, ${tn(jackpot1)}, and nothing from the draw's own sales`, f1.carried === jackpot1 && f1.prizes[0] === jackpot1);
-ok('4 right took its 40% and, with nobody above it, the 6 and 5 right shares that fell to it', f1.prizes[5] === (pool1 * 1000n) / 10000n + (pool1 * 1650n) / 10000n + (pool1 * 4000n) / 10000n, `${f1.prizes[5]}`);
+ok('4 right took its 40% and, with nobody above it, the 6 and 5 right shares that fell to it', f1.prizes[5] === (pool1 * 752n) / 10000n + (pool1 * 1241n) / 10000n + (pool1 * 3007n) / 10000n, `${f1.prizes[5]}`);
 ok('3 right pays nothing on a no-Moonball rung', f1.prizes[7] === 0n);
 ok('the fees: 0.10 a game to the Treasury, 0.20 to the operator', f1.treasuryFee === 2_100_000n && f1.fee === 4_200_000n && w.paid(w.operator) === 4_200_000n);
 ok(`the next jackpot starts with the draw's own division 1 share (${tn(share1)}) and the Treasury tops it up to the floor: ${tn(l.carry)}`,
@@ -74,17 +80,18 @@ ok('nothing created or lost, and the game holds exactly the next jackpot', w.con
 
 // ---------------------------------------------------------------- draws 2-4: rollovers and the ceiling
 // 140 System 12 tickets a draw (110,880 games), each holding 4 drawn numbers: winners at 4 right, none above.
+// What no division takes (remainders below one STAR per winning game) joins the jackpot too: allow 0.01 tNIGHT.
 const sell = async (n, range, tickets, hits) => {
   const nums = await w.peek(n, `seed-${n}`); const miss = others(nums.main, range, 15);
   const ts = []; for (let i = 0; i < tickets; i++) ts.push(makeTicket(Number(n), { numbers: sorted([...nums.main.slice(0, hits), ...miss.slice(0, 12 - hits)]), moonball: 1 }, carol));
   let games = 0n; for (let i = 0; i < ts.length; i += 7) games += await w.buy(ts.slice(i, i + 7)); return games;
 };
 const play = async (n, opts) => { await w.draw(n, `seed-${n}`, `seed-${n + 1n}`, opts); await w.settle(n); const f = await w.finalise(n); await w.payAll(n); return f; };
-const big = 110_880n, shareBig = (big * STAR * 3350n) / 10000n;
+const big = 110_880n, shareBig = (big * STAR * 5000n) / 10000n;
 ok('140 System 12 tickets are 110,880 games', (await sell(2n, 22, 140, 4)) === big);
 const f2 = await play(2n);
 l = w.ledger();
-ok(`draw 2 was not won at the top: the jackpot rolls over and the draw's own share (${tn(shareBig)}) joins it: ${tn(l.carry)}`, f2.prizes[0] === 0n && f2.carried === 34_000n * STAR && l.carry >= 34_000n * STAR + shareBig && l.carry < 34_000n * STAR + shareBig + 100n && f2.overflow === 0n, `carry ${l.carry}`);
+ok(`draw 2 was not won at the top: the jackpot rolls over and the draw's own share (${tn(shareBig)}) joins it: ${tn(l.carry)}`, f2.prizes[0] === 0n && f2.carried === 34_000n * STAR && l.carry >= 34_000n * STAR + shareBig && l.carry < 34_000n * STAR + shareBig + STAR / 100n && f2.overflow === 0n, `carry ${l.carry}`);
 await sell(3n, 22, 140, 4);
 const tBefore3 = w.bal[w.tAddr];
 const f3 = await play(3n);
@@ -94,14 +101,14 @@ ok(`draw 3 would take it past the ceiling for 7 from 22 (${tn(cap(1))}): the jac
 await sell(4n, 22, 140, 4);
 const f4 = await play(4n);
 l = w.ledger();
-ok(`draw 4, the jackpot at the ceiling: all of its division 1 share (${tn(shareBig)}) is overflow`, l.carry === cap(1) && f4.overflow >= shareBig && f4.overflow < shareBig + 100n);
+ok(`draw 4, the jackpot at the ceiling: all of its division 1 share (${tn(shareBig)}) is overflow`, l.carry === cap(1) && f4.overflow >= shareBig && f4.overflow < shareBig + STAR / 100n);
 const avg1 = (21n + 3n * big) / 4n;
 ok(`after 4 draws the game retargets: ${avg1} games a draw on average, target odds 1 in ${avg1 * 4n}, past the midpoint to 7 from 25: up one rung, and the floor follows (${tn(avg1 * 4n * FLOOR)})`,
    l.rung === 2n && l.aim === 2n && l.windowDraws === 0n && l.floor === avg1 * 4n * FLOOR, `rung ${l.rung} aim ${l.aim} floor ${l.floor}`);
 ok('nothing created or lost after four draws', w.conserved() && w.bal[w.gAddr] === l.carry);
 
 // ---------------------------------------------------------------- draw 5: a win at the ceiling, and the refill
-await w.deposit(300_000n * STAR);                                // a sponsor
+await w.deposit(360_000n * STAR);                                // a sponsor (enough for the refills to the ceilings below)
 const n5 = await w.peek(5n, 'seed-5');
 ok('draw 5 opened before the retarget and keeps 7 from 22', w.ledger().draws.lookup(5n).format.range === 22n);
 await w.buy([makeTicket(5, { numbers: n5.main, moonball: 1 }, alice)]);

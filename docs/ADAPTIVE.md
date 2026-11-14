@@ -68,20 +68,24 @@ monthly. At ~42,000 games a week that is 7 from 22.
 ## Prize tables
 
 Each rung has its own table (`shares`, basis points, division 1 first;
-Division 1's share is the same on every rung). The divisions are as in v1: 1 =
+Division 1's share is the same on every rung: **half the pool**, for bigger
+jackpots, decided with Jack on 14 November). The divisions are as in v1: 1 =
 7 + Moonball, 2 = 7, 3 = 6 + MB, 4 = 6, 5 = 5 + MB, 6 = 4 + MB, 7 = 5, 8 = 3 +
 MB, 9 = 2 + MB. A division with no share pays nothing, records no winners and
 passes what cascades into it on.
 
 - **No Moonball (rungs 0–4):** every game's Moonball is 1 and so is the drawn
   one, so 7, 6, 5 and 4 right land in divisions 1, 3, 5 and 6. Four divisions
-  pay: 33.5% (the jackpot share), 10%, 16.5%, 40%. Nothing for 3 or 2 right:
+  pay: 50% (the jackpot share), 7.52%, 12.41%, 30.07% (the first plan's 10 :
+  16.5 : 40 kept for the other half). On 7 from 20 a winning game expects
+  about 64 tNIGHT for 6 right, 5.9 for 5 and 2.33 for 4 (1 game in 7.7); on 7
+  from 22 about 122, 9.6 and 3.22 (1 in 10.7). Nothing for 3 or 2 right:
   on 7 from 22 a 3-right prize would be 1.2 tNIGHT for more than a quarter of
   all games, below the price of a game. No Moonball Sweep.
 - **Moonball rungs:** still to be drawn up for rungs 5–8 (rule of thumb: the
   smallest prize is worth at least about three games); Powerball's nine
-  divisions (33.50 / 1.85 / 2.30 / 2.00 / 1.50 / 9.40 / 7.30 / 15.50 / 26.65)
-  fit rung 9 and up.
+  divisions with Division 1 raised to half and the rest scaled (50.00 / 1.39 /
+  1.73 / 1.50 / 1.13 / 7.07 / 5.49 / 11.65 / 20.04) fit rung 9 and up.
 
 An unwon division falls to the next lower division with a winner. What none
 takes, and rounding remainders, join the next jackpot.
@@ -103,15 +107,26 @@ share of its pool plus a jackpot no bigger than the ceiling:
     most a game returns = (1 − division 1 share) × pool per game + ceilingPerCombination
 
 and the constructor refuses a deployment where that reaches the price of a
-game. With 1.0 to the pool and a ceiling of 0.55: 0.665 + 0.55 = 1.215 of
-1.3. Buying more of a draw, even every combination, never pays; the same holds
+game. With 1.0 to the pool, Division 1 at half of it and a ceiling of 0.71:
+0.50 + 0.71 = 1.21 of 1.3. Buying more of a draw, even every combination, never pays; the same holds
 across draws, since later jackpots are capped too. (The one exception is an
 announced final draw, which gives everything away on purpose.)
 
 History: a sales cap was considered first and dropped (a cap either lets a
 buyer push the ladder up by selling a draw out, or hides demand so the ladder
 gets stuck). Paying the overflow to that draw's smaller prizes instead of the
-Treasury would need a ceiling of about 0.35–0.40 × odds to stay safe.
+Treasury would need a ceiling of about 0.35–0.40 × odds to stay safe (at a
+33.5% Division 1 share).
+
+**Why half the pool.** The ceiling can only rise as far as the other
+divisions' return falls, so a bigger Division 1 share is what makes a bigger
+jackpot safe. The first plan (33.5%, ceiling 0.55) and this one return the
+same 84.6% to players overall; this one puts more of it in the jackpot. In
+simulation (`sim/jackpot_share.py`, kept on Jack's PC) the average jackpot
+won is about 45–60% bigger at every volume tried, and at 42,000 games a draw
+the jackpot is won about every 6.8 draws instead of 5.8 (a bigger jackpot
+waits longer to fit under a lower rung's ceiling). Biggest jackpot: 55,039
+tNIGHT on 7 from 20, 121,086 on 7 from 22.
 
 ## Money: 1.3 tNIGHT a game
 
