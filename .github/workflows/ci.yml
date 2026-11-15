@@ -506,3 +506,29 @@ jobs:
           path: ${{ steps.mcpb.outputs.file }}
           retention-days: 7
           compression-level: 0
+
+  # Starfall v2 (starfall-v2/, docs/ADAPTIVE.md): the new game and its Treasury, compiled with
+  # Compact 0.36 and run together in memory (the rule for unshielded tokens checked on every
+  # transaction). The jobs above build the live v1 game with ${{ env.COMPACT_TOOLCHAIN }}.
+  starfall-v2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+
+      - name: Install Compact toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf https://github.com/midnightntwrk/compact/releases/latest/download/compact-installer.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Select compiler 0.36.0
+        run: |
+          compact update 0.36.0
+          compact compile --version
+
+      - name: Starfall v2 checks (pure, game, syndicates, daily draws)
+        run: COMPACTC="compact compile" bash starfall-v2/check/run.sh

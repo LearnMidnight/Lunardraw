@@ -1,7 +1,7 @@
 # Starfall v2: the adaptive format, the fixed jackpot and the Treasury
 
 Decided with Jack on 13–14 November 2026. This is what
-`contract/src/settlement.compact` and `contract/src/treasury.compact` implement
+`starfall-v2/src/settlement.compact` and `starfall-v2/src/treasury.compact` implement
 for the Compact 0.36 / ledger 9 redeploy. Settlement itself (tickets,
 encryption, batches, payouts) is unchanged: see [SETTLEMENT.md](SETTLEMENT.md).
 
@@ -66,7 +66,7 @@ target × `floorPerGame`.
 `retargetEvery = 7`: a jackpot about monthly, the format checked every week,
 and a result and smaller prizes every day. Weekly draws with `targetDraws = 4`,
 `retargetEvery = 4` pick the same formats and give the same jackpots in time
-(`contract/v2-sim/jackpot_share.py`: at 2,300, 16,000 and 42,000 games a week,
+(`starfall-v2/sim/jackpot_share.py`: at 2,300, 16,000 and 42,000 games a week,
 the jackpot is won about every 30, 7.5 and 7 weeks either way), but daily keeps
 the game's rhythm and moves the format four times as often. The game starts on
 7 from 20 (`startRung = 0`) so it only moves up as players arrive; at today's
@@ -238,7 +238,7 @@ circuits' verifier keys are added by maintenance transactions; then the
 maintenance authority is replaced by an empty committee (nobody can ever change
 the contract), the chain is checked to show all 17 circuits and the empty
 committee, and only then is the Treasury bound and the first draw opened.
-Tested on Preprod on 15 Nov 2026 with 18 circuits (`contract/v2-probe`,
+Tested on Preprod on 15 Nov 2026 with 18 circuits (`starfall-v2/probe`,
 `probe-upgrade.mjs`). Anyone can check that every verifier key on chain matches
 the published compiled contract.
 
@@ -271,7 +271,7 @@ against every game listed, for every N from 14 to 60.
 
 ## Checks
 
-`contract/v2-check/` runs both compiled contracts together in memory
+`starfall-v2/check/` runs both compiled contracts together in memory
 (compact-runtime 0.21, the real cross-contract call) and applies the chain's
 rule for unshielded tokens to every transaction:
 
@@ -288,9 +288,9 @@ rule for unshielded tokens to every transaction:
   close, a syndicate that never fills, a void draw after a partial refund, and
   no syndicate in a final draw.
 
-`bash contract/v2-check/run.sh` (needs `compactc` 0.36.0).
+`bash starfall-v2/check/run.sh` (needs `compactc` 0.36.0).
 
-Seen on Preprod (`contract/v2-probe`, 14–15 Nov 2026): the cross-contract call
+Seen on Preprod (`starfall-v2/probe`, 14–15 Nov 2026): the cross-contract call
 with unshielded payments both ways in one transaction works; one deploy carries
 12 circuits; deploying with 12 and adding the rest before locking works.
 
