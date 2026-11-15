@@ -32,6 +32,10 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Select compiler ${{ env.COMPACT_TOOLCHAIN }}
+        # The Compact tool asks GitHub's API for its releases; with the job's own (read-only) token
+        # it isn't refused for the shared runners' rate limit.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           compact update "$COMPACT_TOOLCHAIN"
           compact compile --version
@@ -139,6 +143,10 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Select compiler ${{ env.COMPACT_TOOLCHAIN }}
+        # The Compact tool asks GitHub's API for its releases; with the job's own (read-only) token
+        # it isn't refused for the shared runners' rate limit.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: compact update "$COMPACT_TOOLCHAIN"
 
       - name: Install dependencies
@@ -275,6 +283,10 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Select compiler ${{ env.COMPACT_TOOLCHAIN }}
+        # The Compact tool asks GitHub's API for its releases; with the job's own (read-only) token
+        # it isn't refused for the shared runners' rate limit.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: compact update "$COMPACT_TOOLCHAIN"
 
       - name: Install dependencies
@@ -321,6 +333,10 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Select compiler ${{ env.COMPACT_TOOLCHAIN }}
+        # The Compact tool asks GitHub's API for its releases; with the job's own (read-only) token
+        # it isn't refused for the shared runners' rate limit.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: compact update "$COMPACT_TOOLCHAIN"
 
       - name: Install dependencies
@@ -456,6 +472,10 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Select compiler ${{ env.COMPACT_TOOLCHAIN }}
+        # The Compact tool asks GitHub's API for its releases; with the job's own (read-only) token
+        # it isn't refused for the shared runners' rate limit.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: compact update "$COMPACT_TOOLCHAIN"
 
       - name: Install dependencies
