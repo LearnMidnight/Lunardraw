@@ -520,15 +520,13 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install Compact toolchain
+      # The compiler straight from its release (not through the Compact tool, whose update asks
+      # GitHub's API and is sometimes refused for the rate limit when every job asks at once).
+      - name: Compact 0.36.0
         run: |
-          curl --proto '=https' --tlsv1.2 -LsSf https://github.com/midnightntwrk/compact/releases/latest/download/compact-installer.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-      - name: Select compiler 0.36.0
-        run: |
-          compact update 0.36.0
-          compact compile --version
+          mkdir -p "$RUNNER_TEMP/compactc" && cd "$RUNNER_TEMP/compactc"
+          curl --proto '=https' --tlsv1.2 -LsSf -o c.zip https://github.com/midnightntwrk/compact/releases/download/compactc-v0.36.0/compactc_v0.36.0_x86_64-unknown-linux-musl.zip
+          unzip -q c.zip && ./compactc --version
 
       - name: Starfall v2 checks (pure, game, syndicates, daily draws)
-        run: COMPACTC="compact compile" bash starfall-v2/check/run.sh
+        run: COMPACTC="$RUNNER_TEMP/compactc/compactc" bash starfall-v2/check/run.sh
