@@ -7,7 +7,7 @@
  *      deploy transaction itself: nobody ever holds a key for it);
  *   2. the game with as many of its circuits as fit (DEPLOY_BUDGET) and a single-use maintenance
  *      key that exists only in this process's memory;
- *   3. the rest of its circuits' verifier keys, one maintenance transaction each;
+ *   3. the rest of its circuits' verifier keys, in one maintenance update (counter 0 to 1);
  *   4. the game locked (its authority replaced by an empty committee);
  *   5. checks on the chain: exactly the game's 17 circuits and the Treasury's 3, each with the
  *      compiled verifier key; both authorities locked; the game's sealed settings and Treasury
@@ -46,7 +46,6 @@ import { encodeContractAddress, StateValue } from '@midnight-ntwrk/compact-runti
 import {
   createUnprovenDeployTx,
   findDeployedContract,
-  submitInsertVerifierKeyTx,
   submitTx,
   verifierKeysEqual,
 } from '@midnight-ntwrk/midnight-js/contracts';
@@ -237,6 +236,23 @@ const withOps = (full, ops, networkId) => {
   return { deploy, address: String(deploy.address), base: ops, tx, unprovenTx: LedgerTransaction.seal('v9', 'Unproven', tx) };
 };
 
+/**
+ * The rest of the game's verifier keys in one maintenance update, signed with the single-use key.
+ * One update, not one transaction each: a second update built before the chain shows the first
+ * carries the same counter and is refused (as on Preprod, 15 Nov).
+ */
+const addKeysUpdate = (address, ops, counter, signingKey) => {
+  const update = new MaintenanceUpdate(address, ops.map((o) => new VerifierKeyInsert(o, new ContractOperationVersionedVerifierKey('v4', readFileSync(join(OUT, GAME, 'keys', `${o}.verifier`))))), counter);
+  return update.addSignature(0n, signData(signingKey, update.dataToSign));
+};
+
+/** A transaction the chain recorded as anything but a full success is a failure. */
+const succeeded = (r, what) => {
+  const status = r?.status ?? r?.public?.status;
+  if (status !== undefined && status !== 'SucceedEntirely') throw new Error(`${what}: the chain recorded it as ${status}${r.txId ? ` (transaction ${r.txId})` : ''}`);
+  return r;
+};
+
 /** The lock: the authority replaced by an empty committee (threshold 1: nobody can ever sign). */
 const lockUpdate = (address, current, signingKey) => {
   const update = new MaintenanceUpdate(address, [new ReplaceAuthority(new ContractMaintenanceAuthority([], 1, current.counter + 1n))], current.counter);
@@ -314,14 +330,15 @@ const offline = async () => {
   p.operator = randomBytes(32);
   const g = await gameDeploy(providers(GAME), G, gameArgs(p, t.address), 'preprod');
   check(`the game deploy builds (the constructor's own checks passed) with ${g.base.length} circuits, ${g.fullness.max.toFixed(3)} of a block's ${g.fullness.dimension} (budget ${DEPLOY_BUDGET}): ${g.base.join(', ')}`, g.base.length >= 1 && opNames(g.deploy.initialState).length === g.base.length && g.fullness.max <= DEPLOY_BUDGET);
-  const biggestAdd = Math.max(...g.later.map((o) => fullnessOf(Transaction.fromParts('preprod', undefined, undefined, Intent.new(ttl()).addMaintenanceUpdate(new MaintenanceUpdate(g.address, [new VerifierKeyInsert(o, new ContractOperationVersionedVerifierKey('v4', g.full.operation(o).verifierKey))], 0n)))).max));
-  check(`the ${g.later.length} added afterwards, one transaction each (the largest ${biggestAdd.toFixed(3)} of a block): ${g.later.join(', ')}`, g.later.length + g.base.length === 17 && biggestAdd <= DEPLOY_BUDGET);
+  const adding = addKeysUpdate(g.address, g.later, 0n, g.signingKey);
+  const addFull = fullnessOf(Transaction.fromParts('preprod', undefined, undefined, Intent.new(ttl()).addMaintenanceUpdate(adding)));
+  check(`the ${g.later.length} added afterwards in one signed maintenance update at counter 0 (${addFull.max.toFixed(3)} of a block's ${addFull.dimension}): ${g.later.join(', ')}`,
+    g.later.length + g.base.length === 17 && adding.updates.length === g.later.length && adding.counter === 0n && adding.signatures.length === 1 && addFull.max <= DEPLOY_BUDGET);
   check('its authority is the single-use key alone, counter 0', g.full.maintenanceAuthority.committee.length === 1 && g.full.maintenanceAuthority.threshold === 1 && g.full.maintenanceAuthority.counter === 0n);
   check(`the full contract (what the chain will hold after the ${g.later.length} additions) has exactly the compiled circuits and keys`, checkCircuits(g.full, GAME).ok, checkCircuits(g.full, GAME).detail);
   for (const c of checkSettings(ledgerOf(G.mod, g.deploy.initialState), p, t.address)) check(`settings: ${c.name}`, c.ok);
-  const adds = BigInt(g.later.length);
-  const lock = lockUpdate(g.address, { counter: adds }, g.signingKey);
-  check(`the lock, after the ${adds} additions, replaces the authority with an empty committee at counter ${adds + 1n}`, lock.counter === adds && isLocked(lock.updates[0].authority) && lock.updates[0].authority.counter === adds + 1n && lock.signatures.length === 1);
+  const lock = lockUpdate(g.address, { counter: 1n }, g.signingKey);
+  check(`the lock, after that update, replaces the authority with an empty committee at counter 2`, lock.counter === 1n && isLocked(lock.updates[0].authority) && lock.updates[0].authority.counter === 2n && lock.signatures.length === 1);
   check(`the deploy transactions are ledger 9 (Treasury and game)`, t.unprovenTx.era === 'v9' && g.unprovenTx.era === 'v9');
   const vk = g.later.map(vkBytes);
   check(`the ${vk.length} added verifier keys: ${vk.join(' + ')} = ${vk.reduce((a, b) => a + b, 0).toLocaleString('en')} bytes`, vk.every((n) => n > 1000));
@@ -477,12 +494,22 @@ const run = async (mode, values) => {
           if (!read) throw new Error(`no contract at ${address}`);
           return (read.contractState ?? read).deserialize({ v9: ContractState });
         };
+        /** The contract's state once the indexer shows `ok` (it can lag the block a little). */
+        const settled = async (address, ok, what, ms = 180_000) => {
+          const until = Date.now() + ms;
+          for (;;) {
+            const st = await onChain(address).catch(() => null);
+            if (st && ok(st)) return st;
+            if (Date.now() > until) throw new Error(`the chain did not show ${what} within ${ms / 1000} s`);
+            await new Promise((r) => setTimeout(r, 5_000));
+          }
+        };
         const networkId = session.config.networkId;
         const binderSecret = randomBytes(32);
 
         const t = await step('1. deploy the Treasury, locked from the start', async () => {
           const built = await treasuryDeploy(providers(TREASURY), T, binderSecret, networkId);
-          const r = await submitTx(providers(TREASURY), { unprovenTx: built.unprovenTx });
+          const r = succeeded(await submitTx(providers(TREASURY), { unprovenTx: built.unprovenTx }), 'the Treasury deploy');
           await providers(TREASURY).privateStateProvider.forContract?.(built.address)?.set?.(TREASURY, { binderSecret });
           return { address: built.address, txId: r.txId, note: built.address };
         });
@@ -492,27 +519,30 @@ const run = async (mode, values) => {
         const g = await step('2. deploy the game with the circuits that fit and a single-use maintenance key', async () => {
           const built = await gameDeploy(providers(GAME), G, gameArgs(p, t.address), networkId);
           say(`   ${built.base.length} circuits in the deploy (${built.fullness.max.toFixed(3)} of a block's ${built.fullness.dimension}); ${built.later.length} to add after`);
-          const r = await submitTx(providers(GAME), { unprovenTx: built.unprovenTx });
+          const r = succeeded(await submitTx(providers(GAME), { unprovenTx: built.unprovenTx }), 'the game deploy');
           await fresh.privateStateProvider.setSigningKey(built.address, built.signingKey);
-          const s = await onChain(built.address);
+          const s = await settled(built.address, (st) => opNames(st).length === built.base.length, `the game with ${built.base.length} circuits`);
           if (opNames(s).join() !== built.base.join() && opNames(s).join() !== [...built.base].sort().join()) throw new Error(`the chain shows other circuits: ${opNames(s).join(', ')}`);
           return { address: built.address, txId: r.txId, circuits: opNames(s).length, later: built.later, note: `${built.address}, ${opNames(s).length} circuits on chain` };
         });
         record.game = g.address;
 
-        for (const op of g.later) {
-          await step(`3. add ${op}`, async () => {
-            const vk = readFileSync(join(OUT, GAME, 'keys', `${op}.verifier`));
-            const r = await submitInsertVerifierKeyTx(providers(GAME), G.c, g.address, op, vk);
-            return { txId: r.public?.txId, bytes: vk.length };
-          });
-        }
+        await step(`3. add the other ${g.later.length} circuits' keys in one maintenance update`, async () => {
+          const s = await onChain(g.address);
+          if (s.maintenanceAuthority.counter !== 0n) throw new Error(`the game's maintenance counter is ${s.maintenanceAuthority.counter}, not 0`);
+          const signingKey = await fresh.privateStateProvider.getSigningKey(g.address);
+          const tx = Transaction.fromParts(networkId, undefined, undefined, Intent.new(ttl()).addMaintenanceUpdate(addKeysUpdate(g.address, g.later, 0n, signingKey)));
+          const r = succeeded(await submitTx(providers(GAME), { unprovenTx: LedgerTransaction.seal('v9', 'Unproven', tx) }), 'adding the keys');
+          const after = await settled(g.address, (st) => st.maintenanceAuthority.counter === 1n && opNames(st).length === 17, 'the 17 circuits at counter 1');
+          return { txId: r.txId, added: g.later, note: `${opNames(after).length} circuits on chain` };
+        });
 
         await step('4. lock the game: its authority replaced by an empty committee', async () => {
           const s = await onChain(g.address);
           const signingKey = await fresh.privateStateProvider.getSigningKey(g.address);
           const tx = Transaction.fromParts(networkId, undefined, undefined, Intent.new(ttl()).addMaintenanceUpdate(lockUpdate(g.address, s.maintenanceAuthority, signingKey)));
-          const r = await submitTx(providers(GAME), { unprovenTx: LedgerTransaction.seal('v9', 'Unproven', tx) });
+          const r = succeeded(await submitTx(providers(GAME), { unprovenTx: LedgerTransaction.seal('v9', 'Unproven', tx) }), 'the lock');
+          await settled(g.address, (st) => isLocked(st.maintenanceAuthority), 'the game locked');
           await fresh.privateStateProvider.removeSigningKey?.(g.address);
           return { txId: r.txId };
         });
@@ -536,14 +566,14 @@ const run = async (mode, values) => {
 
         const treasuryHandle = await findDeployedContract(providers(TREASURY), { contractAddress: t.address, compiledContract: T.c, privateStateId: TREASURY, initialPrivateState: { binderSecret } });
         await step('6. bind the Treasury to the game, and check it', async () => {
-          const r = await treasuryHandle.callTx.bind({ bytes: encodeContractAddress(g.address) });
-          const l = ledgerOf(T.mod, await onChain(t.address));
+          const r = succeeded(await treasuryHandle.callTx.bind({ bytes: encodeContractAddress(g.address) }), 'bind');
+          const l = ledgerOf(T.mod, await settled(t.address, (st) => ledgerOf(T.mod, st).bound, 'the Treasury bound'));
           if (!l.bound || hex(l.game.bytes ?? l.game) !== hex(encodeContractAddress(g.address))) throw new Error('the Treasury does not show the game as bound');
           return { txId: r.public.txId };
         });
 
         await step(`7. deposit ${tn(deposit)} into the Treasury`, async () => {
-          const r = await treasuryHandle.callTx.deposit(deposit);
+          const r = succeeded(await treasuryHandle.callTx.deposit(deposit), 'the deposit');
           const balances = await publicData.queryUnshieldedBalances(t.address).catch(() => null);
           const held = balances ? balances.filter((b) => b.tokenType === unshieldedToken().raw).reduce((s, b) => s + BigInt(b.balance), 0n) : undefined;
           return { txId: r.public.txId, held, note: held !== undefined ? `the Treasury holds ${tn(held)}` : undefined };
@@ -551,11 +581,15 @@ const run = async (mode, values) => {
 
         if (throwaway) {
           const gameHandle = await findDeployedContract(providers(GAME), { contractAddress: g.address, compiledContract: G.c, privateStateId: GAME, initialPrivateState: { oracleSecretKey: oracleSk, organiserSecret } });
-          await step('8. (throwaway) the oracle accepts its key', async () => ({ txId: (await gameHandle.callTx.acceptOracleKey()).public.txId }));
+          await step('8. (throwaway) the oracle accepts its key', async () => {
+            const r = succeeded(await gameHandle.callTx.acceptOracleKey(), 'acceptOracleKey');
+            await settled(g.address, (st) => !ledgerOf(G.mod, st).proposedOracleKey.is_some, 'the oracle key accepted');
+            return { txId: r.public.txId };
+          });
           await step('9. (throwaway) open draw 1: the Treasury pays its opening jackpot across contracts', async () => {
             const close = BigInt(Math.floor(Date.now() / 1000) + 7 * 3600);
-            const r = await gameHandle.callTx.requestDraw(0n, new Uint8Array(32), { is_some: true, value: { salesClose: close, seedCommitment: createHash('sha256').update(hex(randomBytes(32))).digest(), final: false } });
-            const l = ledgerOf(G.mod, await onChain(g.address));
+            const r = succeeded(await gameHandle.callTx.requestDraw(0n, new Uint8Array(32), { is_some: true, value: { salesClose: close, seedCommitment: createHash('sha256').update(hex(randomBytes(32))).digest(), final: false } }), 'requestDraw');
+            const l = ledgerOf(G.mod, await settled(g.address, (st) => ledgerOf(G.mod, st).lastDraw === 1n, 'draw 1 open'));
             return { txId: r.public.txId, carry: l.carry, note: `draw ${l.lastDraw} is open on 7 from ${l.draws.lookup(1n).format.range}, its jackpot ${tn(l.carry)}` };
           });
         }
