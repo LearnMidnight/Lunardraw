@@ -4,6 +4,9 @@
 #   bash rehearsal.sh wallets      makes the v2 keeper's and oracle's wallets (once) and prints
 #                                  their addresses, to fund from the Preprod faucet
 #   bash rehearsal.sh proof        installs and starts v2's own proof server (127.0.0.1:6302)
+#   bash rehearsal.sh sync [--fresh]  syncs both wallets in the background, logging to
+#                                  /root/v2-keeper-wallet.log and /root/v2-oracle-wallet.log (--fresh:
+#                                  forget a saved sync first)
 #   bash rehearsal.sh balances     both wallets' tNIGHT and DUST (each syncs first: the first time
 #                                  takes up to an hour)
 #   nohup bash rehearsal.sh deploy > /root/starfall-v2-rehearsal.log 2>&1 < /dev/null &
@@ -44,6 +47,25 @@ case "${1:-}" in
       timeout 5400 ./nightcast/nightcast wallet show --network preprod --wallet "$w" --proof-server-port 6302 2>&1 | grep -E "^(NIGHT|DUST|Coins)" || echo "(not synced yet, or no funds: try again later)"
     done
     ;;
+  sync)
+    # Sync both wallets in the background (each prints its balances when synced), forgetting
+    # first a saved sync that began before fresh wallets skipped the ledger 8 DUST history.
+    for w in "$KW" "$OW"; do
+      pkill -f -- "--wallet $w" 2>/dev/null && sleep 3 || true
+    done
+    if [ "${2:-}" = "--fresh" ]; then
+      node --input-type=module -e "
+        import { forgetWalletState } from '@nightcast/deploy';
+        import { walletSeed } from './cli/dist/common.js';
+        for (const w of process.argv.slice(1)) console.log(forgetWalletState('preprod', walletSeed(w)) ? 'forgot the saved sync of ' + w : 'no saved sync for ' + w);
+      " "$KW" "$OW"
+    fi
+    for w in "$KW" "$OW"; do
+      log="/root/$(basename "$w" .secret).log"
+      nohup ./nightcast/nightcast wallet show --network preprod --wallet "$w" --proof-server-port 6302 > "$log" 2>&1 < /dev/null &
+      echo "syncing $(basename "$w"): $log"
+    done
+    ;;
   proof)
     cp "$V2/deploy/systemd/lunardraw-proof-v2.service" /etc/systemd/system/
     systemctl daemon-reload
@@ -73,6 +95,6 @@ case "${1:-}" in
     ./lunardraw starfall-v2 status --network preprod
     ;;
   *)
-    die "usage: rehearsal.sh wallets | proof | balances | deploy | start | status"
+    die "usage: rehearsal.sh wallets | sync [--fresh] | proof | balances | deploy | start | status"
     ;;
 esac
