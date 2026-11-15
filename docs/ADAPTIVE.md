@@ -62,8 +62,20 @@ target × `floorPerGame`.
 - A draw already open keeps its format; a move applies from the next draw
   opened.
 
-With weekly draws: `targetDraws = 4`, `retargetEvery = 4`, a jackpot about
-monthly. At ~42,000 games a week that is 7 from 22.
+**At launch: daily draws** (Jack, 15 Nov 2026), `targetDraws = 28`,
+`retargetEvery = 7`: a jackpot about monthly, the format checked every week,
+and a result and smaller prizes every day. Weekly draws with `targetDraws = 4`,
+`retargetEvery = 4` pick the same formats and give the same jackpots in time
+(`contract/v2-sim/jackpot_share.py`: at 2,300, 16,000 and 42,000 games a week,
+the jackpot is won about every 30, 7.5 and 7 weeks either way), but daily keeps
+the game's rhythm and moves the format four times as often. The game starts on
+7 from 20 (`startRung = 0`) so it only moves up as players arrive; at today's
+volume (about 2,300 games a week, the house agents) it stays there. Opening
+deposit: the treasury wallet's 10,000 tNIGHT; first floor 1,840 (28 draws x
+about 330 games x 0.20), so the first jackpot is 8,160 and 1,840 stays in the
+Treasury as its reserve (`daily.mjs`). Sales windows as v1's: a draw sells for
+6 hours to 14 days (`minSales`, `maxSales`); the keeper opens each next draw
+to close at the following 20:00 Brisbane.
 
 ## Prize tables
 
@@ -268,6 +280,8 @@ rule for unshielded tokens to every transaction:
   the refill, a retarget up, waiting to step down and stepping down, a jump of
   four rungs, the final draw; after every stage nothing has been created or
   lost;
+- `daily.mjs`: the launch settings (7 from 20, 10,000 deposit, daily
+  draws), and a week of busy draws moving the ladder up at the seventh;
 - `syndicate.mjs`: a syndicate that wins (the jackpot and a 4-right prize,
   split 2/5 and 3/5), the creator's checks, unspent money refunded after sales
   close, a syndicate that never fills, a void draw after a partial refund, and

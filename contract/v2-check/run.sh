@@ -14,3 +14,4 @@ rm -rf out out-treasury
 node pure.mjs
 node game.mjs
 node syndicate.mjs
+node daily.mjs
