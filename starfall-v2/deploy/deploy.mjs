@@ -24,6 +24,12 @@
  *   node deploy.mjs throwaway --wallet <file> [--deposit 2]
  *       A throwaway deployment with made-up keys (nothing is saved), then accepts its oracle key
  *       and opens draw 1. Leaves the deposit in contracts nobody will use.
+ *   node deploy.mjs rehearsal --wallet <file> --keys <dir> [--deposit 100] [--min-sales 3600]
+ *       A rehearsal: the real contracts with test keys, made here and saved in <dir> (organiser,
+ *       backup, oracle and settlement files, mode 600), the launch settings except a shorter
+ *       shortest sales period (default 1 hour, so the keeper can run a draw every few hours), a
+ *       small deposit, and the oracle key accepted. Draw 1 is the keeper's. Writes the deployment
+ *       record the keeper and oracle read (deployments/starfall-v2-<network>.json).
  *   node deploy.mjs deploy --wallet <file> --organiser <file> --backup <file|64 hex> --oracle <file>
  *                          --settlement <file> [--operator <mn_addr|hex>] [--deposit 10000]
  *       The real deployment. --oracle and --settlement may hold only public keys. The operator
@@ -36,7 +42,7 @@
  * for the game's acceptOracleKey and requestDraw (a throwaway deployment proves those).
  */
 import '@nightcast/deploy/explain-errors';
-import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync } from 'node:fs';
 import { createHash, webcrypto } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -72,7 +78,8 @@ import {
 import { TX_TTL_SECONDS, walletAddress } from '@nightcast/deploy';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const REPO = resolve(HERE, '..');
+// The Lunardraw checkout: deploy.sh copies this folder to its top; in the repository it is starfall-v2/deploy.
+const REPO = [resolve(HERE, '..'), resolve(HERE, '..', '..')].find((r) => existsSync(join(r, 'cli', 'dist', 'common.js'))) ?? resolve(HERE, '..', '..');
 const cli = (m) => import(pathToFileURL(join(REPO, 'cli', 'dist', m)).href);
 const OUT = join(HERE, 'out');
 const STAR = 1_000_000n;
@@ -166,12 +173,12 @@ const isLocked = (a) => a.committee.length === 0 && a.threshold > a.committee.le
 const ledgerOf = (mod, state) => mod.ledger(StateValue.decode(state.data.state.encode()));
 
 /** The game's constructor arguments, in its order. */
-const gameArgs = (p, tAddr) => [
+const gameArgs = (p, tAddr, S = LAUNCH) => [
   p.oracleKey, p.organiserCommitment, p.backupCommitment, p.settlementKey, { bytes: p.operator },
-  LAUNCH.fee, LAUNCH.price, LAUNCH.minSales, LAUNCH.maxSales, LAUNCH.revealWindow, LAUNCH.drawWindow, LAUNCH.settleWindow,
-  LAUNCH.maxTicketsPerDraw, LAUNCH.finalSales, LAUNCH.mustBeWonAfter,
-  LADDER, BigInt(LADDER.length), LAUNCH.startRung, LAUNCH.target, LAUNCH.every, LAUNCH.floor0, LAUNCH.floorPer, LAUNCH.ceiling,
-  { bytes: encodeContractAddress(tAddr) }, { bytes: encodeContractAddress(tAddr) }, LAUNCH.treasuryFee,
+  S.fee, S.price, S.minSales, S.maxSales, S.revealWindow, S.drawWindow, S.settleWindow,
+  S.maxTicketsPerDraw, S.finalSales, S.mustBeWonAfter,
+  LADDER, BigInt(LADDER.length), S.startRung, S.target, S.every, S.floor0, S.floorPer, S.ceiling,
+  { bytes: encodeContractAddress(tAddr) }, { bytes: encodeContractAddress(tAddr) }, S.treasuryFee,
 ];
 
 // ------------------------------------------------------------------ the transactions
@@ -271,15 +278,15 @@ const checkCircuits = (state, name) => {
 };
 
 /** The game's sealed settings, as intended. */
-const checkSettings = (l, p, tAddr) => {
+const checkSettings = (l, p, tAddr, S = LAUNCH) => {
   const same = (a, b) => JSON.stringify(a, (_k, v) => (typeof v === 'bigint' ? v.toString() : v instanceof Uint8Array ? hex(v) : v)) === JSON.stringify(b, (_k, v) => (typeof v === 'bigint' ? v.toString() : v instanceof Uint8Array ? hex(v) : v));
   const checks = [
-    ['price 1.3, operator 0.20, Treasury 0.10', l.ticketPrice === LAUNCH.price && l.feePerGame === LAUNCH.fee && l.treasuryPerGame === LAUNCH.treasuryFee],
-    ['ceiling 0.71 a combination, floor 0.20 a game, first floor 1,840', l.ceilingPerCombination === LAUNCH.ceiling && l.floorPerGame === LAUNCH.floorPer && l.floor === LAUNCH.floor0],
-    ['the 12-rung ladder with its prize tables, starting on 7 from 20', same(l.ladder, LADDER) && l.rungCount === 12n && l.rung === LAUNCH.startRung && l.aim === LAUNCH.startRung],
-    ['daily: target 28 draws, retarget every 7, never forced', l.targetDraws === LAUNCH.target && l.retargetEvery === LAUNCH.every && l.mustBeWonAfter === LAUNCH.mustBeWonAfter],
-    ['sales 6 h to 14 days, final draw at least 7 days, 10,000 tickets a draw', l.minSales === LAUNCH.minSales && l.maxSales === LAUNCH.maxSales && l.finalSales === LAUNCH.finalSales && l.maxTicketsPerDraw === LAUNCH.maxTicketsPerDraw],
-    ['windows: reveal 1 h, draw 2 h, settle 1 day', l.revealWindow === LAUNCH.revealWindow && l.drawWindow === LAUNCH.drawWindow && l.settleWindow === LAUNCH.settleWindow],
+    ['price 1.3, operator 0.20, Treasury 0.10', l.ticketPrice === S.price && l.feePerGame === S.fee && l.treasuryPerGame === S.treasuryFee],
+    ['ceiling 0.71 a combination, floor 0.20 a game, first floor 1,840', l.ceilingPerCombination === S.ceiling && l.floorPerGame === S.floorPer && l.floor === S.floor0],
+    ['the 12-rung ladder with its prize tables, starting on 7 from 20', same(l.ladder, LADDER) && l.rungCount === 12n && l.rung === S.startRung && l.aim === S.startRung],
+    ['daily: target 28 draws, retarget every 7, never forced', l.targetDraws === S.target && l.retargetEvery === S.every && l.mustBeWonAfter === S.mustBeWonAfter],
+    [`sales ${Number(S.minSales) / 3600} h to 14 days, final draw at least 7 days, 10,000 tickets a draw`, l.minSales === S.minSales && l.maxSales === S.maxSales && l.finalSales === S.finalSales && l.maxTicketsPerDraw === S.maxTicketsPerDraw],
+    ['windows: reveal 1 h, draw 2 h, settle 1 day', l.revealWindow === S.revealWindow && l.drawWindow === S.drawWindow && l.settleWindow === S.settleWindow],
     ['the organiser, backup, settlement key and operator given', hex(l.organiser) === hex(p.organiserCommitment) && hex(l.backupOrganiser) === hex(p.backupCommitment) && l.settlementKey.x === p.settlementKey.x && l.settlementKey.y === p.settlementKey.y && hex(l.operator.bytes) === hex(p.operator)],
     ['the oracle key proposed, no draw yet, no syndicate yet', l.proposedOracleKey.is_some && l.proposedOracleKey.value.x === p.oracleKey.x && l.lastDraw === 0n && l.lastSyndicate === 0n],
     ['the Treasury it calls and pays is the deployed Treasury', hex(l.treasuryAddress.bytes) === hex(encodeContractAddress(tAddr)) && hex(l.treasury.bytes ?? l.treasury) === hex(encodeContractAddress(tAddr))],
@@ -402,6 +409,28 @@ const measure = async (values) => {
   say(`\nThe deploy takes ${f.inDeploy.length} circuits (budget ${DEPLOY_BUDGET} of a block); ${f.later.length} are added after: ${f.later.join(', ')}.`);
 };
 
+/**
+ * A rehearsal's test keys, made here and saved in `dir` in the CLI's key file formats (mode 600;
+ * an existing file is never overwritten): the organiser, the backup organiser, the oracle and the
+ * settlement key. Test keys only: a rehearsal holds test money.
+ */
+function rehearsalKeys(G, dir) {
+  if (!dir) throw new Error('--keys <dir> is required: the rehearsal\'s test keys are saved there');
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const save = (name, body) => writeFileSync(join(dir, name), JSON.stringify(body, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+  const k = madeUp(G);
+  const backupSecret = randomBytes(32);
+  const settlementSk = randomScalar();
+  k.p.backupCommitment = G.mod.pureCircuits.organiserCommitmentOf(backupSecret);
+  k.p.settlementKey = G.mod.pureCircuits.settlementPublicKey(settlementSk);
+  save('v2-organiser.secret', { role: 'organiser', secret: hex(k.organiserSecret), public: hex(k.p.organiserCommitment) });
+  save('v2-backup.secret', { role: 'organiser', secret: hex(backupSecret), public: hex(k.p.backupCommitment) });
+  save('v2-oracle.secret', { role: 'oracle', secret: k.oracleSk.toString(16).padStart(64, '0'), public: { x: k.p.oracleKey.x.toString(), y: k.p.oracleKey.y.toString() } });
+  save('v2-settlement.secret', { role: 'settlement', secret: settlementSk.toString(), public: { x: k.p.settlementKey.x.toString(), y: k.p.settlementKey.y.toString() } });
+  say(`test keys saved in ${dir}: v2-organiser.secret, v2-backup.secret, v2-oracle.secret, v2-settlement.secret`);
+  return k;
+}
+
 /** Made-up keys for offline and throwaway runs: kept only in memory, never written down. */
 function madeUp(G) {
   const oracleSk = randomScalar();
@@ -430,8 +459,13 @@ const run = async (mode, values) => {
   const T = await compiled(TREASURY, treasuryWitnesses);
   const G = await compiled(GAME, gameWitnesses);
   const throwaway = mode === 'throwaway';
-  const deposit = values.deposit !== undefined ? BigInt(Math.round(Number(values.deposit) * 1e6)) : throwaway ? 2n * STAR : LAUNCH.deposit;
-  const record = { mode, network, started: new Date().toISOString(), settings: LAUNCH, steps: [] };
+  const rehearsal = mode === 'rehearsal';
+  // A rehearsal sells for at least an hour (not 6), so its draws can come every few hours.
+  const S = rehearsal ? { ...LAUNCH, minSales: BigInt(values['min-sales'] ?? 3600) } : LAUNCH;
+  const deposit = values.deposit !== undefined ? BigInt(Math.round(Number(values.deposit) * 1e6)) : throwaway ? 2n * STAR : rehearsal ? 100n * STAR : LAUNCH.deposit;
+  const recordPath = join(REPO, 'deployments', `starfall-v2-${network}.json`);
+  if (!throwaway && existsSync(recordPath)) throw new Error(`${recordPath} exists: move it away first (it is the deployment the keeper and oracle run)`);
+  const record = { mode, network, started: new Date().toISOString(), settings: S, steps: [] };
   const file = values.record ?? join(HERE, `deployment-${mode}-${network}.json`);
   const save = () => writeFileSync(file, JSON.stringify(record, (_k, v) => (typeof v === 'bigint' ? v.toString() : v instanceof Uint8Array ? hex(v) : v), 2) + '\n');
   const step = async (name, f) => {
@@ -453,11 +487,11 @@ const run = async (mode, values) => {
     }
   };
   // The keys: from files for a real deployment; made up (and never written down) for a throwaway one.
-  const made = throwaway ? madeUp(G) : undefined;
+  const made = throwaway ? madeUp(G) : rehearsal ? rehearsalKeys(G, values.keys) : undefined;
   const oracleSk = made?.oracleSk;
   const organiserSecret = made?.organiserSecret;
   let p;
-  if (throwaway) {
+  if (made) {
     p = made.p;
   } else {
     for (const k of ['organiser', 'backup', 'oracle', 'settlement']) if (!values[k]) throw new Error(`--${k} is required`);
@@ -517,7 +551,7 @@ const run = async (mode, values) => {
         modules[t.address] = T.mod;
 
         const g = await step('2. deploy the game with the circuits that fit and a single-use maintenance key', async () => {
-          const built = await gameDeploy(providers(GAME), G, gameArgs(p, t.address), networkId);
+          const built = await gameDeploy(providers(GAME), G, gameArgs(p, t.address, S), networkId);
           say(`   ${built.base.length} circuits in the deploy (${built.fullness.max.toFixed(3)} of a block's ${built.fullness.dimension}); ${built.later.length} to add after`);
           const r = succeeded(await submitTx(providers(GAME), { unprovenTx: built.unprovenTx }), 'the game deploy');
           await fresh.privateStateProvider.setSigningKey(built.address, built.signingKey);
@@ -555,7 +589,7 @@ const run = async (mode, values) => {
             { name: 'the game is locked (an empty committee nobody can sign for)', ok: isLocked(gs.maintenanceAuthority), detail: gs.maintenanceAuthority.toString() },
             { name: 'the Treasury: exactly its 3 circuits, each with the compiled verifier key', ...checkCircuits(ts, TREASURY) },
             { name: 'the Treasury is locked', ok: isLocked(ts.maintenanceAuthority), detail: ts.maintenanceAuthority.toString() },
-            ...checkSettings(ledgerOf(G.mod, gs), p, t.address),
+            ...checkSettings(ledgerOf(G.mod, gs), p, t.address, S),
             { name: 'the Treasury is not bound yet', ok: ledgerOf(T.mod, ts).bound === false },
           ];
           record.checks = results;
@@ -579,6 +613,27 @@ const run = async (mode, values) => {
           return { txId: r.public.txId, held, note: held !== undefined ? `the Treasury holds ${tn(held)}` : undefined };
         });
 
+        if (rehearsal) {
+          const gameHandle = await findDeployedContract(providers(GAME), { contractAddress: g.address, compiledContract: G.c, privateStateId: GAME, initialPrivateState: { oracleSecretKey: oracleSk } });
+          await step('8. (rehearsal) the oracle accepts its key', async () => {
+            const r = succeeded(await gameHandle.callTx.acceptOracleKey(), 'acceptOracleKey');
+            await settled(g.address, (st) => ledgerOf(G.mod, st).oracleKeyReady, 'the oracle key accepted');
+            return { txId: r.public.txId };
+          });
+        }
+        if (!throwaway) {
+          // What the keeper and the oracle read (cli/src/starfall-v2.ts).
+          writeFileSync(recordPath, JSON.stringify({
+            network, contractAddress: g.address, treasuryAddress: t.address, deployedAt: new Date().toISOString(), mode,
+            parameters: {
+              organiserCommitment: hex(p.organiserCommitment),
+              settlementKey: { x: p.settlementKey.x.toString(), y: p.settlementKey.y.toString() },
+              oracleKey: { x: p.oracleKey.x.toString(), y: p.oracleKey.y.toString() },
+            },
+            settings: Object.fromEntries(Object.entries(S).map(([k, v]) => [k, v.toString()])),
+          }, null, 2) + '\n', { flag: 'wx' });
+          say(`\nthe deployment record: ${recordPath}`);
+        }
         if (throwaway) {
           const gameHandle = await findDeployedContract(providers(GAME), { contractAddress: g.address, compiledContract: G.c, privateStateId: GAME, initialPrivateState: { oracleSecretKey: oracleSk, organiserSecret } });
           await step('8. (throwaway) the oracle accepts its key', async () => {
@@ -595,6 +650,8 @@ const run = async (mode, values) => {
         }
         record.verdict = throwaway
           ? 'PASS: a throwaway Starfall v2 deployed, locked, checked, bound, funded, and its first draw opened with the Treasury paying across contracts'
+          : rehearsal
+          ? `REHEARSAL DEPLOYED: Starfall v2 ${g.address} and its Treasury ${t.address}, locked and checked; the Treasury bound and holding ${tn(deposit)}; the oracle key accepted. Next: start the v2 keeper and oracle.`
           : `DEPLOYED: Starfall v2 ${g.address} and its Treasury ${t.address}, locked and checked; the Treasury bound and holding ${tn(deposit)}. Next: the oracle accepts its key, then the keeper opens draw 1.`;
       } finally {
         await wallet.stop();
@@ -632,13 +689,13 @@ const main = async () => {
     options: {
       wallet: { type: 'string' }, network: { type: 'string' }, 'proof-server-port': { type: 'string' }, record: { type: 'string' },
       organiser: { type: 'string' }, backup: { type: 'string' }, oracle: { type: 'string' }, settlement: { type: 'string' },
-      operator: { type: 'string' }, deposit: { type: 'string' }, 'params-from': { type: 'string' },
+      operator: { type: 'string' }, deposit: { type: 'string' }, 'params-from': { type: 'string' }, keys: { type: 'string' }, 'min-sales': { type: 'string' },
     },
   });
   const mode = positionals[0];
   if (mode === 'offline') return offline();
   if (mode === 'measure') return measure(values);
-  if (mode !== 'throwaway' && mode !== 'deploy') throw new Error('usage: node deploy.mjs offline | throwaway --wallet <file> | deploy --wallet <file> --organiser <file> --backup <file|hex> --oracle <file> --settlement <file>');
+  if (mode !== 'throwaway' && mode !== 'rehearsal' && mode !== 'deploy') throw new Error('usage: node deploy.mjs offline | measure | throwaway --wallet <file> | rehearsal --wallet <file> --keys <dir> | deploy --wallet <file> --organiser <file> --backup <file|hex> --oracle <file> --settlement <file>');
   if (!values.wallet) throw new Error('--wallet <file> is required');
   if (!existsSync(join(OUT, GAME, 'keys')) || !existsSync(join(OUT, TREASURY, 'keys'))) throw new Error(`${OUT} must hold the compiled game and Treasury`);
   return run(mode, values);

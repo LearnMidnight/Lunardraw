@@ -194,7 +194,7 @@ const backupCommitmentFrom = (value: string): Uint8Array => {
  * balances), and paid again from the same proof if the node calls the fee
  * proof stale. See fresh-fees.ts.
  */
-const freshFees = <P extends ReturnType<typeof starfallProviders>>(
+export const freshFees = <P extends Pick<ReturnType<typeof starfallProviders>, 'walletProvider' | 'midnightProvider'>>(
   providers: P,
   wallet: Parameters<typeof waitForTip>[0],
   logger: { info(msg: string): void; warn(msg: string): void; error(msg: string): void },
@@ -214,7 +214,7 @@ const freshFees = <P extends ReturnType<typeof starfallProviders>>(
 };
 
 /** The settlement key file: the secret scalar (decimal) and its public point. */
-const settlementFrom = (path: string, needSecret: boolean): { pk: { x: bigint; y: bigint }; sk?: bigint } => {
+export const settlementFrom = (path: string, needSecret: boolean): { pk: { x: bigint; y: bigint }; sk?: bigint } => {
   const f = readKeyFile(path, SETTLEMENT);
   if (f.secret) {
     const sk = BigInt(f.secret);
@@ -257,7 +257,7 @@ const walletBytes = (wallet: { unshieldedKeystore: { getAddress(): string } }): 
  * waited for DUST longer than `minutes` (the caller then exits with RESTART;
  * see dust-wait.ts).
  */
-const openServiceWallet = async (session: Session, seed: string | undefined, minutes: number, quietMinutes = 15) => {
+export const openServiceWallet = async (session: Session, seed: string | undefined, minutes: number, quietMinutes = 15) => {
   const dust = deadline(minutes, () =>
     session.logger.error(`still no DUST after ${minutes} minutes of waiting (the wallet's view may be stale); restarting to resync it`),
   );

@@ -532,9 +532,11 @@ jobs:
   # transaction). The jobs above build the live v1 game with ${{ env.COMPACT_TOOLCHAIN }}.
   starfall-v2:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          submodules: true
 
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
@@ -548,5 +550,22 @@ jobs:
           curl --proto '=https' --tlsv1.2 -LsSf -o c.zip https://github.com/midnightntwrk/compact/releases/download/compactc-v0.36.0/compactc_v0.36.0_x86_64-unknown-linux-musl.zip
           unzip -q c.zip && ./compactc --version
 
-      - name: Starfall v2 checks (pure, game, syndicates, daily draws)
+      # The keeper and the CLI, for keeper.mjs (the keeper and the oracle running v2 in memory).
+      - name: Install Compact toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf https://github.com/midnightntwrk/compact/releases/latest/download/compact-installer.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Select compiler ${{ env.COMPACT_TOOLCHAIN }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: compact update "$COMPACT_TOOLCHAIN"
+
+      - name: Install, compile and build
+        run: |
+          npm ci --no-audit --no-fund
+          npm run compact
+          npm run build
+
+      - name: Starfall v2 checks (pure, game, syndicates, daily draws, the keeper and oracle)
         run: COMPACTC="$RUNNER_TEMP/compactc/compactc" bash starfall-v2/check/run.sh

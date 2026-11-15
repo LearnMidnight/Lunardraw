@@ -70,15 +70,16 @@
 // decrypts; the settlement key is sealed for the life of this contract.
 //
 // A deploy transaction carries every circuit's verifier key and has to fit
-// Midnight's block limits: on ledger 9 (Preprod, 14 Nov 2026) 12 circuits of
-// this size fitted and 15 were refused. The game's 12 circuits are merged by
-// role as in v0 (acceptOracleKey also approves a hand-over, changeOrganiser
-// proposes, accepts and recovers, requestDraw(0, ...) opens a draw,
-// finaliseDraw pays the fees and settles with the Treasury). The 5 syndicate
-// circuits are added after the deploy by maintenance transactions, and only
-// then is the contract locked (its maintenance authority replaced by one
-// nobody can use) and the first draw opened: tested on Preprod on 15 Nov 2026
-// with 18 circuits (starfall-v2/probe).
+// Midnight's block limits, of which bytes written binds. The game's 12 main
+// circuits are merged by role as in v0 (acceptOracleKey also approves a
+// hand-over, changeOrganiser proposes, accepts and recovers, requestDraw(0,
+// ...) opens a draw, finaliseDraw pays the fees and settles with the
+// Treasury), and there are 5 syndicate circuits. With this contract's starting
+// state, 10 of the 17 fit in the deploy; the other 7 are added in one
+// maintenance update signed with a single-use key, and only then is the
+// contract locked (its maintenance authority replaced by one nobody can use)
+// and the first draw opened (starfall-v2/deploy/deploy.mjs; a throwaway
+// deployment did all of it on Preprod on 15 Nov 2026).
 
 pragma language_version >= 0.28;
 

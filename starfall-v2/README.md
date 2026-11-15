@@ -27,5 +27,11 @@ launch settings, then bound, the Treasury's game checked, the deposit made and d
 `deploy.mjs` needs the compiled keys in `deploy/out` (`compactc src/settlement.compact out/settlement`,
 the same for the Treasury; the keys are too big for git) and a built Lunardraw checkout beside it.
 
-Still to come: the keeper and oracle, the agents and kit (with syndicates), the player prover and the
-website.
+The keeper and the oracle are Starfall's (`keeper/`), with v2's view and syndicate steps and the v2
+chain adapter in the CLI: `./lunardraw starfall-v2 keeper|oracle|status` (`cli/src/starfall-v2*.ts`;
+`check/keeper.mjs` runs them through whole draws in memory). On the VM, v2 runs from its own
+checkout beside the live game: `deploy/setup-vm.sh` (the checkout, Compact 0.36, the contracts with
+their keys, every check), then `deploy/rehearsal.sh` (wallets, v2's proof server on 6302, a
+rehearsal deployment with test keys, and the keeper and oracle as systemd services).
+
+Still to come: the agents and kit (with syndicates), the player prover and the website.
