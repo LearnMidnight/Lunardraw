@@ -20,8 +20,9 @@ compiled with Compact 0.31.1 and keeps running; v2 needs Compact 0.36 (ledger 9)
 `run.sh` needs Compact 0.36: a `compactc` 0.36 binary on `PATH`, or `COMPACTC=/path/to/compactc`, or
 `COMPACTC="compact compile"` with the Compact tool set to 0.36.0 (`compact update 0.36.0`).
 
-The deploy order: the Treasury (locked from the start), then the game with 12 circuits, the 5
-syndicate circuits added and the game locked, both checked against the compiled contracts and the
+The deploy order: the Treasury (locked from the start), then the game with the circuits that fit in
+one deploy (10; `deploy.mjs measure` prints the costs), the other 7 added one transaction each and
+the game locked, both checked against the compiled contracts and the
 launch settings, then bound, the Treasury's game checked, the deposit made and draw 1 opened.
 `deploy.mjs` needs the compiled keys in `deploy/out` (`compactc src/settlement.compact out/settlement`,
 the same for the Treasury; the keys are too big for git) and a built Lunardraw checkout beside it.

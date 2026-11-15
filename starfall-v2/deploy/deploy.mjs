@@ -5,9 +5,9 @@
  *
  *   1. the Treasury, already locked (its maintenance authority is an empty committee from the
  *      deploy transaction itself: nobody ever holds a key for it);
- *   2. the game with its 12 game circuits and a single-use maintenance key that exists only in
- *      this process's memory (one deploy carries 12 circuits of this size);
- *   3. the 5 syndicate circuits' verifier keys, one maintenance transaction each;
+ *   2. the game with as many of its circuits as fit (DEPLOY_BUDGET) and a single-use maintenance
+ *      key that exists only in this process's memory;
+ *   3. the rest of its circuits' verifier keys, one maintenance transaction each;
  *   4. the game locked (its authority replaced by an empty committee);
  *   5. checks on the chain: exactly the game's 17 circuits and the Treasury's 3, each with the
  *      compiled verifier key; both authorities locked; the game's sealed settings and Treasury
@@ -59,6 +59,7 @@ import {
   ContractState,
   ContractDeploy,
   ContractMaintenanceAuthority,
+  ContractOperationVersionedVerifierKey,
   Intent,
   LedgerParameters,
   MaintenanceUpdate,
@@ -67,6 +68,7 @@ import {
   ZswapChainState,
   signData,
   unshieldedToken,
+  VerifierKeyInsert,
 } from '@midnight-ntwrk/midnight-js-protocol/v9';
 import { TX_TTL_SECONDS, walletAddress } from '@nightcast/deploy';
 
@@ -127,6 +129,14 @@ export const LAUNCH = {
 const GAME = 'settlement', TREASURY = 'treasury';
 const SYNDICATE_CIRCUITS = ['createSyndicate', 'joinSyndicate', 'buySyndicateTickets', 'paySyndicateMember', 'refundSyndicate'];
 const TREASURY_CIRCUITS = ['bind', 'deposit', 'release'];
+/**
+ * How full of a block (its largest cost dimension, priced with the ledger's initial parameters, as
+ * `measure` prints it) the game's deploy may be. Preprod accepted the probe's 12-circuit deploy at
+ * 0.600 of bytesWritten and refused its 15-circuit one at 0.736 and v2's 12-circuit one at 0.677
+ * (v2's starting data alone is 0.138), so the deploy stays at 0.55 and the rest are added after.
+ */
+const DEPLOY_BUDGET = 0.55;
+const COST_DIMENSIONS = ['readTime', 'computeTime', 'blockUsage', 'bytesWritten', 'bytesChurned'];
 const circuitsOf = (name) => readdirSync(join(OUT, name, 'keys')).filter((f) => f.endsWith('.verifier')).map((f) => f.slice(0, -'.verifier'.length)).sort();
 
 // ------------------------------------------------------------------ compiled contracts
@@ -179,22 +189,52 @@ const treasuryDeploy = async (providers, T, binderSecret, networkId) => {
 };
 
 /**
- * The game's deploy with its 12 game circuits: the constructor as midnight-js runs it (which also
- * samples the single-use maintenance key and puts it in the authority), rebuilt with the same
- * data, balance and authority and without the syndicate circuits.
+ * The game's deploy: the constructor as midnight-js runs it (which also samples the single-use
+ * maintenance key and puts it in the authority), rebuilt with the same data, balance and authority
+ * and only the circuits that fit in DEPLOY_BUDGET (smallest verifier key first, so the fewest are
+ * left to add). `later` are added one maintenance transaction each before the lock.
  */
-const gameDeploy = async (providers, G, args, networkId) => {
+const gameDeploy = async (providers, G, args, networkId, pick = (full) => fitDeploy(full, networkId).inDeploy) => {
   const built = await createUnprovenDeployTx(providers, { compiledContract: G.c, privateStateId: GAME, initialPrivateState: {}, args });
   const full = ContractState.deserialize(built.public.initialContractState.serialize());
+  const inDeploy = pick(full);
+  const d = withOps(full, inDeploy, networkId);
+  return { ...d, full, later: opNames(full).filter((o) => !inDeploy.includes(o)), fullness: fullnessOf(d.tx), signingKey: built.private.signingKey };
+};
+
+/** The largest share of a block's limit the transaction uses, and in which dimension (Infinity if over a limit). */
+const fullnessOf = (tx) => {
+  const params = LedgerParameters.initialParameters();
+  let n;
+  try { n = params.normalizeFullness(tx.cost(params)); } catch { return { max: Infinity, dimension: 'over a limit' }; }
+  const dimension = COST_DIMENSIONS.reduce((a, b) => (n[b] > n[a] ? b : a));
+  return { max: n[dimension], dimension };
+};
+
+const vkBytes = (o) => readFileSync(join(OUT, GAME, 'keys', `${o}.verifier`)).length;
+
+/** The game's circuits, smallest verifier key first, taken into the deploy while it stays in DEPLOY_BUDGET. */
+const fitDeploy = (full, networkId) => {
+  const order = opNames(full).sort((a, b) => vkBytes(a) - vkBytes(b) || (a < b ? -1 : 1));
+  const inDeploy = [];
+  for (const o of order) {
+    if (fullnessOf(withOps(full, [...inDeploy, o], networkId).tx).max > DEPLOY_BUDGET) break;
+    inDeploy.push(o);
+  }
+  if (fullnessOf(withOps(full, [], networkId).tx).max > DEPLOY_BUDGET) throw new Error('the game\'s data alone is over the deploy budget');
+  return { inDeploy, later: order.filter((o) => !inDeploy.includes(o)) };
+};
+
+/** A deploy of `full`'s data, balance and authority with only the operations `ops`. */
+const withOps = (full, ops, networkId) => {
   const state = new ContractState();
   state.data = full.data;
   state.balance = full.balance;
   state.maintenanceAuthority = full.maintenanceAuthority;
-  const base = opNames(full).filter((o) => !SYNDICATE_CIRCUITS.includes(o));
-  for (const op of base) state.setOperation(op, full.operation(op));
+  for (const op of ops) state.setOperation(op, full.operation(op));
   const deploy = new ContractDeploy(state);
   const tx = Transaction.fromParts(networkId, undefined, undefined, Intent.new(ttl()).addDeploy(deploy));
-  return { deploy, address: String(deploy.address), full, base, signingKey: built.private.signingKey, unprovenTx: LedgerTransaction.seal('v9', 'Unproven', tx) };
+  return { deploy, address: String(deploy.address), base: ops, tx, unprovenTx: LedgerTransaction.seal('v9', 'Unproven', tx) };
 };
 
 /** The lock: the authority replaced by an empty committee (threshold 1: nobody can ever sign). */
@@ -273,17 +313,76 @@ const offline = async () => {
   const p = madeUp(G).p;
   p.operator = randomBytes(32);
   const g = await gameDeploy(providers(GAME), G, gameArgs(p, t.address), 'preprod');
-  check(`the game deploy builds with its 12 game circuits (the constructor's own checks passed): ${g.base.join(', ')}`, g.base.length === 12 && opNames(g.deploy.initialState).length === 12);
+  check(`the game deploy builds (the constructor's own checks passed) with ${g.base.length} circuits, ${g.fullness.max.toFixed(3)} of a block's ${g.fullness.dimension} (budget ${DEPLOY_BUDGET}): ${g.base.join(', ')}`, g.base.length >= 1 && opNames(g.deploy.initialState).length === g.base.length && g.fullness.max <= DEPLOY_BUDGET);
+  const biggestAdd = Math.max(...g.later.map((o) => fullnessOf(Transaction.fromParts('preprod', undefined, undefined, Intent.new(ttl()).addMaintenanceUpdate(new MaintenanceUpdate(g.address, [new VerifierKeyInsert(o, new ContractOperationVersionedVerifierKey('v4', g.full.operation(o).verifierKey))], 0n)))).max));
+  check(`the ${g.later.length} added afterwards, one transaction each (the largest ${biggestAdd.toFixed(3)} of a block): ${g.later.join(', ')}`, g.later.length + g.base.length === 17 && biggestAdd <= DEPLOY_BUDGET);
   check('its authority is the single-use key alone, counter 0', g.full.maintenanceAuthority.committee.length === 1 && g.full.maintenanceAuthority.threshold === 1 && g.full.maintenanceAuthority.counter === 0n);
-  check('the full contract (what the chain will hold after the 5 additions) has exactly the compiled circuits and keys', checkCircuits(g.full, GAME).ok, checkCircuits(g.full, GAME).detail);
+  check(`the full contract (what the chain will hold after the ${g.later.length} additions) has exactly the compiled circuits and keys`, checkCircuits(g.full, GAME).ok, checkCircuits(g.full, GAME).detail);
   for (const c of checkSettings(ledgerOf(G.mod, g.deploy.initialState), p, t.address)) check(`settings: ${c.name}`, c.ok);
-  const lock = lockUpdate(g.address, { counter: 5n }, g.signingKey);
-  check('the lock, after the 5 additions, replaces the authority with an empty committee at counter 6', lock.counter === 5n && isLocked(lock.updates[0].authority) && lock.updates[0].authority.counter === 6n && lock.signatures.length === 1);
+  const adds = BigInt(g.later.length);
+  const lock = lockUpdate(g.address, { counter: adds }, g.signingKey);
+  check(`the lock, after the ${adds} additions, replaces the authority with an empty committee at counter ${adds + 1n}`, lock.counter === adds && isLocked(lock.updates[0].authority) && lock.updates[0].authority.counter === adds + 1n && lock.signatures.length === 1);
   check(`the deploy transactions are ledger 9 (Treasury and game)`, t.unprovenTx.era === 'v9' && g.unprovenTx.era === 'v9');
-  const vk = SYNDICATE_CIRCUITS.map((c) => readFileSync(join(OUT, GAME, 'keys', `${c}.verifier`)).length);
-  check(`the 5 added verifier keys: ${vk.join(' + ')} = ${vk.reduce((a, b) => a + b, 0).toLocaleString('en')} bytes`, vk.every((n) => n > 1000));
+  const vk = g.later.map(vkBytes);
+  check(`the ${vk.length} added verifier keys: ${vk.join(' + ')} = ${vk.reduce((a, b) => a + b, 0).toLocaleString('en')} bytes`, vk.every((n) => n > 1000));
   say(failed ? `\n${failed} FAILED` : '\nall offline checks passed');
   if (failed) process.exitCode = 1;
+};
+
+/**
+ * What a deploy costs against the block limits, dimension by dimension: the game's data alone, then
+ * with circuits added smallest key first, and the Treasury. `params` is the chain's (from a deployed
+ * contract's query, `--params-from <address>`) or the ledger's initial ones.
+ */
+const measure = async (values) => {
+  const { states, chain } = standInChain();
+  const providers = (name) => ({
+    privateStateProvider: inMemoryPrivateStateProvider(), publicDataProvider: chain,
+    walletProvider: { getCoinPublicKey: () => '0'.repeat(64), getEncryptionPublicKey: () => '0'.repeat(64) },
+    config: { networkId: 'preprod', ttlSeconds: TX_TTL_SECONDS }, zkConfigProvider: new NodeZkConfigProvider(join(OUT, name), { verify: 'require-if-present' }),
+  });
+  let params = LedgerParameters.initialParameters();
+  let from = 'the ledger\'s initial parameters';
+  if (values['params-from']) {
+    const common = await cli('common.js');
+    const net = common.networkConfig?.(values.network ?? 'preprod') ?? common.NETWORKS?.[values.network ?? 'preprod'];
+    const pd = indexerPublicDataProvider(net.indexer, net.indexerWS);
+    const r = await pd.queryZSwapAndContractState(values['params-from']);
+    if (!r) throw new Error(`no contract at ${values['params-from']}`);
+    params = LedgerParameters.deserialize(r.ledgerParameters ? (r.ledgerParameters.serialize?.() ?? r.ledgerParameters) : r[2].serialize());
+    from = `the chain's parameters (read with ${values['params-from'].slice(0, 12)}...)`;
+  }
+  say(`Priced with ${from}. Each number is the share of a block's limit (1.00 = full).\n`);
+  const dims = ['readTime', 'computeTime', 'blockUsage', 'bytesWritten', 'bytesChurned'];
+  say(['what'.padEnd(46), ...dims.map((d) => d.padStart(13)), '   bytes'].join(''));
+  const line = (what, tx) => {
+    const c = tx.cost(params);
+    let n;
+    try { n = params.normalizeFullness(c); } catch (e) { n = null; }
+    const size = tx.serialize().length;
+    say([what.padEnd(46), ...dims.map((d) => (n ? n[d].toFixed(3) : String(c[d])).padStart(13)), String(size).padStart(8), n ? '' : '   OVER A LIMIT (raw costs shown)'].join(''));
+    return n;
+  };
+  const T = await compiled(TREASURY, treasuryWitnesses);
+  const G = await compiled(GAME, gameWitnesses);
+  const t = await treasuryDeploy(providers(TREASURY), T, randomBytes(32), 'preprod');
+  line('Treasury (3 circuits)', Transaction.fromParts('preprod', undefined, undefined, Intent.new(ttl()).addDeploy(t.deploy)));
+  states.set(t.address, ContractState.deserialize(t.deploy.initialState.serialize()));
+  const p = madeUp(G).p;
+  p.operator = randomBytes(32);
+  const g = await gameDeploy(providers(GAME), G, gameArgs(p, t.address), 'preprod', () => []);
+  const vk = (o) => readFileSync(join(OUT, GAME, 'keys', `${o}.verifier`)).length;
+  const order = opNames(g.full).sort((a, b) => vk(a) - vk(b) || (a < b ? -1 : 1));
+  say(`the game's starting state with no circuits: ${g.deploy.initialState.serialize().length} bytes`);
+  line('game, data only', g.tx);
+  for (let i = 1; i <= order.length; i++) {
+    const d = withOps(g.full, order.slice(0, i), 'preprod');
+    line(`game + ${i} (${order[i - 1]}, ${vk(order[i - 1])} B)`, d.tx);
+  }
+  const base = opNames(g.full).filter((o) => !SYNDICATE_CIRCUITS.includes(o));
+  line('game + the 12 game circuits (refused on Preprod)', withOps(g.full, base, 'preprod').tx);
+  const f = fitDeploy(g.full, 'preprod');
+  say(`\nThe deploy takes ${f.inDeploy.length} circuits (budget ${DEPLOY_BUDGET} of a block); ${f.later.length} are added after: ${f.later.join(', ')}.`);
 };
 
 /** Made-up keys for offline and throwaway runs: kept only in memory, never written down. */
@@ -390,16 +489,18 @@ const run = async (mode, values) => {
         record.treasury = t.address;
         modules[t.address] = T.mod;
 
-        const g = await step('2. deploy the game with its 12 game circuits and a single-use maintenance key', async () => {
+        const g = await step('2. deploy the game with the circuits that fit and a single-use maintenance key', async () => {
           const built = await gameDeploy(providers(GAME), G, gameArgs(p, t.address), networkId);
+          say(`   ${built.base.length} circuits in the deploy (${built.fullness.max.toFixed(3)} of a block's ${built.fullness.dimension}); ${built.later.length} to add after`);
           const r = await submitTx(providers(GAME), { unprovenTx: built.unprovenTx });
           await fresh.privateStateProvider.setSigningKey(built.address, built.signingKey);
           const s = await onChain(built.address);
-          return { address: built.address, txId: r.txId, circuits: opNames(s).length, note: `${built.address}, ${opNames(s).length} circuits on chain` };
+          if (opNames(s).join() !== built.base.join() && opNames(s).join() !== [...built.base].sort().join()) throw new Error(`the chain shows other circuits: ${opNames(s).join(', ')}`);
+          return { address: built.address, txId: r.txId, circuits: opNames(s).length, later: built.later, note: `${built.address}, ${opNames(s).length} circuits on chain` };
         });
         record.game = g.address;
 
-        for (const op of SYNDICATE_CIRCUITS) {
+        for (const op of g.later) {
           await step(`3. add ${op}`, async () => {
             const vk = readFileSync(join(OUT, GAME, 'keys', `${op}.verifier`));
             const r = await submitInsertVerifierKeyTx(providers(GAME), G.c, g.address, op, vk);
@@ -497,11 +598,12 @@ const main = async () => {
     options: {
       wallet: { type: 'string' }, network: { type: 'string' }, 'proof-server-port': { type: 'string' }, record: { type: 'string' },
       organiser: { type: 'string' }, backup: { type: 'string' }, oracle: { type: 'string' }, settlement: { type: 'string' },
-      operator: { type: 'string' }, deposit: { type: 'string' },
+      operator: { type: 'string' }, deposit: { type: 'string' }, 'params-from': { type: 'string' },
     },
   });
   const mode = positionals[0];
   if (mode === 'offline') return offline();
+  if (mode === 'measure') return measure(values);
   if (mode !== 'throwaway' && mode !== 'deploy') throw new Error('usage: node deploy.mjs offline | throwaway --wallet <file> | deploy --wallet <file> --organiser <file> --backup <file|hex> --oracle <file> --settlement <file>');
   if (!values.wallet) throw new Error('--wallet <file> is required');
   if (!existsSync(join(OUT, GAME, 'keys')) || !existsSync(join(OUT, TREASURY, 'keys'))) throw new Error(`${OUT} must hold the compiled game and Treasury`);
