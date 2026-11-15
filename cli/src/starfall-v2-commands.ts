@@ -211,7 +211,7 @@ export const starfallV2 = async (argv: string[]): Promise<number> => {
               `${values.every ? `draws every ${values.every} s` : 'daily draws, 20:00 Brisbane'}${feedPath ? `; feed ${feedPath}` : ''}). ` +
               `To wind it down, create ${lastDraw}.`,
           );
-          return serve(session, wallet, keeper, 'keeper', values, meter, stuck);
+          return await serve(session, wallet, keeper, 'keeper', values, meter, stuck);
         } finally {
           await wallet.stop().catch(() => undefined);
         }
@@ -244,7 +244,7 @@ export const starfallV2 = async (argv: string[]): Promise<number> => {
           const oracle = new DrawOracle({ chain, publicKey: pk, logger: session.logger, pollMs, busyPollMs: 5_000 });
           oracle.start();
           session.logger.info(`Starfall v2 draw oracle running for ${record.contractAddress}; looking every ${pollMs / 1000} s.`);
-          return serve(session, wallet, oracle, 'oracle', values, meter, stuck);
+          return await serve(session, wallet, oracle, 'oracle', values, meter, stuck);
         } finally {
           await wallet.stop().catch(() => undefined);
         }
