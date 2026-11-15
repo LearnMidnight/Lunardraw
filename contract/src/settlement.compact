@@ -152,9 +152,9 @@ export struct Entry {
 //
 // A payee can also be a syndicate: `hi` all ones (2^128 - 1, which no real
 // address half is) and `lo` the syndicate's id. Its part of a prize is kept
-// for the syndicate's members instead of sent (payEntitlement). Naming a
-// syndicate is a gift to its members; naming one that doesn't exist loses the
-// prize, as naming a wrong address would.
+// for the syndicate's members instead of sent (payEntitlement). Only
+// buySyndicateTickets makes such a payee, for a syndicate already funded;
+// buyTickets refuses one.
 export struct Payee {
   lo: Uint<128>;
   hi: Uint<128>;
@@ -1163,6 +1163,9 @@ export circuit buyTickets(count: Uint<8>, refundTo: UserAddress): Uint<64> {
   const bought = disclose(fold((acc: Uint<64>, g: Uint<32>): Uint<64> => (acc + g) as Uint<64>, 0, games));
   receiveUnshielded(nativeToken(), (ticketPrice * bought) as Uint<128>);
   const to = disclose(refundTo);
+  // A refund address is required: an all-zero one marks a syndicate's ticket,
+  // whose money refundTicket keeps for the members.
+  assert(to != default<UserAddress>, "a refund address is required");
   // Read the settlement key before the loop, not inside `if (j < n)`. A ledger
   // read inside a branch that isn't taken has no value in the transcript, so
   // the circuit sees (0, 0), which isn't a curve point, and sealing an unused
@@ -1174,6 +1177,10 @@ export circuit buyTickets(count: Uint<8>, refundTo: UserAddress): Uint<64> {
     if (j < n) {
       const t = ts[j];
       assert(disclose(validTicket(t, f) && t.drawId == id), "invalid ticket");
+      // Only a syndicate's own purchase may name a syndicate (independent
+      // review, 15 Nov 2026: a prize named to a syndicate still selling
+      // shares could be paid out many times over).
+      assert(disclose(noSyndicatePayee(t.payees)), "only a syndicate's creator buys tickets for it");
       const c = disclose(ticketCommitment(kernel.self(), t));
       assert(!ticketCommitments.member(c), "ticket already bought");
       ticketCommitments.insert(c);
@@ -1255,7 +1262,8 @@ export circuit computeNumbers(n: Uint<32>, now: Uint<64>): Numbers {
     status: DrawStatus.drawn,
     numbers: nums.main,
     moonball: nums.moonball,
-    settleDeadline: (t + settleWindow) as Uint<64>
+    // From the latest the stamp allows, so a back-dated stamp can't shorten it.
+    settleDeadline: (t + 1800 + settleWindow) as Uint<64>
   });
   return nums;
 }
@@ -1427,7 +1435,9 @@ export circuit finaliseDraw(n: Uint<32>): [] {
   const id = disclose(n);
   const d = drawFor(id);
   assert(d.status == DrawStatus.drawn, "draw is not drawn");
-  assert(blockTimeLt(d.settleDeadline), "settlement deadline has passed");
+  // No deadline: once every ticket is settled the outcome is fixed, and the
+  // draw can no longer be voided (voidDraw), so stalling its finalisation
+  // (by changing the Treasury's balance under it, say) only delays the prizes.
   const p = progress.lookup(id);
   const total = ticketCount.lookup(id);
   assert(p.next == total, "not every ticket is settled");
@@ -1604,6 +1614,10 @@ export circuit createSyndicate(drawId: Uint<32>, creatorCommitment: Bytes<32>, s
   return sid;
 }
 
+pure circuit noSyndicatePayee(p: Vector<3, Payee>): Boolean {
+  return fold((acc: Boolean, x: Payee): Boolean => acc && x.hi != syndicateMark(), true, p);
+}
+
 pure circuit samePayees(a: Vector<3, Payee>, b: Vector<3, Payee>): Boolean {
   return fold((acc: Boolean, x: Payee, y: Payee): Boolean => acc && x.lo == y.lo && x.hi == y.hi && x.share == y.share,
               true, a, b);
@@ -1712,6 +1726,9 @@ export circuit paySyndicateMember(entitlement: Bytes<32>, payee: Uint<8>, member
   const p = fold((acc: Payee, x: Payee, k: Uint<8>): Payee => k == pi ? x : acc, e.payees[0], e.payees, [0, 1, 2]);
   const sid = p.lo as Uint<32>;
   const sy = syndicateFor(sid);
+  // Its shares can't change any more, so the members' parts never add up to
+  // more than the prize.
+  assert(sy.status == SyndicateStatus.funded, "the syndicate is not funded");
   const m = memberFor(sid, mi);
   const pay = memberPaymentId(eid, pi, mi);
   assert(!memberPayments.member(pay), "member already paid");
@@ -1752,15 +1769,21 @@ export circuit refundSyndicate(syndicate: Uint<32>, member: Uint<32>): Uint<128>
 
 // Void a draw that missed a deadline. Anyone may call this. A void draw is
 // refunded, never redrawn. Computing the numbers and settling are only
-// possible before the deadline that makes the draw voidable, so nobody can
-// choose between finishing a draw and cancelling it once the outcome is known.
+// possible before the deadline that makes the draw voidable, and a draw whose
+// tickets are all settled can't be voided at all (it is finalised whenever
+// anyone gets to it), so nobody can choose between finishing a draw and
+// cancelling it once the outcome is known by stalling its finalisation. The
+// oracle and the settler can still let a draw run out of time by not answering
+// or not settling (docs/SETTLEMENT.md); the organiser by not revealing.
 export circuit voidDraw(n: Uint<32>): [] {
   const id = disclose(n);
   const d = drawFor(id);
   const unrevealed = d.status == DrawStatus.open && blockTimeGte(d.revealDeadline);
   const unanswered = d.status == DrawStatus.requested && blockTimeGte(d.drawDeadline);
   const uncomputed = d.status == DrawStatus.fulfilled && blockTimeGte(d.settleDeadline);
-  const unsettled = d.status == DrawStatus.drawn && blockTimeGte(d.settleDeadline);
+  // A draw whose tickets are all settled is finalised, never voided (finaliseDraw).
+  const unsettled = d.status == DrawStatus.drawn && blockTimeGte(d.settleDeadline) &&
+                    progress.lookup(id).next < ticketCount.lookup(id);
   assert(unrevealed || unanswered || uncomputed || unsettled, "draw can't be voided");
   draws.insert(id, Draw { ...d, status: DrawStatus.voided });
 }

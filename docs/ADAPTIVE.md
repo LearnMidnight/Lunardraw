@@ -218,9 +218,10 @@ A group buying games together for one draw, as in a real lottery
   address half is) and `lo` the syndicate's id. `payEntitlement` keeps a
   syndicate payee's part (`syndicatePots`, per entitlement) instead of sending
   it, and `paySyndicateMember` pays each member floor(part × shares / shares
-  sold), once per member and prize. Naming a syndicate on an ordinary ticket is
-  a gift to its members; naming one that doesn't exist loses the prize, as a
-  wrong address would.
+  sold), once per member and prize, and only once the syndicate is funded (its
+  shares are final). Only `buySyndicateTickets` makes a syndicate payee:
+  `buyTickets` refuses one, and needs a real refund address (all zeros marks a
+  syndicate's ticket).
 - **Refunds of what wasn't played** (`refundSyndicate`, by shares, anyone may
   call it): everything if the syndicate never filled (after the join deadline)
   or the draw is void; otherwise what the creator didn't spend (after sales
@@ -257,7 +258,7 @@ against every game listed, for every N from 14 to 60.
 
 | Circuit | k | Rows |
 |---|---|---|
-| buyTickets | 16 | 55,317 of 65,536 |
+| buyTickets | 16 | 55,455 of 65,536 |
 | settleBatch | 17 | 107,417 of 131,072 |
 | computeNumbers | 18 | 152,060 |
 | requestDraw | 16 | 34,779 |
@@ -265,7 +266,7 @@ against every game listed, for every N from 14 to 60.
 | buySyndicateTickets | 16 | 59,380 of 65,536 (real key build: k = 16) |
 | paySyndicateMember | 13 | 4,406 |
 | createSyndicate / joinSyndicate / refundSyndicate | 10 | 586 / 603 / 732 |
-| finaliseDraw | 13 | 7,122 of 8,192 |
+| finaliseDraw | 13 | 7,105 of 8,192 |
 | Treasury: release / bind / deposit | 14 / 13 / 7 | 7,989 / 3,980 / 92 |
 
 ## Checks
@@ -292,6 +293,47 @@ rule for unshielded tokens to every transaction:
 Seen on Preprod (`contract/v2-probe`, 14–15 Nov 2026): the cross-contract call
 with unshielded payments both ways in one transaction works; one deploy carries
 12 circuits; deploying with 12 and adding the rest before locking works.
+
+## Independent review (15 Nov 2026)
+
+A separate review agent, which hadn't written or seen the design discussion,
+read both contracts cold. What it found and what changed:
+
+- **Critical, fixed:** a prize could name a syndicate still selling shares
+  (an ordinary ticket naming a future syndicate id), and each new share then
+  re-divided the same prize, so members could be paid many times what it held,
+  out of everyone else's money. Now `buyTickets` refuses syndicate payees, and
+  `paySyndicateMember` pays only a funded syndicate (shares final).
+- **High, fixed:** anyone could stall `finaliseDraw` by depositing a fraction of
+  a tNIGHT into the Treasury just before each attempt (it changes the
+  Treasury's balance comparisons when it is short, and always in a final draw),
+  until the settlement deadline let the draw be voided with its outcome known.
+  Now a draw whose tickets are all settled can't be voided and can be finalised
+  at any time: stalling only delays the prizes, and every stalling deposit is a
+  gift to the jackpots. Sponsor deposits stay possible.
+- **Low, fixed:** an ordinary ticket with an all-zero refund address would have
+  stranded its refund (now refused); a back-dated `computeNumbers` stamp could
+  shorten the settlement window by up to 30 minutes (the deadline now counts
+  from the latest the stamp allows).
+- **For the deploy (in the deploy command):** lock the Treasury as well as the
+  game; check on chain that the game has exactly its 17 circuits and the
+  Treasury its 3, with the published verifier keys and an empty committee;
+  check that the game's `treasury` and `treasuryAddress` are the deployed
+  Treasury; then bind, check the Treasury's `game`, deposit the opening 10,000,
+  and only then open draw 1.
+- **Settings:** `finalSales` long (7 days, as v1), so a final draw, which
+  empties the Treasury into a jackpot that must be won, can't be opened at a
+  quiet moment and bought up by whoever opens it.
+- **Known and kept (documented trust):** the oracle and the settler can let a
+  draw run out of time by not answering or not settling, and whoever holds both
+  the organiser secret and the oracle key knows the numbers while tickets sell.
+  On Preprod both sit on the VM; before Mainnet the oracle moves to another
+  machine run by someone else. Purchases of the same draw in the same block
+  conflict (as in v1).
+
+Checks for these: `syndicate.mjs` (an ordinary purchase naming a syndicate or a
+future one, a missing refund address, a settled draw past its deadline that
+can't be voided and is finalised late).
 
 ## Not in this contract
 

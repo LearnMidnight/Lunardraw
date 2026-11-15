@@ -119,6 +119,39 @@ const tkey = (drawId, index) => BigInt(drawId) * 4294967296n + BigInt(index);
   ok('nothing created or lost', w.conserved());
 }
 
+// ---------------------------------------------------------------- the independent review's findings (15 Nov 2026)
+{
+  const w = await World.create(); await w.bind(); await w.deposit(100_000n * STAR);
+  const n = await w.open('r-1');
+  const d = w.ledger().draws.lookup(n);
+  // Critical: a prize named to a syndicate still selling shares could be paid out many times
+  // over (each new share re-divided the same pot). Now only a syndicate's own purchase names it.
+  const sid = await w.createSyndicate(n, creator, 1n, 1_300_000, 1, d.salesClose - 600n);
+  const gift = { ...makeTicket(1, { numbers: [1, 2, 3, 4, 5, 6, 7], moonball: 1 }, carol), payees: syndicateTicket(1, { numbers: [1, 2, 3, 4, 5, 6, 7], moonball: 1 }, sid).payees };
+  ok('an ordinary purchase can\'t name a syndicate as a payee', /only a syndicate's creator/.test(await throws(() => w.buy([gift]))));
+  ok('nor a future syndicate\'s id', /only a syndicate's creator/.test(await throws(() => w.buy([{ ...gift, payees: syndicateTicket(1, { numbers: [1, 2, 3, 4, 5, 6, 7], moonball: 1 }, 99).payees }]))));
+  // Low: an all-zero refund address marks a syndicate's ticket, so an ordinary one needs a real one.
+  ok('an ordinary purchase needs a refund address', /refund address is required/.test(await throws(() => w.buy([makeTicket(1, { numbers: [1, 2, 3, 4, 5, 6, 7], moonball: 1 }, carol)], new Uint8Array(32)))));
+  ok('nothing created or lost by the refused purchases', w.conserved());
+}
+
+// High: a draw whose tickets are all settled can't be voided by stalling its finalisation past
+// the settlement deadline (by changing the Treasury's balance under the keeper, say). It is
+// finalised whenever anyone gets to it.
+{
+  const w = await World.create(); await w.bind(); await w.deposit(100_000n * STAR);
+  const n = await w.open('h-1');
+  const nums = await w.peek(n, 'h-1');
+  await w.buy([makeTicket(1, { numbers: nums.main, moonball: 1 }, alice)]);
+  await w.draw(n, 'h-1', 'h-2'); await w.settle(n);
+  const dl = w.ledger().draws.lookup(n);
+  w.advance(Number(dl.settleDeadline) - w.now + 3600);
+  ok('settled but not finalised by its deadline: the draw can\'t be voided', /can't be voided/.test(await throws(() => w.run('voidDraw', [n]))));
+  const jackpot = w.ledger().carry;
+  const f = await w.finalise(n); await w.payAll(n);
+  ok(`and is finalised late: Alice is paid her ${tn(jackpot)} jackpot`, f.status === 4 && w.paid(alice) === jackpot && w.conserved(), `status ${f.status}`);
+}
+
 // ---------------------------------------------------------------- not in a final draw
 {
   const w = await World.create(); await w.bind(); await w.deposit(100_000n * STAR);
