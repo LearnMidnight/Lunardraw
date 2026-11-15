@@ -50,9 +50,15 @@ case "${1:-}" in
   sync)
     # Sync both wallets in the background (each prints its balances when synced), forgetting
     # first a saved sync that began before fresh wallets skipped the ledger 8 DUST history.
-    for w in "$KW" "$OW"; do
-      pkill -f -- "--wallet $w" 2>/dev/null && sleep 3 || true
+    # Stop any sync of these two wallets and wait until it has exited: it takes up to 20 s and
+    # saves its position on the way out, which must not land after --fresh forgets it.
+    for w in "$KW" "$OW"; do pkill -f -- "--wallet $w" 2>/dev/null || true; done
+    for i in $(seq 1 40); do
+      pgrep -f -- "--wallet ($KW|$OW)" > /dev/null || break
+      [ "$i" = 30 ] && { pkill -9 -f -- "--wallet ($KW|$OW)" 2>/dev/null || true; }
+      sleep 1
     done
+    pgrep -f -- "--wallet ($KW|$OW)" > /dev/null && die "an old sync of these wallets is still running: pgrep -af 'wallet show'"
     if [ "${2:-}" = "--fresh" ]; then
       node --input-type=module -e "
         import { forgetWalletState } from '@nightcast/deploy';
