@@ -14,6 +14,10 @@
 #                                  /root/lunardraw-secrets/v2-rehearsal), 100 tNIGHT into the
 #                                  Treasury from the keeper wallet, the oracle key accepted
 #   bash rehearsal.sh start        installs and starts the v2 keeper and oracle (draws every 3 hours)
+#   bash rehearsal.sh player-wallet  makes the rehearsal player's wallet (once) and prints its address
+#   bash rehearsal.sh sync-player  syncs it in the background (/root/v2-player-wallet.log)
+#   bash rehearsal.sh player       installs and starts the player: tickets and a syndicate in every
+#                                  draw, the syndicate's shares paid to pixel, orbit and nova
 #   bash rehearsal.sh status       the deployment's draws
 #
 # The live game and its services are not touched. Prints no secrets.
@@ -22,6 +26,7 @@ V2=/root/Lunardraw-v2
 KEYS=/root/lunardraw-secrets/v2-rehearsal
 KW=/root/nightcast-secrets/v2-keeper-wallet.secret
 OW=/root/nightcast-secrets/v2-oracle-wallet.secret
+PW=/root/nightcast-secrets/v2-player-wallet.secret
 export PATH="/root/.local/bin:$PATH"
 say() { printf '\n== %s\n' "$*"; }
 die() { printf '\nSTOPPED: %s\n' "$*" >&2; exit 1; }
@@ -97,10 +102,42 @@ case "${1:-}" in
     systemctl --no-pager --lines=0 status lunardraw-starfall-v2-keeper lunardraw-starfall-v2-oracle | grep -E "●|Active"
     echo "Logs: journalctl -u lunardraw-starfall-v2-keeper -f   (and -oracle)"
     ;;
+  player-wallet)
+    [ -f "$PW" ] || ./nightcast/nightcast wallet new --out "$PW" > /dev/null
+    say "The v2 player's wallet"
+    ./lunardraw wallet address --network preprod --wallet "$PW"
+    echo
+    echo "Fund its NIGHT address (mn_addr_preprod1...) from the Preprod faucet, then: rehearsal.sh sync-player"
+    ;;
+  sync-player)
+    pkill -f -- "--wallet $PW" 2>/dev/null || true
+    for i in $(seq 1 30); do pgrep -f -- "--wallet $PW" > /dev/null || break; sleep 1; done
+    nohup ./nightcast/nightcast wallet show --network preprod --wallet "$PW" --proof-server-port 6302 > /root/v2-player-wallet.log 2>&1 < /dev/null &
+    echo "syncing the player's wallet: /root/v2-player-wallet.log"
+    ;;
+  player)
+    # The syndicate's members: the house agents' addresses (public), one share each.
+    members=""
+    for a in pixel orbit nova; do
+      addr=$(./lunardraw wallet address --network preprod --wallet "/root/lunardraw-agents/$a.secret" | sed -n 's/^NIGHT address[^:]*: //p')
+      [ -n "$addr" ] || die "no address for $a"
+      members="${members:+$members,}$addr"
+    done
+    printf 'MEMBERS=%s\n' "$members" > /root/lunardraw-agents/v2-player.env
+    chmod 600 /root/lunardraw-agents/v2-player.env
+    pkill -f -- "--wallet $PW" 2>/dev/null || true
+    for i in $(seq 1 30); do pgrep -f -- "--wallet $PW" > /dev/null || break; sleep 1; done
+    cp "$V2/deploy/systemd/lunardraw-starfall-v2-player.service" /etc/systemd/system/
+    systemctl daemon-reload
+    systemctl enable --now lunardraw-starfall-v2-player
+    sleep 5
+    systemctl --no-pager --lines=0 status lunardraw-starfall-v2-player | grep -E "●|Active"
+    echo "syndicate members: pixel, orbit, nova. Logs: journalctl -u lunardraw-starfall-v2-player -f"
+    ;;
   status)
     ./lunardraw starfall-v2 status --network preprod
     ;;
   *)
-    die "usage: rehearsal.sh wallets | sync [--fresh] | proof | balances | deploy | start | status"
+    die "usage: rehearsal.sh wallets | sync [--fresh] | proof | balances | deploy | start | player-wallet | sync-player | player | status"
     ;;
 esac

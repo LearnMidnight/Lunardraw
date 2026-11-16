@@ -1,0 +1,23 @@
+# The Starfall v2 rehearsal player: in every v2 draw it buys a ticket of QuickPicks for itself and
+# runs a syndicate whose shares are paid to the house agents' addresses (pixel, orbit, nova), so
+# settlement, prizes, member payments and syndicate refunds run on chain. Its own wallet; the v2
+# proof server (6302). The members are in /root/lunardraw-agents/v2-player.env (rehearsal.sh player).
+[Unit]
+Description=Lunardraw Starfall v2 rehearsal player
+After=lunardraw-proof-v2.service network-online.target
+Wants=lunardraw-proof-v2.service network-online.target
+
+[Service]
+WorkingDirectory=/root/Lunardraw-v2
+Environment=HOME=/root
+Environment=NIGHTCAST_BLOCKFROST_USAGE=/root/lunardraw-status/usage/lunardraw-starfall-v2-player.json
+EnvironmentFile=/root/lunardraw-agents/v2-player.env
+ExecStart=/bin/bash -c 'exec /root/Lunardraw-v2/lunardraw starfall-v2 player --network preprod --name v2-player \
+  --wallet /root/nightcast-secrets/v2-player-wallet.secret --games 4 --members "$MEMBERS" --syndicate-games 3 \
+  --proof-server-port 6302'
+Restart=always
+RestartSec=30
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

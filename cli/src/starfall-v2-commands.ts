@@ -34,7 +34,10 @@ import {
 import { DustMeter } from './dust-meter.js';
 import { dustWait } from './dust-wait.js';
 import { statusWriter } from './status-file.js';
-import { freshFees, openServiceWallet, settlementFrom } from './starfall-commands.js';
+import { freshFees, openServiceWallet, parseUserAddress, settlementFrom } from './starfall-commands.js';
+import { describeStep, loadPlayerState, nextStep, savePlayerState, stepDone, ticketsFor } from './starfall-v2-player.js';
+import { fromHex } from './common.js';
+import { walletBalances } from '@nightcast/deploy';
 import {
   joinStarfallV2,
   loadStarfallV2,
@@ -60,6 +63,10 @@ export const STARFALL_V2_USAGE = `usage: ./lunardraw starfall-v2 <command>
       20:00 Brisbane, or every --every seconds (a rehearsal).
   oracle  --network <network> --oracle <file> [--wallet <file>] [--status <file>] [--record <file>] [--proof-server-port <port>]
       Answers each draw with Nightcast's VRF.
+  player  --network <network> --wallet <file> --name <name> [--games 4] [--members "<mn_addr...>,<mn_addr...>,..."]
+          [--syndicate-games 3] [--record <file>] [--proof-server-port <port>]
+      A rehearsal player: in each draw on sale, one ticket of --games QuickPick games for itself and,
+      with --members, a syndicate of one share per member (paid to that address) and its games.
   status  --network <network> [--record <file>]
 
 The deployment is deployments/starfall-v2-<network>.json (or --record), written by
@@ -151,6 +158,10 @@ export const starfallV2 = async (argv: string[]): Promise<number> => {
       'silent-after': { type: 'string' },
       'dust-wait': { type: 'string' },
       'prove-lead': { type: 'string' },
+      name: { type: 'string' },
+      games: { type: 'string' },
+      members: { type: 'string' },
+      'syndicate-games': { type: 'string' },
     },
   });
 
@@ -245,6 +256,107 @@ export const starfallV2 = async (argv: string[]): Promise<number> => {
           oracle.start();
           session.logger.info(`Starfall v2 draw oracle running for ${record.contractAddress}; looking every ${pollMs / 1000} s.`);
           return await serve(session, wallet, oracle, 'oracle', values, meter, stuck);
+        } finally {
+          await wallet.stop().catch(() => undefined);
+        }
+      }, proofServerPort(values['proof-server-port']), undefined, { service: true });
+    }
+
+    case 'player': {
+      const network = networkArg(values.network);
+      const name = (values.name ?? '').replace(/[^A-Za-z0-9_-]/g, '');
+      if (!name || !values.wallet) throw new Error(STARFALL_V2_USAGE);
+      const { record, v2 } = await deployment(network, values.record, true);
+      const opts = {
+        games: values.games === undefined ? 4 : Number(values.games),
+        members: values.members ? values.members.split(/[\s,]+/).filter((x) => x !== '').map(parseUserAddress) : [],
+        syndicateGames: values['syndicate-games'] === undefined ? 3 : Number(values['syndicate-games']),
+      };
+      if (!(Number.isInteger(opts.games) && opts.games >= 1 && opts.games <= 12)) throw new Error('--games takes 1 to 12 (one ticket)');
+      if (!(Number.isInteger(opts.syndicateGames) && opts.syndicateGames >= 1 && opts.syndicateGames <= 12)) throw new Error('--syndicate-games takes 1 to 12');
+      const statePath = join(homedir(), 'lunardraw-agents', `${name}.v2-state.json`);
+      const dustMinutes = dustWait(values['dust-wait']);
+      return withSession(network, async (session) => {
+        const wallet = await openServiceWallet(session, walletSeed(values.wallet), dustMinutes);
+        if (!wallet) return RESTART;
+        try {
+          const meter = new DustMeter(undefined);
+          const raw = await starfallV2Providers(session, wallet, v2, record.treasuryAddress);
+          const { providers } = freshFees(raw, wallet, session.logger, meter);
+          const state = loadPlayerState(statePath, record.contractAddress);
+          savePlayerState(statePath, state);
+          const secret = fromHex(state.syndicateSecret);
+          const joined = await joinStarfallV2(providers, v2, record.contractAddress, { syndicateSecret: secret });
+          const store = (providers.privateStateProvider as never as { forContract(a: string): { set(id: string, s: unknown): Promise<void> } }).forContract(record.contractAddress);
+          const me = fromHex(wallet.unshieldedKeystore.getAddress());
+          const log = (m: string) => session.logger.info(`[${name}] ${m}`);
+          log(`playing Starfall v2 at ${record.contractAddress}: ${opts.games} game(s) a draw${opts.members.length ? `, and a syndicate of ${opts.members.length} share(s) for ${opts.syndicateGames} game(s)` : ''}; state in ${statePath}`);
+          let stop = false;
+          const stopped = untilStopped().then(() => { stop = true; });
+          const sync = watchSync(wallet, { stallMinutes: stallAfter(values['stall-after']), logger: session.logger });
+          let lastPassAt = Date.now();
+          const silence = untilSilentFor(silentAfter(values['silent-after']), () => lastPassAt, session.logger);
+          let restart = false;
+          void Promise.race([sync.stalled, silence.done]).then((fired) => { if (fired && !stop) { restart = true; stop = true; forceExit(RESTART); } });
+          let refusals = 0;
+          let waitUntil = 0;
+          while (!stop) {
+            try {
+              const view = starfallV2ViewOf(v2.G, await readV2Ledger(v2.G, providers.publicDataProvider, record.contractAddress));
+              const step = Date.now() >= waitUntil ? nextStep(view, Date.now() / 1000, state, opts) : null;
+              if (step) {
+                const d = view.draws.find((x) => x.id === step.draw)!;
+                const format = d.format ?? { range: 20, moonballs: 1 };
+                const cost = step.kind === 'buy' ? view.ticketPrice * BigInt(step.games) : step.kind === 'join' ? (view.ticketPrice * BigInt(opts.syndicateGames)) / BigInt(opts.members.length) : 0n;
+                const { night } = await walletBalances(wallet);
+                if (night < cost) {
+                  log(`can't ${describeStep(step)}: it costs ${tn(cost)}, the wallet holds ${tn(night)}`);
+                  waitUntil = Date.now() + 30 * 60_000;
+                } else {
+                  log(`${describeStep(step)}...`);
+                  const started = Date.now();
+                  const tickets = ticketsFor(v2.G, step, format, me);
+                  await store.set('starfall-v2', { syndicateSecret: secret, pendingTickets: tickets });
+                  let syndicateId: bigint | undefined;
+                  if (step.kind === 'buy') await joined.callTx.buyTickets(BigInt(tickets.length), { bytes: me });
+                  else if (step.kind === 'create') {
+                    const r = await joined.callTx.createSyndicate(step.draw, v2.G.pureCircuits.syndicateCommitmentOf(secret), step.sharePrice, BigInt(step.shares), BigInt(step.games), step.joinDeadline);
+                    const res = r.private?.result;
+                    if (typeof res === 'bigint' || typeof res === 'number') syndicateId = BigInt(res);
+                    else {
+                      // the newest syndicate of this creator in the draw
+                      const l = await readV2Ledger(v2.G, providers.publicDataProvider, record.contractAddress);
+                      const mine = hex(v2.G.pureCircuits.syndicateCommitmentOf(secret));
+                      for (const [id, sy] of l.syndicates as Iterable<[bigint, { drawId: bigint; creator: Uint8Array }]>) {
+                        if (sy.drawId === step.draw && hex(sy.creator) === mine && (syndicateId === undefined || id > syndicateId)) syndicateId = id;
+                      }
+                      if (syndicateId === undefined) throw new Error('the syndicate was created but its id was not found');
+                    }
+                  } else if (step.kind === 'join') await joined.callTx.joinSyndicate(step.syndicate, 1n, { bytes: opts.members[step.member]! });
+                  else await joined.callTx.buySyndicateTickets(step.syndicate, BigInt(tickets.length));
+                  stepDone(state, step, syndicateId);
+                  savePlayerState(statePath, state);
+                  refusals = 0;
+                  log(`done in ${Math.round((Date.now() - started) / 1000)} s${syndicateId !== undefined ? `: syndicate ${syndicateId}` : ''}${tickets.length ? `: ${tickets.map((t) => (t as { entry: { numbers: bigint[] } }).entry.numbers.slice(0, 7).join(' ')).join('; ')}${tickets.length && (tickets[0] as { lines: { moonball: bigint }[] }).lines[0]!.moonball ? ' (+ more lines)' : ''}` : ''}`);
+                }
+              }
+            } catch (err) {
+              refusals += 1;
+              session.logger.warn(`[${name}] ${err instanceof Error ? err.message.slice(0, 600) : String(err)} (${refusals} in a row; trying again in 3 minutes)`);
+              waitUntil = Date.now() + 3 * 60_000;
+              if (refusals >= 3) {
+                session.logger.error(`[${name}] 3 failures in a row: restarting to resync the wallet`);
+                restart = true;
+                break;
+              }
+            }
+            lastPassAt = Date.now();
+            await Promise.race([new Promise((r) => setTimeout(r, 60_000)), stopped]);
+          }
+          sync.stop();
+          silence.cancel();
+          if (restart) forceExit(RESTART);
+          return restart ? RESTART : 0;
         } finally {
           await wallet.stop().catch(() => undefined);
         }

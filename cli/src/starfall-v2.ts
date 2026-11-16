@@ -9,6 +9,7 @@
  * too big for git): `starfall-v2/deploy/out/{settlement,treasury}` by default, or
  * LUNARDRAW_STARFALL_V2_OUT. Their generated code is loaded at run time and typed loosely here.
  */
+import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -161,12 +162,19 @@ export const v2Witnesses = (G: Module) => {
     oracleSecretKey: ({ privateState }: any) => [privateState, need(privateState.oracleSecretKey, 'oracle secret key')],
     organiserSecret: ({ privateState }: any) => [privateState, need(privateState.organiserSecret, 'organiser secret')],
     syndicateSecret: ({ privateState }: any) => [privateState, need(privateState.syndicateSecret, 'syndicate secret')],
-    newTickets: () => {
-      throw new Error('the keeper buys no tickets');
+    // A purchase: the tickets the buyer put in the private state, the other slots unused, each sealed with fresh randomness.
+    newTickets: ({ privateState }: any) => {
+      const ts = [...(need(privateState.pendingTickets, 'tickets to buy') as unknown[])];
+      const max = Number(G.pureCircuits.maxTickets());
+      if (ts.length < 1 || ts.length > max) throw new Error(`1 to ${max} tickets a purchase, not ${ts.length}`);
+      const drawId = (ts[0] as { drawId: bigint }).drawId;
+      while (ts.length < max) ts.push(empty(drawId));
+      return [privateState, ts];
     },
-    sealingRandomnessFor: () => {
-      throw new Error('the keeper buys no tickets');
-    },
+    sealingRandomnessFor: ({ privateState }: any) => [
+      privateState,
+      Array.from({ length: Number(G.pureCircuits.maxTickets()) }, () => BigInt('0x' + randomBytes(31).toString('hex'))),
+    ],
     // The batch starting at `first`: the decrypted tickets the keeper put in the private state.
     settlementBatch: ({ privateState }: any, drawId: bigint, first: bigint) => {
       const s = need(privateState.settling, 'draw being settled') as { drawId: bigint; tickets: unknown[] };
@@ -221,10 +229,16 @@ export const joinStarfallV2 = (providers: StarfallV2Providers, v2: StarfallV2, c
     initialPrivateState: privateState as never,
   }) as unknown as Promise<StarfallV2Calls>;
 
+type CallResult = { public?: { txId?: string }; private?: { result?: unknown } };
+
 export interface StarfallV2Calls extends StarfallCalls {
   callTx: StarfallCalls['callTx'] & {
     paySyndicateMember(id: Uint8Array, payee: bigint, member: bigint): Promise<unknown>;
     refundSyndicate(syndicate: bigint, member: bigint): Promise<unknown>;
+    buyTickets(count: bigint, refundTo: { bytes: Uint8Array }): Promise<CallResult>;
+    createSyndicate(drawId: bigint, creatorCommitment: Uint8Array, sharePrice: bigint, totalShares: bigint, games: bigint, joinDeadline: bigint): Promise<CallResult>;
+    joinSyndicate(syndicate: bigint, shares: bigint, payTo: { bytes: Uint8Array }): Promise<CallResult>;
+    buySyndicateTickets(syndicate: bigint, count: bigint): Promise<CallResult>;
   };
 }
 

@@ -18,5 +18,5 @@ node game.mjs
 node syndicate.mjs
 node daily.mjs
 # The keeper and the oracle on v2 (needs the keeper and the CLI built: npm run build at the top).
-if [ -f ../../cli/dist/starfall-v2.js ] && [ -f ../../keeper/dist/index.js ]; then node keeper.mjs
-else echo "keeper.mjs skipped: build the keeper and the CLI first (npm ci && npm run compact && npm run build)"; fi
+if [ -f ../../cli/dist/starfall-v2.js ] && [ -f ../../keeper/dist/index.js ]; then node keeper.mjs && node player.mjs
+else echo "keeper.mjs and player.mjs skipped: build the keeper and the CLI first (npm ci && npm run compact && npm run build)"; fi
