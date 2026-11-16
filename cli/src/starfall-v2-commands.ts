@@ -67,6 +67,8 @@ export const STARFALL_V2_USAGE = `usage: ./lunardraw starfall-v2 <command>
           [--syndicate-games 3] [--record <file>] [--proof-server-port <port>]
       A rehearsal player: in each draw on sale, one ticket of --games QuickPick games for itself and,
       with --members, a syndicate of one share per member (paid to that address) and its games.
+  accept-key  --network <network> --oracle <file> [--wallet <file>] [--record <file>] [--proof-server-port <port>]
+      The oracle accepts the key the deployment proposed (once, before the first draw): needs the oracle's secret.
   status  --network <network> [--record <file>]
 
 The deployment is deployments/starfall-v2-<network>.json (or --record), written by
@@ -361,6 +363,44 @@ export const starfallV2 = async (argv: string[]): Promise<number> => {
           await wallet.stop().catch(() => undefined);
         }
       }, proofServerPort(values['proof-server-port']), undefined, { service: true });
+    }
+
+    case 'accept-key': {
+      const network = networkArg(values.network);
+      if (!values.oracle) throw new Error(STARFALL_V2_USAGE);
+      const { sk, pk } = oracleKeyFrom(values.oracle, true);
+      const { record, v2 } = await deployment(network, values.record, true);
+      if (pk.x.toString() !== record.parameters.oracleKey.x || pk.y.toString() !== record.parameters.oracleKey.y) {
+        throw new Error(`${values.oracle} is not this deployment's oracle key`);
+      }
+      return withSession(network, async (session) => {
+        const wallet = await openServiceWallet(session, walletSeed(values.wallet), dustWait(values['dust-wait']));
+        if (!wallet) return RESTART;
+        try {
+          const raw = await starfallV2Providers(session, wallet, v2, record.treasuryAddress);
+          const { providers } = freshFees(raw, wallet, session.logger, new DustMeter(undefined));
+          const before = await readV2Ledger(v2.G, providers.publicDataProvider, record.contractAddress);
+          if (before.oracleKeyReady && !before.proposedOracleKey.is_some) {
+            process.stdout.write('The oracle key is already accepted: nothing to do.\n');
+            return 0;
+          }
+          const p = before.proposedOracleKey;
+          if (!p.is_some || p.value.x !== pk.x || p.value.y !== pk.y) throw new Error('the deployment has not proposed this oracle key');
+          const joined = await joinStarfallV2(providers, v2, record.contractAddress, { oracleSecretKey: sk });
+          const r = (await joined.callTx.acceptOracleKey()) as { public?: { txId?: string } };
+          for (let i = 0; i < 36; i++) {
+            const l = await readV2Ledger(v2.G, providers.publicDataProvider, record.contractAddress);
+            if (l.oracleKeyReady && !l.proposedOracleKey.is_some) {
+              process.stdout.write(`The oracle key is accepted (transaction ${r.public?.txId ?? '?'}): the keeper can open draw 1.\n`);
+              return 0;
+            }
+            await new Promise((res) => setTimeout(res, 5_000));
+          }
+          throw new Error('acceptOracleKey was sent, but the chain did not show the key accepted within 3 minutes: check with status');
+        } finally {
+          await wallet.stop().catch(() => undefined);
+        }
+      }, proofServerPort(values['proof-server-port']));
     }
 
     case 'status': {
