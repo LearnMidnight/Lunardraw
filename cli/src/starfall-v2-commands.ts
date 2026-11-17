@@ -302,6 +302,10 @@ export const starfallV2 = async (argv: string[]): Promise<number> => {
           void Promise.race([sync.stalled, silence.done]).then((fired) => { if (fired && !stop) { restart = true; stop = true; forceExit(RESTART); } });
           let refusals = 0;
           let waitUntil = 0;
+          // The wallet's NIGHT can read 0 after one of its own transactions, while the change it is
+          // owed hasn't reached its live view (seen on the rehearsal after a sync hiccup, for hours).
+          let spentThisRun = false;
+          let lowReads = 0;
           while (!stop) {
             try {
               const view = starfallV2ViewOf(v2.G, await readV2Ledger(v2.G, providers.publicDataProvider, record.contractAddress));
@@ -312,9 +316,16 @@ export const starfallV2 = async (argv: string[]): Promise<number> => {
                 const cost = step.kind === 'buy' ? view.ticketPrice * BigInt(step.games) : step.kind === 'join' ? (view.ticketPrice * BigInt(opts.syndicateGames)) / BigInt(opts.members.length) : 0n;
                 const { night } = await walletBalances(wallet);
                 if (night < cost) {
-                  log(`can't ${describeStep(step)}: it costs ${tn(cost)}, the wallet holds ${tn(night)}`);
-                  waitUntil = Date.now() + 30 * 60_000;
+                  lowReads += 1;
+                  if (spentThisRun && lowReads >= 3) {
+                    session.logger.error(`[${name}] the wallet has shown ${tn(night)} 3 times since its last transaction: restarting to resync it`);
+                    restart = true;
+                    break;
+                  }
+                  log(`can't ${describeStep(step)}: it costs ${tn(cost)}, the wallet holds ${tn(night)}${spentThisRun ? ' (looking again in 2 minutes: change from its last transaction may not have arrived)' : ''}`);
+                  waitUntil = Date.now() + (spentThisRun ? 2 : 30) * 60_000;
                 } else {
+                  lowReads = 0;
                   log(`${describeStep(step)}...`);
                   const started = Date.now();
                   const tickets = ticketsFor(v2.G, step, format, me);
@@ -339,6 +350,7 @@ export const starfallV2 = async (argv: string[]): Promise<number> => {
                   stepDone(state, step, syndicateId);
                   savePlayerState(statePath, state);
                   refusals = 0;
+                  spentThisRun = true;
                   log(`done in ${Math.round((Date.now() - started) / 1000)} s${syndicateId !== undefined ? `: syndicate ${syndicateId}` : ''}${tickets.length ? `: ${tickets.map((t) => (t as { entry: { numbers: bigint[] } }).entry.numbers.slice(0, 7).join(' ')).join('; ')}${tickets.length && (tickets[0] as { lines: { moonball: bigint }[] }).lines[0]!.moonball ? ' (+ more lines)' : ''}` : ''}`);
                 }
               }
