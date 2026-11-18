@@ -67,6 +67,27 @@ test('rules: fixed text, and the rules that are refused', () => {
   assert.throws(() => core.checkRules({ mode: 'shuffle', list: 'private' }), { code: 'private_shuffle' });
   assert.throws(() => core.checkRules({ mode: 'pick-many', count: 1 }), { code: 'bad_count' });
   assert.throws(() => core.checkRules({ mode: 'weighted' }), { code: 'bad_mode' });
+  assert.deepEqual(core.rulesList({ mode: 'teams', teams: 3, title: 'Squads' }), ['lunaspin:rules:v1', 'mode=teams', 'teams=3', 'list=public', 'title=Squads']);
+  assert.throws(() => core.checkRules({ mode: 'teams', teams: 3, list: 'private' }), { code: 'private_teams' });
+  for (const t of [undefined, 1, 51, 2.5, '3']) assert.throws(() => core.checkRules({ mode: 'teams', teams: t }), { code: 'bad_teams' });
+});
+
+test('teams: the whole list shuffled (as the SDK), then dealt round-robin', () => {
+  for (let k = 0; k < 300; k++) {
+    const out = randomBytes(32);
+    const n = 2 + (k % 60);
+    const t = 2 + (k % Math.min(n - 1, 12));
+    const items = Array.from({ length: n }, (_, i) => i);
+    const order = core.resultIndexes(out, { mode: 'teams', teams: t }, n);
+    assert.deepEqual(order, sdk.shuffle(out, items));
+    const teams = core.teamsOf(order, t);
+    assert.equal(teams.length, t);
+    assert.deepEqual(teams.flat().sort((a, b) => a - b), items); // everyone, once
+    const sizes = teams.map((x) => x.length);
+    assert.ok(Math.max(...sizes) - Math.min(...sizes) <= 1 && sizes.every((s, i) => i === 0 || s <= sizes[i - 1]));
+  }
+  assert.throws(() => core.resultIndexes(randomBytes(32), { mode: 'teams', teams: 5 }, 4), { code: 'bad_teams' });
+  assert.throws(() => core.lockSpin({ names: ['a', 'b', 'c'], rules: { mode: 'teams', teams: 4 }, salt: '00'.repeat(32) }), { code: 'bad_teams' });
 });
 
 test('the seed is SHA-256 of the padded scheme and the three 32-byte values', () => {
@@ -121,4 +142,5 @@ test('fixed test values (shared with the PHP twin)', () => {
     assert.equal(lock.seed, v.seed);
     assert.deepEqual(core.resultIndexes(v.output, v.rules, v.names.length), v.result);
   }
+  for (const v of VECTORS.teams) assert.deepEqual(core.teamsOf(v.order, v.teams), v.out);
 });

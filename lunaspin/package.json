@@ -10,15 +10,17 @@
     ".": "./src/core.js"
   },
   "scripts": {
-    "test": "node --test test/core.test.mjs",
+    "test": "node --test test/core.test.mjs test/chain.test.mjs",
     "vectors": "node test/make-vectors.mjs",
-    "build": "esbuild src/browser.js --bundle --minify --format=iife --global-name=LunaSpinCore --target=es2020 --outfile=dist/lunaspin-core.js --legal-comments=eof",
-    "test:php": "php test/php-vectors.php"
+    "build": "esbuild src/browser.js --bundle --minify --format=iife --global-name=LunaSpinCore --target=es2020 --outfile=dist/lunaspin-core.js --legal-comments=eof && npm run build:chain",
+    "test:php": "php test/php-vectors.php",
+    "build:chain": "esbuild src/chain-browser.js --bundle --minify --format=iife --global-name=LunaSpinChain --target=es2020 --outfile=dist/lunaspin-chain.js --legal-comments=eof && node -e \"require('fs').copyFileSync('node_modules/@midnightntwrk/onchain-runtime-v4/midnight_onchain_runtime_wasm_bg.wasm','dist/lunaspin-chain.wasm')\""
   },
   "dependencies": {
     "@noble/hashes": "2.4.0"
   },
   "devDependencies": {
+    "@midnightntwrk/onchain-runtime-v4": "4.0.0",
     "@nightcast/contract": "0.1.0",
     "@nightcast/sdk": "0.1.0",
     "esbuild": "0.28.2"
