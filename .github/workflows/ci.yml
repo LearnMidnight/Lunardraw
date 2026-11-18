@@ -299,7 +299,7 @@ jobs:
         run: npm run build
 
       - name: Pull the proof server
-        run: docker pull -q midnightntwrk/proof-server:9.0.0
+        run: docker pull -q midnightntwrk/proof-server:9.0.2
 
       - name: Prove each circuit
         working-directory: cli

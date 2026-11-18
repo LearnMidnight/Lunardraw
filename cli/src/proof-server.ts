@@ -25,7 +25,7 @@ import { promisify } from 'node:util';
 const run = promisify(execFile);
 
 /** The image Nightcast's compose files use (Midnight's support matrix, October 2026). */
-export const PROOF_SERVER_IMAGE = 'midnightntwrk/proof-server:9.0.0';
+export const PROOF_SERVER_IMAGE = 'midnightntwrk/proof-server:9.0.2';
 /** Docker volume holding the downloaded zk parameters. */
 export const PARAMS_VOLUME = 'lunardraw-zk-params';
 
