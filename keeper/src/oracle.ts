@@ -13,7 +13,7 @@
  */
 import { DrawStatus } from '@lunardraw/contract';
 import type { DrawOracleChain, OracleDrawView } from './chain.js';
-import { type FailureStreak, type KeeperLogger, reasonOf, StreakCounter } from './engine.js';
+import { type FailureStreak, isProofServerBusy, type KeeperLogger, reasonOf, StreakCounter } from './engine.js';
 
 export type DrawOracleOptions = {
   chain: DrawOracleChain;
@@ -148,11 +148,14 @@ export class DrawOracle {
       } catch (err) {
         const error = reasonOf(err);
         const n = (failed?.failures ?? 0) + 1;
-        const delay = Math.min(this.cfg.backoffMs * 2 ** (n - 1), this.cfg.maxBackoffMs);
+        // A full proof server queue is busy, not broken: retry in a minute, without counting it towards a restart.
+        const busy = isProofServerBusy(err);
+        const delay = busy ? 60_000 : Math.min(this.cfg.backoffMs * 2 ** (n - 1), this.cfg.maxBackoffMs);
         this.failures.set(d.id, { failures: n, nextTryAt: this.cfg.clock() + delay });
-        this.streak.failed();
+        if (!busy) this.streak.failed();
         report.failed.push({ draw: d.id, error });
-        this.logger.error(`could not answer draw ${d.id} (attempt ${n}, retrying in ${Math.round(delay / 1000)} s): ${error}`);
+        if (busy) this.logger.warn(`the proof server is busy (its queue is full): draw ${d.id} again in ${Math.round(delay / 1000)} s`);
+        else this.logger.error(`could not answer draw ${d.id} (attempt ${n}, retrying in ${Math.round(delay / 1000)} s): ${error}`);
       }
     }
     return report;

@@ -27,6 +27,19 @@ export type TickReport = { done: string[]; failed: { step: string; error: string
  */
 export const isStaleDustProof = (err: unknown): boolean => /custom error: 170\b/i.test(reasonOf(err, 100_000));
 const QUICK_RETRY_MS = 15_000;
+/**
+ * The proof server refused the job because its queue was full: it is busy (with
+ * another service's proofs, or ones a stopped process left running), and nothing
+ * is wrong with the wallet. Such a failure is retried after BUSY_RETRY_MS and is
+ * not counted in the failure streak, whose watchdog would restart the program:
+ * a restart leaves the abandoned proofs running and makes the queue fuller
+ * (Starfall v2 rehearsal, 17 Nov 2026: a loop of these restarts, and every one
+ * of them left DUST booked in the saved wallet state).
+ */
+export const isProofServerBusy = (err: unknown): boolean => /job queue full/i.test(reasonOf(err, 100_000));
+const BUSY_RETRY_MS = 60_000;
+const retryDelay = (err: unknown, n: number, backoffMs: number, maxBackoffMs: number): number =>
+  isStaleDustProof(err) ? QUICK_RETRY_MS : isProofServerBusy(err) ? BUSY_RETRY_MS : Math.min(backoffMs * 2 ** (n - 1), maxBackoffMs);
 
 /** Drop stack frames ("at file:///…", "at process.x (node:…)") from a message that carries its own stack. */
 const stripFrames = (line: string): string => {
@@ -323,11 +336,13 @@ export class StepEngine<V, S extends { kind: string }> {
       } catch (err) {
         const error = reasonOf(err);
         const n = (failed?.failures ?? 0) + 1;
-        const delay = isStaleDustProof(err) ? QUICK_RETRY_MS : Math.min(this.backoffMs * 2 ** (n - 1), this.maxBackoffMs);
+        const busy = isProofServerBusy(err);
+        const delay = retryDelay(err, n, this.backoffMs, this.maxBackoffMs);
         this.failures.set(key, { failures: n, nextTryAt: this.clock() + delay, error });
-        this.streak.failed();
+        if (!busy) this.streak.failed();
         report.failed.push({ step: key, error });
-        this.logger.error(`could not ${o.describe(step)} (attempt ${n}, retrying in ${Math.round(delay / 1000)} s): ${error}`);
+        if (busy) this.logger.warn(`the proof server is busy (its queue is full): ${o.describe(step)} again in ${Math.round(delay / 1000)} s`);
+        else this.logger.error(`could not ${o.describe(step)} (attempt ${n}, retrying in ${Math.round(delay / 1000)} s): ${error}`);
       }
     }
     this.lastTickOk = true;
@@ -355,10 +370,15 @@ export class StepEngine<V, S extends { kind: string }> {
       (err: unknown) => {
         const error = reasonOf(err);
         const n = failuresSoFar + 1;
-        const delay = isStaleDustProof(err) ? QUICK_RETRY_MS : Math.min(this.backoffMs * 2 ** (n - 1), this.maxBackoffMs);
+        const busy = isProofServerBusy(err);
+        const delay = retryDelay(err, n, this.backoffMs, this.maxBackoffMs);
         this.failures.set(key, { failures: n, nextTryAt: this.clock() + delay, error });
-        this.streak.failed();
+        if (!busy) this.streak.failed();
         this.finished.push({ key, error });
+        if (busy) {
+          this.logger.warn(`the proof server is busy (its queue is full): ${o.describe(step)} again in ${Math.round(delay / 1000)} s`);
+          return;
+        }
         this.logger.error(
           `could not ${o.describe(step)} after ${Math.round((Date.now() - startedAt) / 1000)} s (attempt ${n}, retrying in ${Math.round(delay / 1000)} s): ${error}`,
         );
