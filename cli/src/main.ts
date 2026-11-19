@@ -50,6 +50,7 @@ import {
 import { joinLunardraw, lunardrawProviders, MidnightLunardrawChain, readView, zkConfigPath } from './contract.js';
 import { PARAMS_VOLUME, ProofServer } from './proof-server.js';
 import { starfall } from './starfall-commands.js';
+import { starfallV2 } from './starfall-v2-commands.js';
 import { monitor } from './monitor-command.js';
 import { watchSync } from './sync-watch.js';
 import {
@@ -81,6 +82,7 @@ const USAGE = `usage:
   ./lunardraw verify       --network <network>
   ./lunardraw fingerprints
   ./lunardraw starfall ...   (the Starfall settlement contract: ./lunardraw starfall help)
+  ./lunardraw starfall-v2 ...   (Starfall v2's keeper and oracle: ./lunardraw starfall-v2 help)
   ./lunardraw monitor ...    (email alerts for Starfall: ./lunardraw monitor --help)
 
 These commands run the v0 test contract. Defaults are a weekly Starfall: draws close on Thursdays at 20:00 Brisbane (10:00 UTC),
@@ -106,6 +108,7 @@ const STATUS = ['open', 'requested', 'fulfilled', 'drawn', 'settled', 'voided'];
 const main = async (argv: string[]): Promise<number> => {
   const [command, ...rest] = argv;
   if (command === 'starfall') return starfall(rest);
+  if (command === 'starfall-v2') return starfallV2(rest);
   if (command === 'monitor') return monitor(rest);
   const { values, positionals } = parseArgs({
     args: rest,

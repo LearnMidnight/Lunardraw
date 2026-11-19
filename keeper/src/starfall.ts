@@ -8,6 +8,8 @@
  *             ──▶ finalise (prizes fixed, operator fee paid; draws in order)
  *   settled   ──▶ pay every winning ticket's entitlement
  *   a deadline missed ──▶ void the draw, then refund every ticket
+ *   Starfall v2 also: syndicate prizes ──▶ pay each member its part;
+ *             a syndicate unfilled, a draw void, games not bought ──▶ refund each member
  *   told to wind down ──▶ the next draw opens as the final draw: its jackpot
  *             must be won, and what no division takes is paid to every game
  *             in it (refundTicket); then the game has ended
@@ -79,7 +81,27 @@ export type StarfallDrawView = {
    */
   unrefunded: bigint[];
   refundedGames: bigint;
+  /** Starfall v2: the draw's format (numbers 1..range, Moonball 1..moonballs; 1 is none). */
+  format?: { range: number; moonballs: number };
 };
+
+/**
+ * Starfall v2: a syndicate, with what the keeper needs to refund its members (see
+ * syndicateRefundDue): funded once every share is sold; `bought` is games bought.
+ */
+export type SyndicateView = {
+  id: bigint;
+  drawId: bigint;
+  funded: boolean;
+  sharePrice: bigint;
+  sold: bigint;
+  bought: bigint;
+  joinDeadline: bigint;
+  members: { index: bigint; shares: bigint; refunded: bigint }[];
+};
+
+/** Starfall v2: a member's part of a prize kept for a syndicate, not paid yet (with its amount, which may be 0). */
+export type MemberPaymentView = { draw: bigint; id: Uint8Array; payee: number; member: bigint; amount: bigint };
 
 /** A winning ticket's prize: its winning games per division (division 1 first). */
 export type EntitlementView = { id: Uint8Array; drawId: bigint; games: bigint[]; paid: boolean };
@@ -110,6 +132,9 @@ export type StarfallView = {
   settlementKey: { x: bigint; y: bigint };
   draws: StarfallDrawView[];
   entitlements: EntitlementView[];
+  /** Starfall v2 only. */
+  syndicates?: SyndicateView[];
+  memberPayments?: MemberPaymentView[];
 };
 
 /** Key of a draw's ticket in the ledger's `tickets` map (the contract's ticketKey). */
@@ -207,7 +232,22 @@ export interface StarfallChain {
   voidDraw(n: bigint): Promise<string | void>;
   /** Anyone: a void draw's refund, or a final draw's share. */
   refundTicket(n: bigint, index: bigint): Promise<void>;
+  /** Starfall v2, anyone: a member's part of a syndicate's prize (entitlement id, payee 0-2, member index). */
+  paySyndicateMember?(id: Uint8Array, payee: number, member: bigint): Promise<void>;
+  /** Starfall v2, anyone: what is due back to a syndicate member. */
+  refundSyndicate?(syndicate: bigint, member: bigint): Promise<void>;
 }
+
+/**
+ * The contract's ticket functions the keeper uses: Starfall v1's by default; Starfall v2's
+ * (compiled with Compact 0.36) for a v2 deployment.
+ */
+export type StarfallPure = {
+  openTicket(secret: bigint, n: bigint, cipher: SealedTicket): TicketPreimage;
+  ticketCommitment(deployment: { bytes: Uint8Array }, t: TicketPreimage): Uint8Array;
+  batchSize(): bigint;
+  settlementPublicKey(sk: bigint): { x: bigint; y: bigint };
+};
 
 /** A {@link Starfall.SettlementSimulator} as a chain: the keeper is its organiser and settler, the oracle its oracle. */
 export class StarfallSimulatorChain implements StarfallChain {
@@ -283,15 +323,21 @@ export const storedTicketsOf = (l: Starfall.Ledger, n: bigint): StoredTicket[] =
  * against its commitment (a wrong secret, or a corrupt ticket, fails here
  * with a clear message rather than in the proof).
  */
-export const decryptTickets = (stored: readonly StoredTicket[], n: bigint, secret: bigint, deployment: Uint8Array): TicketPreimage[] =>
+export const decryptTickets = (
+  stored: readonly StoredTicket[],
+  n: bigint,
+  secret: bigint,
+  deployment: Uint8Array,
+  pure: StarfallPure = Starfall.pureCircuits,
+): TicketPreimage[] =>
   stored.map((s, i) => {
     let t: TicketPreimage;
     try {
-      t = Starfall.pureCircuits.openTicket(secret, n, s.cipher);
+      t = pure.openTicket(secret, n, s.cipher);
     } catch (err) {
       throw new Error(`ticket ${i} of draw ${n} doesn't decrypt with this settlement secret: ${reasonOf(err)}`);
     }
-    if (hex(Starfall.pureCircuits.ticketCommitment({ bytes: deployment }, t)) !== hex(s.commitment)) {
+    if (hex(pure.ticketCommitment({ bytes: deployment }, t)) !== hex(s.commitment)) {
       throw new Error(`ticket ${i} of draw ${n} doesn't match its commitment once decrypted: is this the deployment's settlement secret?`);
     }
     return t;
@@ -309,8 +355,48 @@ export const idle = (view: StarfallView): boolean => {
   const settled = new Set(view.draws.filter((d) => d.status === DrawStatus.settled).map((d) => d.id));
   return (
     view.draws.every((d) => (d.status === DrawStatus.settled || d.status === DrawStatus.voided) && d.unrefunded.length === 0) &&
-    view.entitlements.every((e) => e.paid || !settled.has(e.drawId))
+    view.entitlements.every((e) => e.paid || !settled.has(e.drawId)) &&
+    (view.memberPayments ?? []).every((p) => p.amount === 0n) &&
+    // every draw is finished here, so whatever a syndicate is owed back is due now
+    syndicateRefunds(view, Number.MAX_SAFE_INTEGER, 0).length === 0
   );
+};
+
+/**
+ * What refundSyndicate would pay member `m` of syndicate `sy` at chain time `nowSecs` (the
+ * contract's rule): its part of all the syndicate's money if the draw is void, else of what
+ * wasn't spent on games once sales have closed (or the syndicate is unfilled after its join
+ * deadline), less what it has been refunded already.
+ */
+export const syndicateRefundDue = (
+  view: Pick<StarfallView, 'ticketPrice' | 'draws'>,
+  sy: SyndicateView,
+  m: SyndicateView['members'][number],
+  nowSecs: number,
+): bigint => {
+  const d = view.draws.find((x) => x.id === sy.drawId);
+  if (!d || sy.sold === 0n) return 0n;
+  const t = BigInt(Math.floor(nowSecs));
+  const isVoid = d.status === DrawStatus.voided;
+  const unfilled = !sy.funded && t >= sy.joinDeadline;
+  const closed = t >= d.salesClose;
+  if (!isVoid && !unfilled && !closed) return 0n;
+  const funded = sy.sharePrice * sy.sold;
+  const amount = isVoid ? funded : funded - view.ticketPrice * sy.bought;
+  const due = (amount * m.shares) / sy.sold;
+  return due > m.refunded ? due - m.refunded : 0n;
+};
+
+/** Every syndicate member owed money back at chain time `nowSecs` (boundaries `marginSecs` past). */
+const syndicateRefunds = (view: StarfallView, nowSecs: number, marginSecs: number) => {
+  const out: { syndicate: bigint; draw: bigint; member: bigint; amount: bigint }[] = [];
+  for (const sy of view.syndicates ?? []) {
+    for (const m of sy.members) {
+      const amount = syndicateRefundDue(view, sy, m, nowSecs - marginSecs);
+      if (amount > 0n) out.push({ syndicate: sy.id, draw: sy.drawId, member: m.index, amount });
+    }
+  }
+  return out;
 };
 
 /**
@@ -346,7 +432,9 @@ export type StarfallStep =
   | { kind: 'finalise'; draw: bigint }
   | { kind: 'pay'; draw: bigint; id: Uint8Array }
   | { kind: 'void'; draw: bigint; reason: string }
-  | { kind: 'refund'; draw: bigint; index: bigint; share?: boolean };
+  | { kind: 'refund'; draw: bigint; index: bigint; share?: boolean }
+  | { kind: 'member'; draw: bigint; id: Uint8Array; payee: number; member: bigint }
+  | { kind: 'syndicateRefund'; draw: bigint; syndicate: bigint; member: bigint };
 
 export type StarfallPlanOptions = {
   /** Seconds to wait after a boundary before acting on it, so block time has passed it too. Default 30. */
@@ -410,6 +498,10 @@ export const starfallSteps = (view: StarfallView, now: number, opts: StarfallPla
       case DrawStatus.settled:
         for (const e of view.entitlements) if (e.drawId === d.id && !e.paid) steps.push({ kind: 'pay', draw: d.id, id: e.id });
         for (const index of d.unrefunded) steps.push({ kind: 'refund', draw: d.id, index, share: true });
+        // A part of nothing is skipped: the contract would record it and send nothing.
+        for (const p of view.memberPayments ?? []) {
+          if (p.draw === d.id && p.amount > 0n) steps.push({ kind: 'member', draw: d.id, id: p.id, payee: p.payee, member: p.member });
+        }
         break;
       case DrawStatus.voided:
         for (const index of d.unrefunded) steps.push({ kind: 'refund', draw: d.id, index });
@@ -418,6 +510,8 @@ export const starfallSteps = (view: StarfallView, now: number, opts: StarfallPla
         break;
     }
   }
+
+  for (const r of syndicateRefunds(view, now, opts.marginSecs)) steps.push({ kind: 'syndicateRefund', draw: r.draw, syndicate: r.syndicate, member: r.member });
 
   // Nothing selling and nothing about to open one: open a draw directly. That
   // includes a last draw whose reveal was missed: it is voided in this same
@@ -440,7 +534,7 @@ export const starfallSteps = (view: StarfallView, now: number, opts: StarfallPla
   // organiser can send them; voids come before opening (a missed reveal's void
   // makes room for the next draw); settling has a deadline too; payments and
   // refunds have none.
-  const rank: Record<StarfallStep['kind'], number> = { reveal: 0, void: 1, open: 2, settle: 3, finalise: 4, compute: 5, pay: 6, refund: 7 };
+  const rank: Record<StarfallStep['kind'], number> = { reveal: 0, void: 1, open: 2, settle: 3, finalise: 4, compute: 5, pay: 6, refund: 7, member: 8, syndicateRefund: 9 };
   return steps
     .map((step, i) => ({ step, i }))
     .sort((a, b) => rank[a.step.kind] - rank[b.step.kind] || a.i - b.i)
@@ -457,6 +551,10 @@ export const starfallStepKey = (s: StarfallStep, lastDraw: bigint): string => {
       return `pay ${hex(s.id)}`;
     case 'refund':
       return `refund ${s.draw} #${s.index}`;
+    case 'member':
+      return `member ${hex(s.id)} ${s.payee} #${s.member}`;
+    case 'syndicateRefund':
+      return `syndicate refund ${s.syndicate} #${s.member}`;
     default:
       return `${s.kind} ${s.draw}`;
   }
@@ -482,6 +580,10 @@ export const describeStarfallStep = (s: StarfallStep, batchSize = 25n): string =
       return `void draw ${s.draw}: ${s.reason}`;
     case 'refund':
       return s.share ? `pay ticket ${s.index}'s share of final draw ${s.draw}` : `refund ticket ${s.index} of void draw ${s.draw}`;
+    case 'member':
+      return `pay syndicate member ${s.member} its part of a draw ${s.draw} prize (${hex(s.id).slice(0, 12)}..., payee ${s.payee})`;
+    case 'syndicateRefund':
+      return `refund syndicate ${s.syndicate}'s member ${s.member} (draw ${s.draw})`;
   }
 };
 
@@ -494,6 +596,8 @@ export type Split = { index: number; of: number };
 export const shareOf = (s: StarfallStep, of: number): number | undefined => {
   if (s.kind === 'pay') return Buffer.from(s.id).readUInt32BE(0) % of;
   if (s.kind === 'refund') return Number(s.index % BigInt(of));
+  if (s.kind === 'member') return Number((BigInt(Buffer.from(s.id).readUInt32BE(0)) + s.member) % BigInt(of));
+  if (s.kind === 'syndicateRefund') return Number((s.syndicate + s.member) % BigInt(of));
   return undefined;
 };
 
@@ -517,6 +621,8 @@ export type StarfallKeeperOptions = EngineTiming & {
   seeds?: DrawSeeds;
   /** The settlement secret. Without it this keeper doesn't settle. */
   settlementSecret?: bigint;
+  /** The contract's ticket functions (default Starfall v1's; Starfall v2's for a v2 deployment). */
+  pure?: StarfallPure;
   /** Default primary. A standby sends the primary's steps only once they're overdue. */
   role?: StarfallRole;
   /**
@@ -561,7 +667,8 @@ export class StarfallKeeper {
   private readonly warned = new Set<string>();
   /** Decrypted tickets by draw, kept while the draw settles. */
   private readonly decrypted = new Map<bigint, TicketPreimage[]>();
-  private readonly batchSize = Starfall.pureCircuits.batchSize();
+  private readonly pure: StarfallPure;
+  private readonly batchSize: bigint;
   private settleKeyOk = true;
   private readonly finalDraw: () => boolean;
   private readonly openNew: () => boolean;
@@ -569,6 +676,8 @@ export class StarfallKeeper {
   readonly split: Split;
 
   constructor(private readonly options: StarfallKeeperOptions) {
+    this.pure = options.pure ?? Starfall.pureCircuits;
+    this.batchSize = this.pure.batchSize();
     this.role = options.role ?? 'primary';
     this.split = options.split ?? (this.role === 'primary' ? { index: 0, of: 1 } : { index: 1, of: 2 });
     const { index, of } = this.split;
@@ -603,7 +712,7 @@ export class StarfallKeeper {
       run: (step, view, now) => this.run(step, view, now),
       mine: (step) => isMine(step, this.role, this.split),
       takeOverAfterMs: (options.takeOverAfterSecs ?? 300) * 1000,
-      bulk: { kinds: ['pay', 'refund'], perPass: options.paymentsPerPass ?? 5 },
+      bulk: { kinds: ['pay', 'refund', 'member', 'syndicateRefund'], perPass: options.paymentsPerPass ?? 5 },
     });
   }
 
@@ -662,7 +771,7 @@ export class StarfallKeeper {
       );
     }
     if (this.options.settlementSecret !== undefined) {
-      const k = Starfall.pureCircuits.settlementPublicKey(this.options.settlementSecret);
+      const k = this.pure.settlementPublicKey(this.options.settlementSecret);
       this.settleKeyOk = k.x === view.settlementKey.x && k.y === view.settlementKey.y;
       if (!this.settleKeyOk) {
         this.warnOnce('settlement key', 'error', "the settlement secret given isn't this deployment's (its public key differs), so this keeper won't settle");
@@ -696,7 +805,7 @@ export class StarfallKeeper {
     if (cached && BigInt(cached.length) === count) return cached;
     const stored = await this.options.chain.storedTickets(n);
     if (BigInt(stored.length) !== count) throw new Error(`draw ${n} shows ${count} tickets but ${stored.length} were read; the indexer may be catching up`);
-    const tickets = decryptTickets(stored, n, this.options.settlementSecret!, this.options.chain.addressBytes);
+    const tickets = decryptTickets(stored, n, this.options.settlementSecret!, this.options.chain.addressBytes, this.pure);
     this.decrypted.set(n, tickets);
     this.logger.info(`decrypted draw ${n}'s ${tickets.length} ticket(s)`);
     return tickets;
@@ -779,6 +888,14 @@ export class StarfallKeeper {
         return true;
       case 'refund':
         await chain.refundTicket(step.draw, step.index);
+        return true;
+      case 'member':
+        if (!chain.paySyndicateMember) throw new Error('this chain has no syndicates');
+        await chain.paySyndicateMember(step.id, step.payee, step.member);
+        return true;
+      case 'syndicateRefund':
+        if (!chain.refundSyndicate) throw new Error('this chain has no syndicates');
+        await chain.refundSyndicate(step.syndicate, step.member);
         return true;
     }
   }

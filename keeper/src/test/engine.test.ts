@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isStaleDustProof, reasonOf, StepEngine } from '../engine.js';
+import { isProofServerBusy, isStaleDustProof, reasonOf, StepEngine } from '../engine.js';
 
 type S = { kind: 'prove'; id: number };
 
@@ -84,6 +84,48 @@ describe('the step engine', () => {
     expect(attempts).toBe(4); // still backing off (the 4th failure waits 80 s)
     now += 80_000;
     r = await engine.tick();
+    expect(r.done).toEqual(['prove 1']);
+  });
+
+  it("waits a minute when the proof server's queue is full, and doesn't count it towards a restart", async () => {
+    let now = 0;
+    let busy = true;
+    let attempts = 0;
+    const queueFull = () =>
+      new Error("balanceTx rejected the transaction (circuit 'payEntitlement')", {
+        cause: new Error("Wallet.Proving: Failed to prove transaction: Error: 'prove' returned an error: (FiberFailure) ClientError: Failed to prove: Job Queue full"),
+      });
+    const warned: string[] = [];
+    const engine = new StepEngine<null, S>({
+      read: async () => [null, 0],
+      plan: () => [{ kind: 'prove' as const, id: 1 }],
+      key: (s) => `prove ${s.id}`,
+      describe: (s) => `prove ${s.id}`,
+      run: async () => {
+        attempts++;
+        if (busy) throw queueFull();
+        return true;
+      },
+      backoffMs: 10_000,
+      clock: () => now,
+      logger: { info() {}, warn: (m) => warned.push(m), error() {} },
+    });
+    for (let i = 0; i < 4; i++) {
+      await engine.tick();
+      now += 61_000;
+    }
+    expect(attempts).toBe(4);
+    expect(isProofServerBusy(queueFull())).toBe(true);
+    expect(engine.status().streak.failures).toBe(0); // the restart watchdog sees nothing failing
+    expect(warned[0]).toMatch(/proof server is busy.*prove 1 again in 60 s/);
+    // not retried sooner than a minute
+    await engine.tick();
+    now += 30_000;
+    await engine.tick();
+    expect(attempts).toBe(5);
+    busy = false;
+    now += 31_000;
+    const r = await engine.tick();
     expect(r.done).toEqual(['prove 1']);
   });
 

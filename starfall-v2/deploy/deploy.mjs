@@ -1,0 +1,707 @@
+#!/usr/bin/env node
+/**
+ * Deploy Starfall v2 and its Treasury on a ledger 9 network, locked, in the order the independent
+ * review set (docs/ADAPTIVE.md, "Independent review"):
+ *
+ *   1. the Treasury, already locked (its maintenance authority is an empty committee from the
+ *      deploy transaction itself: nobody ever holds a key for it);
+ *   2. the game with as many of its circuits as fit (DEPLOY_BUDGET) and a single-use maintenance
+ *      key that exists only in this process's memory;
+ *   3. the rest of its circuits' verifier keys, in one maintenance update (counter 0 to 1);
+ *   4. the game locked (its authority replaced by an empty committee);
+ *   5. checks on the chain: exactly the game's 17 circuits and the Treasury's 3, each with the
+ *      compiled verifier key; both authorities locked; the game's sealed settings and Treasury
+ *      fields as intended;
+ *   6. the Treasury bound to the game (its binder secret also only in memory), then checked;
+ *   7. the opening deposit.
+ * Opening draw 1 is left to the keeper (after the oracle accepts its key), except in a throwaway
+ * deployment, which does both with keys it makes up, to prove the first cross-contract call on
+ * the real network.
+ *
+ *   node deploy.mjs offline
+ *       No network: runs both constructors with the launch settings, builds every deploy and the
+ *       lock, and checks the settings and circuits (the constructor's own checks run too).
+ *   node deploy.mjs throwaway --wallet <file> [--deposit 2]
+ *       A throwaway deployment with made-up keys (nothing is saved), then accepts its oracle key
+ *       and opens draw 1. Leaves the deposit in contracts nobody will use.
+ *   node deploy.mjs rehearsal --wallet <file> --keys <dir> [--deposit 100] [--min-sales 3600]
+ *       A rehearsal: the real contracts with test keys, made here and saved in <dir> (organiser,
+ *       backup, oracle and settlement files, mode 600), the launch settings except a shorter
+ *       shortest sales period (default 1 hour, so the keeper can run a draw every few hours), a
+ *       small deposit, and the oracle key accepted. Draw 1 is the keeper's. Writes the deployment
+ *       record the keeper and oracle read (deployments/starfall-v2-<network>.json).
+ *   node deploy.mjs deploy --wallet <file> --organiser <file> --backup <file|64 hex> --oracle <file>
+ *                          --settlement <file> [--operator <mn_addr|hex>] [--deposit 10000]
+ *       The real deployment. --oracle and --settlement may hold only public keys. The operator
+ *       fee goes to --operator (default: the deploying wallet).
+ *   Every mode: [--network preprod] [--proof-server-port 6301] [--record <file>]
+ *
+ * Runs from a folder at the top of a built Lunardraw checkout (deploy.sh puts it there; it uses the
+ * repo's wallet, session and fee code), with out/settlement and out/treasury next to it: Compact
+ * 0.36 builds with verifier keys for every circuit, and prover keys for the Treasury's circuits and
+ * for the game's acceptOracleKey and requestDraw (a throwaway deployment proves those).
+ */
+import '@nightcast/deploy/explain-errors';
+import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync } from 'node:fs';
+import { createHash, webcrypto } from 'node:crypto';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { parseArgs } from 'node:util';
+import { CompiledContract } from '@midnight-ntwrk/compact-js';
+import { encodeContractAddress, StateValue } from '@midnight-ntwrk/compact-runtime';
+import {
+  createUnprovenDeployTx,
+  findDeployedContract,
+  submitTx,
+  verifierKeysEqual,
+} from '@midnight-ntwrk/midnight-js/contracts';
+import { LedgerTransaction, SerializedContractState, SerializedZswapChainState, SerializedLedgerParameters } from '@midnight-ntwrk/midnight-js-types';
+import { NodeZkConfigProvider, nodeZkConfigRegistry } from '@midnight-ntwrk/midnight-js-node-zk-config-provider';
+import { httpClientProofProvider } from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
+import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
+import { inMemoryPrivateStateProvider } from '@midnight-ntwrk/testkit-js';
+import {
+  ContractState,
+  ContractDeploy,
+  ContractMaintenanceAuthority,
+  ContractOperationVersionedVerifierKey,
+  Intent,
+  LedgerParameters,
+  MaintenanceUpdate,
+  ReplaceAuthority,
+  Transaction,
+  ZswapChainState,
+  signData,
+  unshieldedToken,
+  VerifierKeyInsert,
+} from '@midnight-ntwrk/midnight-js-protocol/v9';
+import { TX_TTL_SECONDS, walletAddress } from '@nightcast/deploy';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+// The Lunardraw checkout: deploy.sh copies this folder to its top; in the repository it is starfall-v2/deploy.
+const REPO = [resolve(HERE, '..'), resolve(HERE, '..', '..')].find((r) => existsSync(join(r, 'cli', 'dist', 'common.js'))) ?? resolve(HERE, '..', '..');
+const cli = (m) => import(pathToFileURL(join(REPO, 'cli', 'dist', m)).href);
+const OUT = join(HERE, 'out');
+const STAR = 1_000_000n;
+const say = (m) => process.stdout.write(`${m}\n`);
+const hex = (b) => Buffer.from(b).toString('hex');
+const tn = (star) => `${(Number(star) / 1e6).toLocaleString('en', { maximumFractionDigits: 6 })} tNIGHT`;
+const ttl = () => new Date(Date.now() + TX_TTL_SECONDS * 1000);
+const errorText = (e) => {
+  const parts = [];
+  for (let x = e, i = 0; x && i < 6; x = x.cause, i++) parts.push(x instanceof Error ? `${x.name}: ${x.message}` : String(x));
+  return parts.join(' <- ').replace(/\s+/g, ' ').slice(0, 1500);
+};
+const randomBytes = (n) => webcrypto.getRandomValues(new Uint8Array(n));
+const randomScalar = () => BigInt('0x' + hex(randomBytes(31)));
+
+// ------------------------------------------------------------------ the launch settings
+// docs/ADAPTIVE.md and starfall-v2-design (project notes), as decided 14-15 Nov 2026.
+const comb = (n, k) => { let r = 1n; for (let i = 0n; i < BigInt(k); i++) r = (r * (BigInt(n) - i)) / (i + 1n); return r; };
+const NO_MOONBALL = [5000, 0, 752, 0, 1241, 3007, 0, 0, 0];
+const MOONBALL_TABLES = {
+  '30/2': [5000, 30, 272, 227, 1101, 2452, 918, 0, 0],
+  '30/5': [5000, 25, 110, 191, 445, 1189, 775, 2265, 0],
+  '35/5': [5000, 19, 92, 160, 404, 1175, 703, 2447, 0],
+  '35/10': [5000, 15, 51, 122, 223, 648, 536, 1348, 2057],
+};
+const POWERBALL_HALF = [5000, 139, 173, 150, 113, 707, 549, 1165, 2004];
+const rung = (n, m) => ({
+  numbers: BigInt(n), moonball: BigInt(m), q: BigInt(Math.floor(65536 / n)), qm: BigInt(Math.floor(65536 / m)),
+  odds: comb(n, 7) * BigInt(m), pick5: comb(n - 5, 2),
+  shares: (m === 1 ? NO_MOONBALL : MOONBALL_TABLES[`${n}/${m}`] ?? POWERBALL_HALF).map(BigInt),
+});
+export const LADDER = [[20, 1], [22, 1], [25, 1], [27, 1], [30, 1], [30, 2], [30, 5], [35, 5], [35, 10], [35, 20], [40, 20], [45, 20]].map(([n, m]) => rung(n, m));
+export const LAUNCH = {
+  price: 1_300_000n,           // a game: 1.3 tNIGHT
+  fee: 200_000n,               // 0.20 to the operator
+  treasuryFee: 100_000n,       // 0.10 to the Treasury (1.0 to the prize pool)
+  ceiling: 710_000n,           // the next jackpot is at most 0.71 tNIGHT per combination
+  floorPer: 200_000n,          // the floor: 0.20 a game of a target window's sales
+  floor0: 1_840n * STAR,       // the first floor: 28 draws x about 330 games x 0.20
+  startRung: 0n,               // 7 from 20, no Moonball
+  target: 28n,                 // daily draws, a jackpot about monthly
+  every: 7n,                   // the format checked weekly
+  mustBeWonAfter: 0n,          // never forced
+  minSales: 21_600n,           // a draw sells for 6 hours ...
+  maxSales: 14n * 86_400n,     // ... to 14 days
+  revealWindow: 3_600n,
+  drawWindow: 7_200n,
+  settleWindow: 86_400n,
+  maxTicketsPerDraw: 10_000n,
+  finalSales: 7n * 86_400n,    // a final draw sells for at least a week
+  deposit: 10_000n * STAR,     // the treasury wallet's opening deposit
+};
+const GAME = 'settlement', TREASURY = 'treasury';
+const SYNDICATE_CIRCUITS = ['createSyndicate', 'joinSyndicate', 'buySyndicateTickets', 'paySyndicateMember', 'refundSyndicate'];
+const TREASURY_CIRCUITS = ['bind', 'deposit', 'release'];
+/**
+ * How full of a block (its largest cost dimension, priced with the ledger's initial parameters, as
+ * `measure` prints it) the game's deploy may be. Preprod accepted the probe's 12-circuit deploy at
+ * 0.600 of bytesWritten and refused its 15-circuit one at 0.736 and v2's 12-circuit one at 0.677
+ * (v2's starting data alone is 0.138), so the deploy stays at 0.55 and the rest are added after.
+ */
+const DEPLOY_BUDGET = 0.55;
+const COST_DIMENSIONS = ['readTime', 'computeTime', 'blockUsage', 'bytesWritten', 'bytesChurned'];
+const circuitsOf = (name) => readdirSync(join(OUT, name, 'keys')).filter((f) => f.endsWith('.verifier')).map((f) => f.slice(0, -'.verifier'.length)).sort();
+
+// ------------------------------------------------------------------ compiled contracts
+const moduleOf = (name) => import(pathToFileURL(join(OUT, name, 'contract', 'index.js')).href);
+const sortSeven = (v) => [...v].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+const gameWitnesses = {
+  oracleSecretKey: ({ privateState }) => [privateState, need(privateState.oracleSecretKey, 'oracle secret')],
+  organiserSecret: ({ privateState }) => [privateState, need(privateState.organiserSecret, 'organiser secret')],
+  syndicateSecret: ({ privateState }) => [privateState, need(privateState.syndicateSecret, 'syndicate secret')],
+  newTickets: () => { throw new Error('the deploy buys no tickets'); },
+  sealingRandomnessFor: () => { throw new Error('the deploy buys no tickets'); },
+  settlementBatch: () => { throw new Error('the deploy settles nothing'); },
+  splitByte: ({ privateState }, x) => [privateState, [x >> 4n, x & 15n]],
+  divMod16: ({ privateState }, v, m) => [privateState, [v / m, v % m]],
+  sortSeven: ({ privateState }, v) => [privateState, sortSeven(v)],
+  divModWide: ({ privateState }, n, d) => [privateState, [n / d, n % d]],
+};
+const treasuryWitnesses = { binderSecret: ({ privateState }) => [privateState, need(privateState.binderSecret, 'binder secret')] };
+function need(v, what) { if (v === undefined) throw new Error(`no ${what} in private state`); return v; }
+const compiled = async (name, witnesses) => {
+  const mod = await moduleOf(name);
+  const c = CompiledContract.withCompiledFileAssets(CompiledContract.withWitnesses(CompiledContract.make(name, mod.Contract), witnesses), join(OUT, name));
+  return { mod, c };
+};
+
+const opNames = (state) => state.operations().map((o) => (typeof o === 'string' ? o : Buffer.from(o).toString())).sort();
+const isLocked = (a) => a.committee.length === 0 && a.threshold > a.committee.length;
+const ledgerOf = (mod, state) => mod.ledger(StateValue.decode(state.data.state.encode()));
+
+/** The game's constructor arguments, in its order. */
+const gameArgs = (p, tAddr, S = LAUNCH) => [
+  p.oracleKey, p.organiserCommitment, p.backupCommitment, p.settlementKey, { bytes: p.operator },
+  S.fee, S.price, S.minSales, S.maxSales, S.revealWindow, S.drawWindow, S.settleWindow,
+  S.maxTicketsPerDraw, S.finalSales, S.mustBeWonAfter,
+  LADDER, BigInt(LADDER.length), S.startRung, S.target, S.every, S.floor0, S.floorPer, S.ceiling,
+  { bytes: encodeContractAddress(tAddr) }, { bytes: encodeContractAddress(tAddr) }, S.treasuryFee,
+];
+
+// ------------------------------------------------------------------ the transactions
+/** The Treasury's deploy, locked from the start: nobody ever holds a key for it. */
+const treasuryDeploy = async (providers, T, binderSecret, networkId) => {
+  const built = await createUnprovenDeployTx(providers, {
+    compiledContract: T.c, privateStateId: TREASURY, initialPrivateState: { binderSecret }, args: [T.mod.pureCircuits.binderCommitmentOf(binderSecret)],
+  });
+  const state = ContractState.deserialize(built.public.initialContractState.serialize());
+  state.maintenanceAuthority = new ContractMaintenanceAuthority([], 1, 0n);
+  const deploy = new ContractDeploy(state);
+  const tx = Transaction.fromParts(networkId, undefined, undefined, Intent.new(ttl()).addDeploy(deploy));
+  return { deploy, address: String(deploy.address), unprovenTx: LedgerTransaction.seal('v9', 'Unproven', tx) };
+};
+
+/**
+ * The game's deploy: the constructor as midnight-js runs it (which also samples the single-use
+ * maintenance key and puts it in the authority), rebuilt with the same data, balance and authority
+ * and only the circuits that fit in DEPLOY_BUDGET (smallest verifier key first, so the fewest are
+ * left to add). `later` are added one maintenance transaction each before the lock.
+ */
+const gameDeploy = async (providers, G, args, networkId, pick = (full) => fitDeploy(full, networkId).inDeploy) => {
+  const built = await createUnprovenDeployTx(providers, { compiledContract: G.c, privateStateId: GAME, initialPrivateState: {}, args });
+  const full = ContractState.deserialize(built.public.initialContractState.serialize());
+  const inDeploy = pick(full);
+  const d = withOps(full, inDeploy, networkId);
+  return { ...d, full, later: opNames(full).filter((o) => !inDeploy.includes(o)), fullness: fullnessOf(d.tx), signingKey: built.private.signingKey };
+};
+
+/** The largest share of a block's limit the transaction uses, and in which dimension (Infinity if over a limit). */
+const fullnessOf = (tx) => {
+  const params = LedgerParameters.initialParameters();
+  let n;
+  try { n = params.normalizeFullness(tx.cost(params)); } catch { return { max: Infinity, dimension: 'over a limit' }; }
+  const dimension = COST_DIMENSIONS.reduce((a, b) => (n[b] > n[a] ? b : a));
+  return { max: n[dimension], dimension };
+};
+
+const vkBytes = (o) => readFileSync(join(OUT, GAME, 'keys', `${o}.verifier`)).length;
+
+/** The game's circuits, smallest verifier key first, taken into the deploy while it stays in DEPLOY_BUDGET. */
+const fitDeploy = (full, networkId) => {
+  const order = opNames(full).sort((a, b) => vkBytes(a) - vkBytes(b) || (a < b ? -1 : 1));
+  const inDeploy = [];
+  for (const o of order) {
+    if (fullnessOf(withOps(full, [...inDeploy, o], networkId).tx).max > DEPLOY_BUDGET) break;
+    inDeploy.push(o);
+  }
+  if (fullnessOf(withOps(full, [], networkId).tx).max > DEPLOY_BUDGET) throw new Error('the game\'s data alone is over the deploy budget');
+  return { inDeploy, later: order.filter((o) => !inDeploy.includes(o)) };
+};
+
+/** A deploy of `full`'s data, balance and authority with only the operations `ops`. */
+const withOps = (full, ops, networkId) => {
+  const state = new ContractState();
+  state.data = full.data;
+  state.balance = full.balance;
+  state.maintenanceAuthority = full.maintenanceAuthority;
+  for (const op of ops) state.setOperation(op, full.operation(op));
+  const deploy = new ContractDeploy(state);
+  const tx = Transaction.fromParts(networkId, undefined, undefined, Intent.new(ttl()).addDeploy(deploy));
+  return { deploy, address: String(deploy.address), base: ops, tx, unprovenTx: LedgerTransaction.seal('v9', 'Unproven', tx) };
+};
+
+/**
+ * The rest of the game's verifier keys in one maintenance update, signed with the single-use key.
+ * One update, not one transaction each: a second update built before the chain shows the first
+ * carries the same counter and is refused (as on Preprod, 15 Nov).
+ */
+const addKeysUpdate = (address, ops, counter, signingKey) => {
+  const update = new MaintenanceUpdate(address, ops.map((o) => new VerifierKeyInsert(o, new ContractOperationVersionedVerifierKey('v4', readFileSync(join(OUT, GAME, 'keys', `${o}.verifier`))))), counter);
+  return update.addSignature(0n, signData(signingKey, update.dataToSign));
+};
+
+/** A transaction the chain recorded as anything but a full success is a failure. */
+const succeeded = (r, what) => {
+  const status = r?.status ?? r?.public?.status;
+  if (status !== undefined && status !== 'SucceedEntirely') throw new Error(`${what}: the chain recorded it as ${status}${r.txId ? ` (transaction ${r.txId})` : ''}`);
+  return r;
+};
+
+/** The lock: the authority replaced by an empty committee (threshold 1: nobody can ever sign). */
+const lockUpdate = (address, current, signingKey) => {
+  const update = new MaintenanceUpdate(address, [new ReplaceAuthority(new ContractMaintenanceAuthority([], 1, current.counter + 1n))], current.counter);
+  return update.addSignature(0n, signData(signingKey, update.dataToSign));
+};
+
+// ------------------------------------------------------------------ checks
+/** Exactly these circuits, each with the compiled verifier key. */
+const checkCircuits = (state, name) => {
+  const want = circuitsOf(name);
+  const have = opNames(state);
+  const extra = have.filter((o) => !want.includes(o));
+  const missing = want.filter((o) => !have.includes(o));
+  const wrong = want.filter((o) => have.includes(o) && !verifierKeysEqual(state.operation(o).verifierKey, readFileSync(join(OUT, name, 'keys', `${o}.verifier`))));
+  return { ok: extra.length === 0 && missing.length === 0 && wrong.length === 0, detail: `${have.length} circuits${extra.length ? `; extra: ${extra.join(', ')}` : ''}${missing.length ? `; missing: ${missing.join(', ')}` : ''}${wrong.length ? `; keys differ: ${wrong.join(', ')}` : ''}` };
+};
+
+/** The game's sealed settings, as intended. */
+const checkSettings = (l, p, tAddr, S = LAUNCH) => {
+  const same = (a, b) => JSON.stringify(a, (_k, v) => (typeof v === 'bigint' ? v.toString() : v instanceof Uint8Array ? hex(v) : v)) === JSON.stringify(b, (_k, v) => (typeof v === 'bigint' ? v.toString() : v instanceof Uint8Array ? hex(v) : v));
+  const checks = [
+    ['price 1.3, operator 0.20, Treasury 0.10', l.ticketPrice === S.price && l.feePerGame === S.fee && l.treasuryPerGame === S.treasuryFee],
+    ['ceiling 0.71 a combination, floor 0.20 a game, first floor 1,840', l.ceilingPerCombination === S.ceiling && l.floorPerGame === S.floorPer && l.floor === S.floor0],
+    ['the 12-rung ladder with its prize tables, starting on 7 from 20', same(l.ladder, LADDER) && l.rungCount === 12n && l.rung === S.startRung && l.aim === S.startRung],
+    ['daily: target 28 draws, retarget every 7, never forced', l.targetDraws === S.target && l.retargetEvery === S.every && l.mustBeWonAfter === S.mustBeWonAfter],
+    [`sales ${Number(S.minSales) / 3600} h to 14 days, final draw at least 7 days, 10,000 tickets a draw`, l.minSales === S.minSales && l.maxSales === S.maxSales && l.finalSales === S.finalSales && l.maxTicketsPerDraw === S.maxTicketsPerDraw],
+    ['windows: reveal 1 h, draw 2 h, settle 1 day', l.revealWindow === S.revealWindow && l.drawWindow === S.drawWindow && l.settleWindow === S.settleWindow],
+    ['the organiser, backup, settlement key and operator given', hex(l.organiser) === hex(p.organiserCommitment) && hex(l.backupOrganiser) === hex(p.backupCommitment) && l.settlementKey.x === p.settlementKey.x && l.settlementKey.y === p.settlementKey.y && hex(l.operator.bytes) === hex(p.operator)],
+    ['the oracle key proposed, no draw yet, no syndicate yet', l.proposedOracleKey.is_some && l.proposedOracleKey.value.x === p.oracleKey.x && l.lastDraw === 0n && l.lastSyndicate === 0n],
+    ['the Treasury it calls and pays is the deployed Treasury', hex(l.treasuryAddress.bytes) === hex(encodeContractAddress(tAddr)) && hex(l.treasury.bytes ?? l.treasury) === hex(encodeContractAddress(tAddr))],
+  ];
+  return checks.map(([name, ok]) => ({ name, ok: !!ok }));
+};
+
+// ------------------------------------------------------------------ offline
+const standInChain = () => {
+  const states = new Map();
+  const read = (address) => {
+    const st = states.get(String(address));
+    if (!st) return null;
+    return {
+      protocolVersion: 9,
+      contractState: SerializedContractState.fromBytes('v9', st.serialize()),
+      zswapChainState: SerializedZswapChainState.fromBytes('v9', new ZswapChainState().serialize()),
+      ledgerParameters: SerializedLedgerParameters.fromBytes('v9', LedgerParameters.initialParameters().serialize()),
+    };
+  };
+  return {
+    states,
+    chain: {
+      queryBlock: async () => ({ hash: '11'.repeat(32), height: 1, timestamp: Date.now() }),
+      queryZSwapAndContractState: async (a) => read(a),
+      queryContractState: async (a) => read(a),
+      queryDeployContractState: async (a) => read(a),
+    },
+  };
+};
+
+const offline = async () => {
+  let failed = 0;
+  const check = (name, cond, detail = '') => { if (!cond) failed++; say(`${cond ? 'ok  ' : 'FAIL'} ${name}${cond ? '' : `  ${detail}`}`); };
+  const { states, chain } = standInChain();
+  const providers = (name) => ({
+    privateStateProvider: inMemoryPrivateStateProvider(), publicDataProvider: chain,
+    walletProvider: { getCoinPublicKey: () => '0'.repeat(64), getEncryptionPublicKey: () => '0'.repeat(64) },
+    config: { networkId: 'preprod', ttlSeconds: TX_TTL_SECONDS }, zkConfigProvider: new NodeZkConfigProvider(join(OUT, name), { verify: 'require-if-present' }),
+  });
+  const T = await compiled(TREASURY, treasuryWitnesses);
+  const G = await compiled(GAME, gameWitnesses);
+  check(`the compiled game has 17 circuits (12 + the 5 syndicate ones) and the Treasury 3`, circuitsOf(GAME).length === 17 && SYNDICATE_CIRCUITS.every((c) => circuitsOf(GAME).includes(c)) && circuitsOf(TREASURY).join() === TREASURY_CIRCUITS.join(), circuitsOf(GAME).join());
+  const t = await treasuryDeploy(providers(TREASURY), T, randomBytes(32), 'preprod');
+  states.set(t.address, ContractState.deserialize(t.deploy.initialState.serialize()));
+  check('the Treasury deploy builds, locked from the start', isLocked(t.deploy.initialState.maintenanceAuthority) && checkCircuits(t.deploy.initialState, TREASURY).ok);
+  const p = madeUp(G).p;
+  p.operator = randomBytes(32);
+  const g = await gameDeploy(providers(GAME), G, gameArgs(p, t.address), 'preprod');
+  check(`the game deploy builds (the constructor's own checks passed) with ${g.base.length} circuits, ${g.fullness.max.toFixed(3)} of a block's ${g.fullness.dimension} (budget ${DEPLOY_BUDGET}): ${g.base.join(', ')}`, g.base.length >= 1 && opNames(g.deploy.initialState).length === g.base.length && g.fullness.max <= DEPLOY_BUDGET);
+  const adding = addKeysUpdate(g.address, g.later, 0n, g.signingKey);
+  const addFull = fullnessOf(Transaction.fromParts('preprod', undefined, undefined, Intent.new(ttl()).addMaintenanceUpdate(adding)));
+  check(`the ${g.later.length} added afterwards in one signed maintenance update at counter 0 (${addFull.max.toFixed(3)} of a block's ${addFull.dimension}): ${g.later.join(', ')}`,
+    g.later.length + g.base.length === 17 && adding.updates.length === g.later.length && adding.counter === 0n && adding.signatures.length === 1 && addFull.max <= DEPLOY_BUDGET);
+  check('its authority is the single-use key alone, counter 0', g.full.maintenanceAuthority.committee.length === 1 && g.full.maintenanceAuthority.threshold === 1 && g.full.maintenanceAuthority.counter === 0n);
+  check(`the full contract (what the chain will hold after the ${g.later.length} additions) has exactly the compiled circuits and keys`, checkCircuits(g.full, GAME).ok, checkCircuits(g.full, GAME).detail);
+  for (const c of checkSettings(ledgerOf(G.mod, g.deploy.initialState), p, t.address)) check(`settings: ${c.name}`, c.ok);
+  const lock = lockUpdate(g.address, { counter: 1n }, g.signingKey);
+  check(`the lock, after that update, replaces the authority with an empty committee at counter 2`, lock.counter === 1n && isLocked(lock.updates[0].authority) && lock.updates[0].authority.counter === 2n && lock.signatures.length === 1);
+  check(`the deploy transactions are ledger 9 (Treasury and game)`, t.unprovenTx.era === 'v9' && g.unprovenTx.era === 'v9');
+  const vk = g.later.map(vkBytes);
+  check(`the ${vk.length} added verifier keys: ${vk.join(' + ')} = ${vk.reduce((a, b) => a + b, 0).toLocaleString('en')} bytes`, vk.every((n) => n > 1000));
+  say(failed ? `\n${failed} FAILED` : '\nall offline checks passed');
+  if (failed) process.exitCode = 1;
+};
+
+/**
+ * What a deploy costs against the block limits, dimension by dimension: the game's data alone, then
+ * with circuits added smallest key first, and the Treasury. `params` is the chain's (from a deployed
+ * contract's query, `--params-from <address>`) or the ledger's initial ones.
+ */
+const measure = async (values) => {
+  const { states, chain } = standInChain();
+  const providers = (name) => ({
+    privateStateProvider: inMemoryPrivateStateProvider(), publicDataProvider: chain,
+    walletProvider: { getCoinPublicKey: () => '0'.repeat(64), getEncryptionPublicKey: () => '0'.repeat(64) },
+    config: { networkId: 'preprod', ttlSeconds: TX_TTL_SECONDS }, zkConfigProvider: new NodeZkConfigProvider(join(OUT, name), { verify: 'require-if-present' }),
+  });
+  let params = LedgerParameters.initialParameters();
+  let from = 'the ledger\'s initial parameters';
+  if (values['params-from']) {
+    const common = await cli('common.js');
+    const net = common.networkConfig?.(values.network ?? 'preprod') ?? common.NETWORKS?.[values.network ?? 'preprod'];
+    const pd = indexerPublicDataProvider(net.indexer, net.indexerWS);
+    const r = await pd.queryZSwapAndContractState(values['params-from']);
+    if (!r) throw new Error(`no contract at ${values['params-from']}`);
+    params = LedgerParameters.deserialize(r.ledgerParameters ? (r.ledgerParameters.serialize?.() ?? r.ledgerParameters) : r[2].serialize());
+    from = `the chain's parameters (read with ${values['params-from'].slice(0, 12)}...)`;
+  }
+  say(`Priced with ${from}. Each number is the share of a block's limit (1.00 = full).\n`);
+  const dims = ['readTime', 'computeTime', 'blockUsage', 'bytesWritten', 'bytesChurned'];
+  say(['what'.padEnd(46), ...dims.map((d) => d.padStart(13)), '   bytes'].join(''));
+  const line = (what, tx) => {
+    const c = tx.cost(params);
+    let n;
+    try { n = params.normalizeFullness(c); } catch (e) { n = null; }
+    const size = tx.serialize().length;
+    say([what.padEnd(46), ...dims.map((d) => (n ? n[d].toFixed(3) : String(c[d])).padStart(13)), String(size).padStart(8), n ? '' : '   OVER A LIMIT (raw costs shown)'].join(''));
+    return n;
+  };
+  const T = await compiled(TREASURY, treasuryWitnesses);
+  const G = await compiled(GAME, gameWitnesses);
+  const t = await treasuryDeploy(providers(TREASURY), T, randomBytes(32), 'preprod');
+  line('Treasury (3 circuits)', Transaction.fromParts('preprod', undefined, undefined, Intent.new(ttl()).addDeploy(t.deploy)));
+  states.set(t.address, ContractState.deserialize(t.deploy.initialState.serialize()));
+  const p = madeUp(G).p;
+  p.operator = randomBytes(32);
+  const g = await gameDeploy(providers(GAME), G, gameArgs(p, t.address), 'preprod', () => []);
+  const vk = (o) => readFileSync(join(OUT, GAME, 'keys', `${o}.verifier`)).length;
+  const order = opNames(g.full).sort((a, b) => vk(a) - vk(b) || (a < b ? -1 : 1));
+  say(`the game's starting state with no circuits: ${g.deploy.initialState.serialize().length} bytes`);
+  line('game, data only', g.tx);
+  for (let i = 1; i <= order.length; i++) {
+    const d = withOps(g.full, order.slice(0, i), 'preprod');
+    line(`game + ${i} (${order[i - 1]}, ${vk(order[i - 1])} B)`, d.tx);
+  }
+  const base = opNames(g.full).filter((o) => !SYNDICATE_CIRCUITS.includes(o));
+  line('game + the 12 game circuits (refused on Preprod)', withOps(g.full, base, 'preprod').tx);
+  const f = fitDeploy(g.full, 'preprod');
+  say(`\nThe deploy takes ${f.inDeploy.length} circuits (budget ${DEPLOY_BUDGET} of a block); ${f.later.length} are added after: ${f.later.join(', ')}.`);
+};
+
+/**
+ * A rehearsal's test keys, made here and saved in `dir` in the CLI's key file formats (mode 600;
+ * an existing file is never overwritten): the organiser, the backup organiser, the oracle and the
+ * settlement key. Test keys only: a rehearsal holds test money.
+ */
+function rehearsalKeys(G, dir) {
+  if (!dir) throw new Error('--keys <dir> is required: the rehearsal\'s test keys are saved there');
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const save = (name, body) => writeFileSync(join(dir, name), JSON.stringify(body, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+  const k = madeUp(G);
+  const backupSecret = randomBytes(32);
+  const settlementSk = randomScalar();
+  k.p.backupCommitment = G.mod.pureCircuits.organiserCommitmentOf(backupSecret);
+  k.p.settlementKey = G.mod.pureCircuits.settlementPublicKey(settlementSk);
+  save('v2-organiser.secret', { role: 'organiser', secret: hex(k.organiserSecret), public: hex(k.p.organiserCommitment) });
+  save('v2-backup.secret', { role: 'organiser', secret: hex(backupSecret), public: hex(k.p.backupCommitment) });
+  save('v2-oracle.secret', { role: 'oracle', secret: k.oracleSk.toString(16).padStart(64, '0'), public: { x: k.p.oracleKey.x.toString(), y: k.p.oracleKey.y.toString() } });
+  save('v2-settlement.secret', { role: 'settlement', secret: settlementSk.toString(), public: { x: k.p.settlementKey.x.toString(), y: k.p.settlementKey.y.toString() } });
+  say(`test keys saved in ${dir}: v2-organiser.secret, v2-backup.secret, v2-oracle.secret, v2-settlement.secret`);
+  return k;
+}
+
+/** Made-up keys for offline and throwaway runs: kept only in memory, never written down. */
+function madeUp(G) {
+  const oracleSk = randomScalar();
+  const organiserSecret = randomBytes(32);
+  return {
+    oracleSk,
+    organiserSecret,
+    p: {
+      oracleKey: G.mod.pureCircuits.settlementPublicKey(oracleSk),
+      organiserCommitment: G.mod.pureCircuits.organiserCommitmentOf(organiserSecret),
+      backupCommitment: G.mod.pureCircuits.organiserCommitmentOf(randomBytes(32)),
+      settlementKey: G.mod.pureCircuits.settlementPublicKey(randomScalar()),
+    },
+  };
+}
+
+// ------------------------------------------------------------------ on the network
+const run = async (mode, values) => {
+  const network = values.network ?? 'preprod';
+  const port = values['proof-server-port'] ? Number(values['proof-server-port']) : 6301;
+  const common = await cli('common.js');
+  const { openWallet } = await cli('wallet-lock.js');
+  const { withFreshFees } = await cli('fresh-fees.js');
+  const { waitForTip } = await cli('sync-watch.js');
+  const { isStaleDustProof } = await import('@lunardraw/keeper');
+  const T = await compiled(TREASURY, treasuryWitnesses);
+  const G = await compiled(GAME, gameWitnesses);
+  const throwaway = mode === 'throwaway';
+  const rehearsal = mode === 'rehearsal';
+  // A rehearsal sells for at least an hour (not 6), so its draws can come every few hours.
+  const S = rehearsal ? { ...LAUNCH, minSales: BigInt(values['min-sales'] ?? 3600) } : LAUNCH;
+  const deposit = values.deposit !== undefined ? BigInt(Math.round(Number(values.deposit) * 1e6)) : throwaway ? 2n * STAR : rehearsal ? 100n * STAR : LAUNCH.deposit;
+  const recordPath = join(REPO, 'deployments', `starfall-v2-${network}.json`);
+  if (!throwaway && existsSync(recordPath)) throw new Error(`${recordPath} exists: move it away first (it is the deployment the keeper and oracle run)`);
+  const record = { mode, network, started: new Date().toISOString(), settings: S, steps: [] };
+  const file = values.record ?? join(HERE, `deployment-${mode}-${network}.json`);
+  const save = () => writeFileSync(file, JSON.stringify(record, (_k, v) => (typeof v === 'bigint' ? v.toString() : v instanceof Uint8Array ? hex(v) : v), 2) + '\n');
+  const step = async (name, f) => {
+    const started = Date.now();
+    say(`\n== ${name}`);
+    try {
+      const out = (await f()) ?? {};
+      const seconds = Math.round((Date.now() - started) / 1000);
+      const { note, ...kept } = out;
+      record.steps.push({ step: name, ok: true, seconds, ...kept });
+      say(`   ok (${seconds} s)${note ? `: ${note}` : ''}`);
+      save();
+      return out;
+    } catch (e) {
+      record.steps.push({ step: name, ok: false, error: errorText(e) });
+      say(`   FAILED: ${errorText(e)}`);
+      save();
+      throw e;
+    }
+  };
+  // The keys: from files for a real deployment; made up (and never written down) for a throwaway one.
+  const made = throwaway ? madeUp(G) : rehearsal ? rehearsalKeys(G, values.keys) : undefined;
+  const oracleSk = made?.oracleSk;
+  const organiserSecret = made?.organiserSecret;
+  let p;
+  if (made) {
+    p = made.p;
+  } else {
+    for (const k of ['organiser', 'backup', 'oracle', 'settlement']) if (!values[k]) throw new Error(`--${k} is required`);
+    p = {
+      oracleKey: common.oracleKeyFrom(values.oracle, false).pk,
+      organiserCommitment: G.mod.pureCircuits.organiserCommitmentOf(common.organiserSecretFrom(values.organiser)),
+      backupCommitment: backupCommitmentFrom(common, G, values.backup),
+      settlementKey: settlementPublicFrom(common, G, values.settlement),
+    };
+  }
+  try {
+    await common.withSession(network, async (session) => {
+      const wallet = await openWallet(session, { seed: common.walletSeed(values.wallet) });
+      try {
+        record.deployer = walletAddress(wallet);
+        p.operator = values.operator ? (await cli('starfall-commands.js')).parseUserAddress(values.operator) : common.fromHex(wallet.unshieldedKeystore.getAddress());
+        record.operator = hex(p.operator);
+        say(`wallet ${record.deployer}; the operator fee goes to ${record.operator}`);
+        const publicData = indexerPublicDataProvider(session.config.indexer, session.config.indexerWS);
+        const raw = {
+          privateStateProvider: inMemoryPrivateStateProvider(), publicDataProvider: publicData, walletProvider: wallet, midnightProvider: wallet,
+          config: { networkId: session.config.networkId, ttlSeconds: TX_TTL_SECONDS },
+        };
+        const fresh = withFreshFees(raw, { beforeBalance: () => waitForTip(wallet, { logger: session.logger, timeoutMs: 60_000 }), isStale: isStaleDustProof, logger: session.logger });
+        const registry = await nodeZkConfigRegistry(OUT);
+        const proofProvider = httpClientProofProvider(session.config.proofServer, registry, { timeout: 60 * 60_000 });
+        const modules = {};
+        const providers = (name) => ({
+          ...fresh, proofProvider, zkConfigProvider: new NodeZkConfigProvider(join(OUT, name), { verify: 'require-if-present' }),
+          contractModuleProvider: { resolve: (a) => (modules[String(a)] ? () => modules[String(a)] : undefined) },
+        });
+        const onChain = async (address) => {
+          const read = await publicData.queryContractState(address);
+          if (!read) throw new Error(`no contract at ${address}`);
+          return (read.contractState ?? read).deserialize({ v9: ContractState });
+        };
+        /** The contract's state once the indexer shows `ok` (it can lag the block a little). */
+        const settled = async (address, ok, what, ms = 180_000) => {
+          const until = Date.now() + ms;
+          for (;;) {
+            const st = await onChain(address).catch(() => null);
+            if (st && ok(st)) return st;
+            if (Date.now() > until) throw new Error(`the chain did not show ${what} within ${ms / 1000} s`);
+            await new Promise((r) => setTimeout(r, 5_000));
+          }
+        };
+        const networkId = session.config.networkId;
+        const binderSecret = randomBytes(32);
+
+        const t = await step('1. deploy the Treasury, locked from the start', async () => {
+          const built = await treasuryDeploy(providers(TREASURY), T, binderSecret, networkId);
+          const r = succeeded(await submitTx(providers(TREASURY), { unprovenTx: built.unprovenTx }), 'the Treasury deploy');
+          await providers(TREASURY).privateStateProvider.forContract?.(built.address)?.set?.(TREASURY, { binderSecret });
+          return { address: built.address, txId: r.txId, note: built.address };
+        });
+        record.treasury = t.address;
+        modules[t.address] = T.mod;
+
+        const g = await step('2. deploy the game with the circuits that fit and a single-use maintenance key', async () => {
+          const built = await gameDeploy(providers(GAME), G, gameArgs(p, t.address, S), networkId);
+          say(`   ${built.base.length} circuits in the deploy (${built.fullness.max.toFixed(3)} of a block's ${built.fullness.dimension}); ${built.later.length} to add after`);
+          const r = succeeded(await submitTx(providers(GAME), { unprovenTx: built.unprovenTx }), 'the game deploy');
+          await fresh.privateStateProvider.setSigningKey(built.address, built.signingKey);
+          const s = await settled(built.address, (st) => opNames(st).length === built.base.length, `the game with ${built.base.length} circuits`);
+          if (opNames(s).join() !== built.base.join() && opNames(s).join() !== [...built.base].sort().join()) throw new Error(`the chain shows other circuits: ${opNames(s).join(', ')}`);
+          return { address: built.address, txId: r.txId, circuits: opNames(s).length, later: built.later, note: `${built.address}, ${opNames(s).length} circuits on chain` };
+        });
+        record.game = g.address;
+
+        await step(`3. add the other ${g.later.length} circuits' keys in one maintenance update`, async () => {
+          const s = await onChain(g.address);
+          if (s.maintenanceAuthority.counter !== 0n) throw new Error(`the game's maintenance counter is ${s.maintenanceAuthority.counter}, not 0`);
+          const signingKey = await fresh.privateStateProvider.getSigningKey(g.address);
+          const tx = Transaction.fromParts(networkId, undefined, undefined, Intent.new(ttl()).addMaintenanceUpdate(addKeysUpdate(g.address, g.later, 0n, signingKey)));
+          const r = succeeded(await submitTx(providers(GAME), { unprovenTx: LedgerTransaction.seal('v9', 'Unproven', tx) }), 'adding the keys');
+          const after = await settled(g.address, (st) => st.maintenanceAuthority.counter === 1n && opNames(st).length === 17, 'the 17 circuits at counter 1');
+          return { txId: r.txId, added: g.later, note: `${opNames(after).length} circuits on chain` };
+        });
+
+        await step('4. lock the game: its authority replaced by an empty committee', async () => {
+          const s = await onChain(g.address);
+          const signingKey = await fresh.privateStateProvider.getSigningKey(g.address);
+          const tx = Transaction.fromParts(networkId, undefined, undefined, Intent.new(ttl()).addMaintenanceUpdate(lockUpdate(g.address, s.maintenanceAuthority, signingKey)));
+          const r = succeeded(await submitTx(providers(GAME), { unprovenTx: LedgerTransaction.seal('v9', 'Unproven', tx) }), 'the lock');
+          await settled(g.address, (st) => isLocked(st.maintenanceAuthority), 'the game locked');
+          await fresh.privateStateProvider.removeSigningKey?.(g.address);
+          return { txId: r.txId };
+        });
+
+        await step('5. check both contracts on the chain', async () => {
+          const gs = await onChain(g.address);
+          const ts = await onChain(t.address);
+          const results = [
+            { name: 'the game: exactly its 17 circuits, each with the compiled verifier key', ...checkCircuits(gs, GAME) },
+            { name: 'the game is locked (an empty committee nobody can sign for)', ok: isLocked(gs.maintenanceAuthority), detail: gs.maintenanceAuthority.toString() },
+            { name: 'the Treasury: exactly its 3 circuits, each with the compiled verifier key', ...checkCircuits(ts, TREASURY) },
+            { name: 'the Treasury is locked', ok: isLocked(ts.maintenanceAuthority), detail: ts.maintenanceAuthority.toString() },
+            ...checkSettings(ledgerOf(G.mod, gs), p, t.address, S),
+            { name: 'the Treasury is not bound yet', ok: ledgerOf(T.mod, ts).bound === false },
+          ];
+          record.checks = results;
+          for (const c of results) say(`   ${c.ok ? 'ok  ' : 'FAIL'} ${c.name}${c.ok ? '' : `  ${c.detail ?? ''}`}`);
+          if (results.some((c) => !c.ok)) throw new Error('a check failed: nothing more is done (the contracts hold nothing yet)');
+          return { passed: results.length };
+        });
+
+        const treasuryHandle = await findDeployedContract(providers(TREASURY), { contractAddress: t.address, compiledContract: T.c, privateStateId: TREASURY, initialPrivateState: { binderSecret } });
+        await step('6. bind the Treasury to the game, and check it', async () => {
+          const r = succeeded(await treasuryHandle.callTx.bind({ bytes: encodeContractAddress(g.address) }), 'bind');
+          const l = ledgerOf(T.mod, await settled(t.address, (st) => ledgerOf(T.mod, st).bound, 'the Treasury bound'));
+          if (!l.bound || hex(l.game.bytes ?? l.game) !== hex(encodeContractAddress(g.address))) throw new Error('the Treasury does not show the game as bound');
+          return { txId: r.public.txId };
+        });
+
+        await step(`7. deposit ${tn(deposit)} into the Treasury`, async () => {
+          const r = succeeded(await treasuryHandle.callTx.deposit(deposit), 'the deposit');
+          const balances = await publicData.queryUnshieldedBalances(t.address).catch(() => null);
+          const held = balances ? balances.filter((b) => b.tokenType === unshieldedToken().raw).reduce((s, b) => s + BigInt(b.balance), 0n) : undefined;
+          return { txId: r.public.txId, held, note: held !== undefined ? `the Treasury holds ${tn(held)}` : undefined };
+        });
+
+        if (rehearsal) {
+          const gameHandle = await findDeployedContract(providers(GAME), { contractAddress: g.address, compiledContract: G.c, privateStateId: GAME, initialPrivateState: { oracleSecretKey: oracleSk } });
+          await step('8. (rehearsal) the oracle accepts its key', async () => {
+            const r = succeeded(await gameHandle.callTx.acceptOracleKey(), 'acceptOracleKey');
+            await settled(g.address, (st) => ledgerOf(G.mod, st).oracleKeyReady, 'the oracle key accepted');
+            return { txId: r.public.txId };
+          });
+        }
+        if (!throwaway) {
+          // What the keeper and the oracle read (cli/src/starfall-v2.ts).
+          writeFileSync(recordPath, JSON.stringify({
+            network, contractAddress: g.address, treasuryAddress: t.address, deployedAt: new Date().toISOString(), mode,
+            parameters: {
+              organiserCommitment: hex(p.organiserCommitment),
+              settlementKey: { x: p.settlementKey.x.toString(), y: p.settlementKey.y.toString() },
+              oracleKey: { x: p.oracleKey.x.toString(), y: p.oracleKey.y.toString() },
+            },
+            settings: Object.fromEntries(Object.entries(S).map(([k, v]) => [k, v.toString()])),
+          }, null, 2) + '\n', { flag: 'wx' });
+          say(`\nthe deployment record: ${recordPath}`);
+        }
+        if (throwaway) {
+          const gameHandle = await findDeployedContract(providers(GAME), { contractAddress: g.address, compiledContract: G.c, privateStateId: GAME, initialPrivateState: { oracleSecretKey: oracleSk, organiserSecret } });
+          await step('8. (throwaway) the oracle accepts its key', async () => {
+            const r = succeeded(await gameHandle.callTx.acceptOracleKey(), 'acceptOracleKey');
+            await settled(g.address, (st) => !ledgerOf(G.mod, st).proposedOracleKey.is_some, 'the oracle key accepted');
+            return { txId: r.public.txId };
+          });
+          await step('9. (throwaway) open draw 1: the Treasury pays its opening jackpot across contracts', async () => {
+            const close = BigInt(Math.floor(Date.now() / 1000) + 7 * 3600);
+            const r = succeeded(await gameHandle.callTx.requestDraw(0n, new Uint8Array(32), { is_some: true, value: { salesClose: close, seedCommitment: createHash('sha256').update(hex(randomBytes(32))).digest(), final: false } }), 'requestDraw');
+            const l = ledgerOf(G.mod, await settled(g.address, (st) => ledgerOf(G.mod, st).lastDraw === 1n, 'draw 1 open'));
+            return { txId: r.public.txId, carry: l.carry, note: `draw ${l.lastDraw} is open on 7 from ${l.draws.lookup(1n).format.range}, its jackpot ${tn(l.carry)}` };
+          });
+        }
+        record.verdict = throwaway
+          ? 'PASS: a throwaway Starfall v2 deployed, locked, checked, bound, funded, and its first draw opened with the Treasury paying across contracts'
+          : rehearsal
+          ? `REHEARSAL DEPLOYED: Starfall v2 ${g.address} and its Treasury ${t.address}, locked and checked; the Treasury bound and holding ${tn(deposit)}; the oracle key accepted. Next: start the v2 keeper and oracle.`
+          : `DEPLOYED: Starfall v2 ${g.address} and its Treasury ${t.address}, locked and checked; the Treasury bound and holding ${tn(deposit)}. Next: the oracle accepts its key, then the keeper opens draw 1.`;
+      } finally {
+        await wallet.stop();
+      }
+    }, port);
+  } catch (e) {
+    record.verdict ??= `FAILED at "${record.steps.find((s) => !s.ok)?.step ?? 'setup'}": ${errorText(e)}`;
+  } finally {
+    record.finished = new Date().toISOString();
+    save();
+    say(`\n${record.verdict}\nrecord written to ${file}`);
+  }
+};
+
+/** The backup organiser's commitment: 64 hex characters, or a file holding its secret. */
+function backupCommitmentFrom(common, G, value) {
+  if (/^(0x)?[0-9a-fA-F]{64}$/.test(value)) return common.fromHex(value);
+  const f = common.readKeyFile(value, 'organiser');
+  if (!f.secret) throw new Error(`${value} holds no secret: give the backup's Starfall commitment as 64 hex characters instead`);
+  return G.mod.pureCircuits.organiserCommitmentOf(common.fromHex(f.secret));
+}
+
+/** The settlement key's public point, from its file (the secret's point, or the public one alone). */
+function settlementPublicFrom(common, G, path) {
+  const f = common.readKeyFile(path, 'settlement');
+  if (f.secret) return G.mod.pureCircuits.settlementPublicKey(BigInt(f.secret));
+  const pub = f.public;
+  if (!pub) throw new Error(`${path} has neither a secret nor a public key`);
+  return { x: BigInt(pub.x), y: BigInt(pub.y) };
+}
+
+const main = async () => {
+  const { values, positionals } = parseArgs({
+    allowPositionals: true,
+    options: {
+      wallet: { type: 'string' }, network: { type: 'string' }, 'proof-server-port': { type: 'string' }, record: { type: 'string' },
+      organiser: { type: 'string' }, backup: { type: 'string' }, oracle: { type: 'string' }, settlement: { type: 'string' },
+      operator: { type: 'string' }, deposit: { type: 'string' }, 'params-from': { type: 'string' }, keys: { type: 'string' }, 'min-sales': { type: 'string' },
+    },
+  });
+  const mode = positionals[0];
+  if (mode === 'offline') return offline();
+  if (mode === 'measure') return measure(values);
+  if (mode !== 'throwaway' && mode !== 'rehearsal' && mode !== 'deploy') throw new Error('usage: node deploy.mjs offline | measure | throwaway --wallet <file> | rehearsal --wallet <file> --keys <dir> | deploy --wallet <file> --organiser <file> --backup <file|hex> --oracle <file> --settlement <file>');
+  if (!values.wallet) throw new Error('--wallet <file> is required');
+  if (!existsSync(join(OUT, GAME, 'keys')) || !existsSync(join(OUT, TREASURY, 'keys'))) throw new Error(`${OUT} must hold the compiled game and Treasury`);
+  return run(mode, values);
+};
+
+main().then(
+  () => process.exit(process.exitCode ?? 0),
+  (e) => { process.stderr.write(`${errorText(e)}\n`); process.exit(1); },
+);

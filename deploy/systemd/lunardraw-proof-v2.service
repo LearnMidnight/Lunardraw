@@ -1,0 +1,19 @@
+# Starfall v2's proof server (127.0.0.1:6302), for its keeper and oracle: their numbers and
+# settlement proofs are big (k=18 and k=17), so they get their own, beside the keeper's (6300) and
+# the players' (6301, capped at 3 GB). Runs from the v2 checkout (starfall-v2/deploy/setup-vm.sh).
+[Unit]
+Description=Lunardraw Starfall v2 proof server (Midnight, 127.0.0.1:6302)
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/root/Lunardraw-v2
+Environment=HOME=/root
+ExecStart=/root/Lunardraw-v2/lunardraw proof-server --port 6302
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

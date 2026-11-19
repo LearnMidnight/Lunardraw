@@ -113,7 +113,7 @@ export const decodedState = (read: Awaited<ReturnType<ContractStateSource['query
 
 /** The private state store the witnesses read (midnight-js's), per contract address. */
 export interface PrivateStateStore {
-  forContract(address: string): { set(id: typeof STARFALL_PRIVATE_STATE_ID, state: PrivateState): Promise<void> };
+  forContract(address: string): { set(id: string, state: PrivateState): Promise<void> };
 }
 
 const NO_NEXT = { is_some: false, value: { salesClose: 0n, seedCommitment: new Uint8Array(32), final: false } };
@@ -149,12 +149,14 @@ export class MidnightStarfallChain implements StarfallChain, DrawOracleChain {
     private readonly clock: () => number = Date.now,
     /** Run before every transaction (the keeper waits for its wallet to reach the tip). */
     private readonly beforeTx?: () => Promise<unknown>,
+    /** The id the joined contract's private state is kept under (Starfall v2 has its own). */
+    private readonly privateStateId: string = STARFALL_PRIVATE_STATE_ID,
   ) {
     this.addressBytes = encodeContractAddress(contractAddress);
   }
 
   /** Send a transaction; resolves with its id once it's on chain. */
-  private async tx(send: () => Promise<unknown>): Promise<string | undefined> {
+  protected async send(send: () => Promise<unknown>): Promise<string | undefined> {
     await this.beforeTx?.();
     const r = (await send()) as { public?: { txId?: unknown } } | undefined;
     return typeof r?.public?.txId === 'string' ? r.public.txId : undefined;
@@ -173,47 +175,47 @@ export class MidnightStarfallChain implements StarfallChain, DrawOracleChain {
   }
 
   async openDraw(salesClose: bigint, seedCommitment: Uint8Array, final = false): Promise<string | undefined> {
-    return this.tx(() => this.contract.callTx.requestDraw(0n, new Uint8Array(32), { is_some: true, value: { salesClose, seedCommitment, final } }));
+    return this.send(() => this.contract.callTx.requestDraw(0n, new Uint8Array(32), { is_some: true, value: { salesClose, seedCommitment, final } }));
   }
 
   async requestDraw(n: bigint, seed: Uint8Array, next?: NextDraw): Promise<string | undefined> {
-    return this.tx(() => this.contract.callTx.requestDraw(n, seed, next ? { is_some: true, value: next } : NO_NEXT));
+    return this.send(() => this.contract.callTx.requestDraw(n, seed, next ? { is_some: true, value: next } : NO_NEXT));
   }
 
   async fulfilDraw(n: bigint): Promise<void> {
-    await this.tx(() => this.contract.callTx.fulfilDraw(n));
+    await this.send(() => this.contract.callTx.fulfilDraw(n));
   }
 
   async computeNumbers(n: bigint): Promise<string | undefined> {
-    return this.tx(() => this.contract.callTx.computeNumbers(n, BigInt(Math.floor(this.clock() / 1000) + this.proveLeadSecs)));
+    return this.send(() => this.contract.callTx.computeNumbers(n, BigInt(Math.floor(this.clock() / 1000) + this.proveLeadSecs)));
   }
 
   /** The settlement witness reads the decrypted tickets from the private state, so put them there first. */
   async settleBatch(n: bigint, tickets: readonly TicketPreimage[]): Promise<void> {
     const store = this.privateState.forContract(this.contractAddress);
-    await store.set(STARFALL_PRIVATE_STATE_ID, { ...this.base, settling: { drawId: n, tickets } });
+    await store.set(this.privateStateId, { ...this.base, settling: { drawId: n, tickets } });
     try {
-      await this.tx(() => this.contract.callTx.settleBatch(n));
+      await this.send(() => this.contract.callTx.settleBatch(n));
     } finally {
       // Don't keep a draw's decrypted tickets around any longer than needed.
-      await store.set(STARFALL_PRIVATE_STATE_ID, { ...this.base });
+      await store.set(this.privateStateId, { ...this.base });
     }
   }
 
   async finaliseDraw(n: bigint): Promise<string | undefined> {
-    return this.tx(() => this.contract.callTx.finaliseDraw(n));
+    return this.send(() => this.contract.callTx.finaliseDraw(n));
   }
 
   async payEntitlement(id: Uint8Array): Promise<void> {
-    await this.tx(() => this.contract.callTx.payEntitlement(id));
+    await this.send(() => this.contract.callTx.payEntitlement(id));
   }
 
   async voidDraw(n: bigint): Promise<string | undefined> {
-    return this.tx(() => this.contract.callTx.voidDraw(n));
+    return this.send(() => this.contract.callTx.voidDraw(n));
   }
 
   async refundTicket(n: bigint, index: bigint): Promise<void> {
-    await this.tx(() => this.contract.callTx.refundTicket(n, index));
+    await this.send(() => this.contract.callTx.refundTicket(n, index));
   }
 }
 

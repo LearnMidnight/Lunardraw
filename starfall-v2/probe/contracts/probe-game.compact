@@ -1,0 +1,46 @@
+// Preprod probe: a stand-in for Starfall v2's side of the Treasury call.
+// `settle` does exactly what Starfall's topUp does inside finaliseDraw: pay the
+// Treasury `paying` and ask it for `need` (to the floor) and `extra` (towards
+// the ceiling) with `reserve` kept back, all in the one cross-contract call.
+// Throwaway: deploy, call a few times, forget.
+
+pragma language_version >= 0.28;
+
+import CompactStandardLibrary;
+
+contract Treasury {
+  circuit release(request: Uint<32>, incoming: Uint<128>, need: Uint<128>, extra: Uint<128>, reserve: Uint<128>, ending: Boolean): Uint<128>;
+}
+
+export ledger treasury: Treasury;
+export ledger treasuryAddress: ContractAddress;
+// What the last settle received, and how many have run.
+export ledger lastGot: Uint<128>;
+export ledger settled: Counter;
+
+constructor(t: Treasury, tAddr: ContractAddress) {
+  treasury = disclose(t);
+  treasuryAddress = disclose(tAddr);
+  lastGot = 0;
+}
+
+// Put tNIGHT into the game (the sender's transaction supplies it), as ticket sales do.
+export circuit fund(amount: Uint<128>): [] {
+  receiveUnshielded(nativeToken(), disclose(amount));
+}
+
+// One settlement with the Treasury, as in finaliseDraw.
+export circuit settle(request: Uint<32>, paying: Uint<128>, need: Uint<128>, extra: Uint<128>, reserve: Uint<128>): Uint<128> {
+  const r = disclose(request);
+  const p = disclose(paying);
+  const got = treasury.release(r, p, disclose(need), disclose(extra), disclose(reserve), false);
+  if (p > 0) {
+    sendUnshielded(nativeToken(), p, left<ContractAddress, UserAddress>(treasuryAddress));
+  }
+  if (got > 0) {
+    receiveUnshielded(nativeToken(), got);
+  }
+  lastGot = got;
+  settled.increment(1);
+  return got;
+}

@@ -22,6 +22,9 @@ import {
   type StarfallView,
   storedTicketsOf,
   mustBeWonStatus,
+  syndicateRefundDue,
+  type SyndicateView,
+  idle,
   woundDown,
 } from '../starfall.js';
 
@@ -613,6 +616,69 @@ describe('the Starfall plan', () => {
     expect(starfallSteps(after(5_000n, [{ status: DrawStatus.settled }, { status: DrawStatus.drawn, tickets: 1n, settled: 0n }]), 200, wind)).toEqual([
       { kind: 'settle', draw: 2n, from: 0n, of: 1n },
     ]);
+  });
+  // Starfall v2's syndicates (docs/ADAPTIVE.md): the contract's rules, as the plan applies them.
+  const syndicate = (o: Partial<SyndicateView> = {}): SyndicateView => ({
+    id: 1n, drawId: 1n, funded: true, sharePrice: PRICE * 2n, sold: 5n, bought: 10n, joinDeadline: 500n,
+    members: [{ index: 0n, shares: 2n, refunded: 0n }, { index: 1n, shares: 3n, refunded: 0n }], ...o,
+  });
+  const open = { status: DrawStatus.open, salesClose: 1_000n, revealDeadline: 1_600n };
+
+  it('pays each syndicate member its part of a prize kept for the syndicate, after the entitlement, skipping parts of nothing', () => {
+    const id = new Uint8Array(32).fill(7);
+    const view = {
+      ...base([{ status: DrawStatus.settled }]),
+      entitlements: [{ id, drawId: 1n, games: [], paid: true }],
+      memberPayments: [
+        { draw: 1n, id, payee: 0, member: 0n, amount: 40n },
+        { draw: 1n, id, payee: 0, member: 1n, amount: 0n },
+        { draw: 1n, id, payee: 2, member: 1n, amount: 60n },
+      ],
+    };
+    expect(starfallSteps(view, 2_000, opts)).toEqual([
+      { kind: 'member', draw: 1n, id, payee: 0, member: 0n },
+      { kind: 'member', draw: 1n, id, payee: 2, member: 1n },
+    ]);
+    expect(idle(view)).toBe(false);
+    expect(idle({ ...view, memberPayments: [{ draw: 1n, id, payee: 0, member: 1n, amount: 0n }] })).toBe(true);
+  });
+
+  it("refunds syndicate members by the contract's rule: unfilled after the join deadline, unspent after sales close, all of a void draw", () => {
+    // Funded with 10 of its 10 games bought: nothing to refund, even after the close.
+    expect(starfallSteps({ ...base([open]), syndicates: [syndicate()] }, 1_100, opts).filter((x) => x.kind === 'syndicateRefund')).toEqual([]);
+    // 6 of 10 games bought: after sales close (plus the margin), each member gets its part of the other 4.
+    const part = { ...base([open]), syndicates: [syndicate({ bought: 6n })] };
+    expect(starfallSteps(part, 1_010, opts).filter((x) => x.kind === 'syndicateRefund')).toEqual([]);
+    expect(starfallSteps(part, 1_031, opts).filter((x) => x.kind === 'syndicateRefund')).toEqual([
+      { kind: 'syndicateRefund', draw: 1n, syndicate: 1n, member: 0n },
+      { kind: 'syndicateRefund', draw: 1n, syndicate: 1n, member: 1n },
+    ]);
+    const sy = syndicate({ bought: 6n });
+    expect(syndicateRefundDue(part, sy, sy.members[0]!, 1_031)).toBe((4n * PRICE * 2n) / 5n);
+    expect(syndicateRefundDue(part, sy, sy.members[1]!, 1_031)).toBe((4n * PRICE * 3n) / 5n);
+    // Unfilled (3 of 5 shares sold): everything back after the join deadline, though the draw still sells.
+    const unfilled = syndicate({ funded: false, sold: 3n, bought: 0n, members: [{ index: 0n, shares: 3n, refunded: 0n }] });
+    expect(syndicateRefundDue(base([open]), unfilled, unfilled.members[0]!, 499)).toBe(0n);
+    expect(syndicateRefundDue(base([open]), unfilled, unfilled.members[0]!, 500)).toBe(PRICE * 2n * 3n);
+    // A void draw: all of it, less what was refunded already (the unspent part, before the void).
+    const voided = { ...base([{ status: DrawStatus.voided }]), syndicates: [syndicate({ bought: 6n, members: [{ index: 0n, shares: 2n, refunded: (4n * PRICE * 2n) / 5n }] })] };
+    expect(syndicateRefundDue(voided, voided.syndicates[0]!, voided.syndicates[0]!.members[0]!, 2_000)).toBe((10n * PRICE * 2n) / 5n - (4n * PRICE * 2n) / 5n);
+    expect(starfallSteps(voided, 2_000, opts)).toEqual([{ kind: 'syndicateRefund', draw: 1n, syndicate: 1n, member: 0n }]);
+    expect(idle(voided)).toBe(false);
+    expect(woundDown({ ...voided, syndicates: [syndicate({ bought: 6n, members: [{ index: 0n, shares: 2n, refunded: (10n * PRICE * 2n) / 5n }] })] })).toBe(true);
+  });
+
+  it('splits syndicate payments and refunds between two keepers like the others', () => {
+    const id = new Uint8Array(32).fill(1);
+    const steps: StarfallStep[] = [0n, 1n, 2n, 3n].flatMap((member) => [
+      { kind: 'member', draw: 1n, id, payee: 0, member },
+      { kind: 'syndicateRefund', draw: 1n, syndicate: 4n, member },
+    ]);
+    for (const st of steps) {
+      expect(shareOf(st, 2)).toBeDefined();
+      expect(isMine(st, 'primary', { index: 0, of: 2 })).not.toBe(isMine(st, 'standby', { index: 1, of: 2 }));
+    }
+    expect(new Set(steps.filter((x) => x.kind === 'member').map((x) => shareOf(x, 2))).size).toBe(2);
   });
 });
 

@@ -1,0 +1,30 @@
+# The Starfall v2 keeper (starfall-v2/, docs/ADAPTIVE.md): opens and reveals draws, computes the
+# numbers, settles, finalises (the Treasury tops up the next jackpot), pays winners and syndicate
+# members, refunds syndicates, voids and refunds late draws. Runs from the v2 checkout
+# (/root/Lunardraw-v2, starfall-v2/deploy/setup-vm.sh), beside the live game, with its own wallet
+# and its own proof server (6302, lunardraw-proof-v2).
+# The rehearsal: test keys in /root/lunardraw-secrets/v2-rehearsal, a draw every 3 hours. For the
+# real deployment: the real key files, and no --every (daily, 20:00 Brisbane).
+[Unit]
+Description=Lunardraw Starfall v2 keeper
+After=lunardraw-proof-v2.service network-online.target
+Wants=lunardraw-proof-v2.service network-online.target
+
+[Service]
+WorkingDirectory=/root/Lunardraw-v2
+Environment=HOME=/root
+Environment=NIGHTCAST_BLOCKFROST_USAGE=/root/lunardraw-status/usage/lunardraw-starfall-v2-keeper.json
+ExecStart=/root/Lunardraw-v2/lunardraw starfall-v2 keeper --network preprod \
+  --organiser /root/lunardraw-secrets/v2-rehearsal/v2-organiser.secret \
+  --settlement /root/lunardraw-secrets/v2-rehearsal/v2-settlement.secret \
+  --wallet /root/nightcast-secrets/v2-keeper-wallet.secret \
+  --every 10800 --proof-server-port 6302 \
+  --feed /root/lunardraw-feed/feed-v2.json \
+  --status /root/lunardraw-status/v2-keeper.json
+# Exit code 75 = "restart me" (a watchdog).
+Restart=always
+RestartSec=15
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

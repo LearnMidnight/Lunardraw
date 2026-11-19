@@ -1,0 +1,9 @@
+{
+  "name": "starfall-v2-check",
+  "private": true,
+  "type": "module",
+  "description": "Runs the compiled Starfall v2 and Treasury contracts together in memory (see docs/ADAPTIVE.md).",
+  "dependencies": {
+    "@midnight-ntwrk/compact-runtime": "0.21.0"
+  }
+}

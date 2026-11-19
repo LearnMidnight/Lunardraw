@@ -1,0 +1,24 @@
+# The Starfall v2 draw oracle: answers each v2 draw with Nightcast's VRF. Runs from the v2 checkout
+# (/root/Lunardraw-v2), with its own wallet and its own proof server (6302, lunardraw-proof-v2).
+# The rehearsal's test oracle key is in /root/lunardraw-secrets/v2-rehearsal; for the real
+# deployment, the real oracle key file (and, before Mainnet, a different machine from the keeper).
+[Unit]
+Description=Lunardraw Starfall v2 draw oracle
+After=lunardraw-proof-v2.service network-online.target
+Wants=lunardraw-proof-v2.service network-online.target
+
+[Service]
+WorkingDirectory=/root/Lunardraw-v2
+Environment=HOME=/root
+Environment=NIGHTCAST_BLOCKFROST_USAGE=/root/lunardraw-status/usage/lunardraw-starfall-v2-oracle.json
+ExecStart=/root/Lunardraw-v2/lunardraw starfall-v2 oracle --network preprod \
+  --oracle /root/lunardraw-secrets/v2-rehearsal/v2-oracle.secret \
+  --wallet /root/nightcast-secrets/v2-oracle-wallet.secret \
+  --proof-server-port 6302 \
+  --status /root/lunardraw-status/v2-oracle.json
+Restart=always
+RestartSec=15
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

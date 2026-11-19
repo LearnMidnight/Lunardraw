@@ -1,0 +1,46 @@
+// Nightcast's VRF (Nightcast SPEC §2), for contracts that embed it instead of
+// calling Nightcast (Nightcast SPEC §5.1; kept embedded on ledger 9 so a draw
+// never depends on another contract's call). Same construction and domain separators as
+// nightcast/contract/src/nightcast.compact, so for the same key and input point it gives
+// exactly the output Nightcast would.
+//
+//     H      = hashToCurve(["nightcast:h2c:v0", alpha])
+//     gamma  = H * sk
+//     output = SHA-256("nightcast:output:v0" || gamma)
+
+module NightcastVrf {
+  import CompactStandardLibrary;
+
+  struct OutputPreimage {
+    domain: Bytes<32>;
+    gamma: JubjubPoint;
+  }
+
+  // The curve point an input is evaluated at.
+  export pure circuit inputPoint(alpha: Bytes<32>): JubjubPoint {
+    return hashToCurve<[Bytes<32>, Bytes<32>]>([pad(32, "nightcast:h2c:v0"), alpha]);
+  }
+
+  // Public key for a secret scalar. The key is a Field below the Jubjub order
+  // (as Nightcast generates them), so the cast to JubjubScalar is exact and the
+  // output equals the 0.31.1 compile's (checked for 288 key/input pairs).
+  export pure circuit publicKey(sk: Field): JubjubPoint {
+    return ecMulGenerator(sk as JubjubScalar);
+  }
+
+  // The VRF at a stored point.
+  export pure circuit evaluateAt(sk: Field, point: JubjubPoint): Bytes<32> {
+    return persistentHash<OutputPreimage>(OutputPreimage {
+      domain: pad(32, "nightcast:output:v0"),
+      gamma: ecMul(point, sk as JubjubScalar)
+    });
+  }
+
+  export pure circuit sameKey(a: JubjubPoint, b: JubjubPoint): Boolean {
+    return jubjubPointX(a) == jubjubPointX(b) && jubjubPointY(a) == jubjubPointY(b);
+  }
+
+  export pure circuit isIdentity(a: JubjubPoint): Boolean {
+    return jubjubPointX(a) == (0 as Field) && jubjubPointY(a) == (1 as Field);
+  }
+}

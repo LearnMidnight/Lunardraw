@@ -1,0 +1,137 @@
+// The Starfall Treasury (docs/ADAPTIVE.md): a contract that holds a share of
+// every game and keeps the jackpot topped up.
+//
+// Money comes in two ways: the game sends its Treasury share of every game
+// when it finalises a draw, together with whatever the jackpot's ceiling
+// couldn't hold; and anyone can pay in with `deposit` (a launch jackpot, a
+// sponsor). A contract only gains tokens in a call of its own that receives
+// them, so the game's payment arrives in the same `release` call that asks for
+// the top-up. Money goes out one way only: the game this Treasury is bound to
+// calls `release` across contracts when it opens its first draw and each time
+// it finalises one, and the Treasury pays the next jackpot up to the floor,
+// and beyond that towards the ceiling with what it holds above a reserve.
+//
+// Nobody controls it. There is no withdrawal, no operator and no successor.
+// It is deployed first (the game needs its address), then bound to the game
+// once, and `bind` never works again. When the game's final draw is finalised
+// it takes everything the Treasury holds into that draw's jackpot, and the
+// Treasury is finished.
+//
+// `release` is called across contracts, so it uses no witness (Compact 0.36
+// forbids witnesses in a cross-contract callee). It never reads the exact
+// balance, only compares it with amounts: a transaction that reads an exact
+// balance fails if the balance changes before it is applied, so anyone could
+// stall a draw by sending the Treasury a few STAR. Comparisons only fail if
+// the balance crosses the amount compared, and those amounts are whole tNIGHT
+// apart, so stalling costs a tNIGHT a time, paid into the jackpot fund.
+
+pragma language_version >= 0.28;
+
+import CompactStandardLibrary;
+
+// The game this Treasury pays, once bound.
+export ledger game: ContractAddress;
+export ledger bound: Boolean;
+// Set when the game's final draw has been finalised: nothing is paid again.
+export ledger gameEnded: Boolean;
+// The next request this Treasury will accept: 0 for the game's first draw
+// opening, then n for the finalising of draw n. Each is answered once.
+export ledger nextRequest: Uint<32>;
+// Paid into jackpots so far.
+export ledger totalReleased: Uint<128>;
+// Commitment to the deployer's secret (binderCommitmentOf): good for `bind`,
+// once, and nothing else.
+export sealed ledger binder: Bytes<32>;
+
+witness binderSecret(): Bytes<32>;
+
+constructor(binderCommitment: Bytes<32>) {
+  bound = false;
+  gameEnded = false;
+  nextRequest = 0;
+  totalReleased = 0;
+  binder = disclose(binderCommitment);
+}
+
+export pure circuit binderCommitmentOf(secret: Bytes<32>): Bytes<32> {
+  return persistentHash<[Bytes<32>, Bytes<32>]>([pad(32, "starfall:treasury-binder:v1"), secret]);
+}
+
+// One tNIGHT in STAR: the step the Treasury pays in when it can't cover a
+// whole amount.
+pure circuit unit(): Uint<128> {
+  return 1000000;
+}
+
+// 2^35 .. 2^0 tNIGHT, largest first (2^36 tNIGHT is more than all the NIGHT
+// there is).
+pure circuit steps(): Vector<36, Uint<128>> {
+  return [34359738368000000, 17179869184000000, 8589934592000000, 4294967296000000, 2147483648000000, 1073741824000000,
+          536870912000000, 268435456000000, 134217728000000, 67108864000000, 33554432000000, 16777216000000,
+          8388608000000, 4194304000000, 2097152000000, 1048576000000, 524288000000, 262144000000,
+          131072000000, 65536000000, 32768000000, 16384000000, 8192000000, 4096000000,
+          2048000000, 1024000000, 512000000, 256000000, 128000000, 64000000,
+          32000000, 16000000, 8000000, 4000000, 2000000, 1000000];
+}
+
+// How much of `amount` the Treasury can pay while keeping `held` back: all of
+// it if the balance covers held + amount, otherwise the most whole tNIGHT it
+// does cover. Comparisons only (see the top of the file).
+circuit payable(amount: Uint<128>, held: Uint<128>): Uint<128> {
+  const token = left<Bytes<32>, Bytes<32>>(nativeToken());
+  if (!kernel.balanceLessThan(token, (held + amount) as Uint<128>)) {
+    return amount;
+  }
+  return fold((p: Uint<128>, step: Uint<128>): Uint<128> =>
+                (p + step <= amount && !kernel.balanceLessThan(token, (held + p + step) as Uint<128>)) ? (p + step) as Uint<128> : p,
+              0, steps());
+}
+
+// Fund the Treasury: the caller's transaction supplies the tokens.
+export circuit deposit(amount: Uint<128>): [] {
+  receiveUnshielded(nativeToken(), disclose(amount));
+}
+
+// Bind the Treasury to its game. Once, by the deployer, after the game is
+// deployed with this Treasury's address.
+export circuit bind(gameAddress: ContractAddress): [] {
+  assert(!bound, "the Treasury is already bound to its game");
+  assert(disclose(binderCommitmentOf(binderSecret()) == binder), "not the deployer");
+  game = disclose(gameAddress);
+  bound = true;
+}
+
+// The game pays in `incoming` (its Treasury share of the draw and what the
+// ceiling couldn't hold; the game sends it in the same transaction) and asks
+// for the next jackpot's top-up: `need` to bring it up to the floor, and
+// `extra` beyond that towards the ceiling. The Treasury pays as much of `need`
+// as it holds, and as much of `extra` as it holds above `reserve` (kept back
+// so it can pay the floor after the next win). What it holds is its balance
+// before this transaction: `incoming` counts from the next request. `ending`
+// marks the game's final draw: the game then asks for everything, and nothing
+// is paid afterwards. Only the bound game may call this, once per request
+// (request 0 when its first draw opens, then n when draw n is finalised).
+// Returns what was paid.
+export circuit release(request: Uint<32>, incoming: Uint<128>, need: Uint<128>, extra: Uint<128>, reserve: Uint<128>, ending: Boolean): Uint<128> {
+  const who = kernel.caller();
+  assert(bound && who.is_some && who.value.is_left && who.value.left == game, "only the bound game may ask");
+  assert(!gameEnded, "the game has ended");
+  const n = disclose(request);
+  assert(n >= nextRequest, "that request was already answered");
+  nextRequest = (n + 1) as Uint<32>;
+  if (disclose(ending)) {
+    gameEnded = true;
+  }
+  const arriving = disclose(incoming);
+  if (arriving > 0) {
+    receiveUnshielded(nativeToken(), arriving);
+  }
+  const paidNeed = payable(disclose(need), 0);
+  const paidExtra = payable(disclose(extra), (paidNeed + disclose(reserve)) as Uint<128>);
+  const paid = (paidNeed + paidExtra) as Uint<128>;
+  if (paid > 0) {
+    sendUnshielded(nativeToken(), paid, left<ContractAddress, UserAddress>(game));
+  }
+  totalReleased = (totalReleased + paid) as Uint<128>;
+  return paid;
+}
