@@ -87,9 +87,17 @@ export const v2LedgerOf = (G: Module, state: { data: { state: { encode(): unknow
 export const starfallV2ViewOf = (G: Module, l: any): StarfallView => {
   const view = starfallViewOf(l as Starfall.Ledger);
   view.draws = view.draws.map((d) => {
-    const f = l.draws.lookup(d.id).format;
-    return { ...d, format: { range: Number(f.range), moonballs: Number(f.moonballs) } };
+    const r = l.draws.lookup(d.id);
+    return { ...d, format: { range: Number(r.format.range), moonballs: Number(r.format.moonballs) }, rung: Number(r.rung), treasuryFee: BigInt(r.treasuryFee), overflow: BigInt(r.overflow), refill: BigInt(r.refill) };
   });
+  const ladder = [...(l.ladder as Iterable<any>)].slice(0, Number(l.rungCount)).map((g) => ({
+    numbers: Number(g.numbers), moonball: Number(g.moonball), odds: BigInt(g.odds), shares: [...(g.shares as Iterable<bigint>)].map(Number),
+  }));
+  const adaptive = {
+    ladder, rung: Number(l.rung), aim: Number(l.aim), floor: BigInt(l.floor), ceilingPerCombination: BigInt(l.ceilingPerCombination),
+    targetDraws: Number(l.targetDraws), retargetEvery: Number(l.retargetEvery), treasuryPerGame: BigInt(l.treasuryPerGame),
+    treasury: Buffer.from(l.treasuryAddress.bytes ?? l.treasuryAddress).toString('hex'),
+  };
   const funded = G.SyndicateStatus?.funded ?? 1;
   const syndicates: SyndicateView[] = [];
   const raw = new Map<bigint, any>();
@@ -120,7 +128,7 @@ export const starfallV2ViewOf = (G: Module, l: any): StarfallView => {
       }
     });
   }
-  return { ...view, syndicates, memberPayments };
+  return { ...view, syndicates, memberPayments, adaptive };
 };
 
 /** Draw `n`'s stored tickets, in index order. */

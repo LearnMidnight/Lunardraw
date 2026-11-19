@@ -5,7 +5,7 @@
 // prize, pays each syndicate member its part, refunds syndicates, voids a draw the oracle let
 // run out of time and refunds it. Needs the keeper and the CLI built (npm run build).
 import * as rt from '@midnight-ntwrk/compact-runtime';
-import { DerivedSeeds, DrawOracle, every, idle, StarfallKeeper } from '@lunardraw/keeper';
+import { DerivedSeeds, DrawOracle, every, idle, StarfallKeeper, buildStarfallFeed } from '@lunardraw/keeper';
 import { starfallV2ViewOf, v2StoredTickets } from '../../cli/dist/starfall-v2.js';
 import * as G from './out/contract/index.js';
 import { World, STAR, address, makeTicket, syndicateTicket } from './world.mjs';
@@ -161,6 +161,31 @@ ok('nothing created or lost; the keeper keeps a draw selling', w.conserved() && 
 const v = await chain.view();
 ok("the keeper's view: the draws with their formats, three syndicates, nothing owed", v.draws.length >= 3 && v.draws.every((d) => d.format?.range === range) &&
    v.syndicates.length === 3 && v.memberPayments.length === 0 && !idle(v), JSON.stringify({ draws: v.draws.length, f: v.draws.map((d) => d.format), s: v.syndicates.length, m: v.memberPayments.length }));
+// ---------------------------------------------------------------- the site feed carries v2's format, prize tables and Treasury
+{
+  const L = w.ledger();
+  const feed = buildStarfallFeed(v, { network: 'preprod', contract: 'c0ffee', nowSecs: w.now });
+  // A real v2 feed for the site's own tests (its prize and number checks run on it).
+  if (process.env.V2_FEED_OUT) (await import('node:fs')).writeFileSync(process.env.V2_FEED_OUT, JSON.stringify(feed, null, 2) + '\n');
+  const g = feed.games.starfall;
+  const rungOf = (n) => L.ladder[Number(L.draws.lookup(BigInt(n)).rung)];
+  const sharesOf = (n) => [...rungOf(n).shares].map(Number);
+  const d1f = g.draws.find((d) => d.num === 1);
+  ok('the feed: each draw has its format, rung and prize table, and a settled one its Treasury share, overflow and top-up, read from the contract',
+     g.draws.every((d) => d.format?.numbers === Number(L.draws.lookup(BigInt(d.num)).format.range) && d.format.moonball === Number(L.draws.lookup(BigInt(d.num)).format.moonballs)
+       && d.rung === Number(L.draws.lookup(BigInt(d.num)).rung) && JSON.stringify(d.allocation_bp) === JSON.stringify(sharesOf(d.num)))
+     && g.draws.filter((d) => d.status === 'settled').every((d) => { const r = L.draws.lookup(BigInt(d.num)); return d.treasury_fee_star === Number(r.treasuryFee) && d.overflow_star === Number(r.overflow) && d.refill_star === Number(r.refill) && d.carried_in_star === Number(r.carried); })
+     && d1f.treasury_fee_star > 0 && d1f.allocation_bp[0] === 5000 && d1f.format.moonball === 1 && (!g.open || (g.open.format?.numbers === range && JSON.stringify(g.open.allocation_bp) === JSON.stringify(sharesOf(g.open.num)))),
+     JSON.stringify({ d1: d1f && { format: d1f.format, rung: d1f.rung, a: d1f.allocation_bp }, open: g.open && { format: g.open.format, a: g.open.allocation_bp } }));
+  const a = g.adaptive;
+  ok(`the feed: the ladder (${a?.ladder.length} rungs from 7 from ${a?.ladder[0]?.numbers}), the rung, the floor and the Treasury, as the contract holds them`,
+     a && a.ladder.length === Number(L.rungCount) && a.ladder.every((r, i) => r.numbers === Number(L.ladder[i].numbers) && r.moonball === Number(L.ladder[i].moonball) && r.odds === Number(L.ladder[i].odds)
+       && JSON.stringify(r.allocation_bp) === JSON.stringify([...L.ladder[i].shares].map(Number)))
+     && a.rung === Number(L.rung) && a.aim === Number(L.aim) && a.floor_star === Number(L.floor) && a.target_draws === Number(L.targetDraws)
+     && a.treasury_contract === Buffer.from(L.treasuryAddress.bytes ?? L.treasuryAddress).toString('hex') && a.treasury_contract.length === 64
+     && JSON.stringify(g.allocation_bp) === JSON.stringify(g.open ? sharesOf(g.open.num) : a.ladder[a.rung].allocation_bp),
+     JSON.stringify(a && { rung: a.rung, aim: a.aim, floor: a.floor_star, t: a.treasury_contract, r0: a.ladder[0] }));
+}
 if (log.some((m) => /^ERROR|^FAILED/.test(m))) console.log(log.filter((m) => /^ERROR|^FAILED/.test(m)).join('\n'));
 
 console.log(failed ? `\n${failed} FAILED` : '\nall keeper checks passed');
