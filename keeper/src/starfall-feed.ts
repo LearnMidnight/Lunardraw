@@ -13,8 +13,15 @@ import type { StepRecord } from './step-times.js';
 
 const { DrawStatus } = Starfall;
 
+/** Starfall v2: a draw's numbers are 1..numbers and its Moonball 1..moonball (1: no Moonball). */
+export type FeedFormat = { numbers: number; moonball: number };
+
 export type StarfallFeedDraw = Omit<FeedDraw, 'status' | 'claim_deadline'> & {
   status: FeedDraw['status'] | 'settling';
+  /** Starfall v2: the draw's format, its rung of the ladder and its prize table (the rung's shares, basis points). */
+  format?: FeedFormat;
+  rung?: number;
+  allocation_bp?: number[];
   /** Settlement batches in all (ceil(tickets / batch size, 22)) and proven so far. */
   batches?: number;
   batches_done?: number;
@@ -64,9 +71,25 @@ export type StarfallFeed = {
       must_be_won_after?: number;
       rollovers?: number;
       allocation_bp: number[];
+      /** Starfall v2: the format ladder and the Treasury (absent on v1). */
+      adaptive?: {
+        rung: number;
+        aim: number;
+        target_draws: number;
+        retarget_every: number;
+        floor_star: number;
+        ceiling_per_combination_star: number;
+        treasury_per_game_star: number;
+        treasury_contract: string;
+        ladder: { numbers: number; moonball: number; odds: number; allocation_bp: number[] }[];
+      };
       carry_star: number;
       open?: {
         num: number;
+        /** Starfall v2: the draw's format, rung and prize table. */
+        format?: FeedFormat;
+        rung?: number;
+        allocation_bp?: number[];
         sales_close: string;
         reveal_deadline?: string;
         seed_commitment: string;
@@ -119,9 +142,20 @@ export const buildStarfallFeed = (
   const carryOut = new Map<bigint, bigint>();
   settled.forEach((d, i) => carryOut.set(d.id, i === 0 ? view.carry : settled[i - 1].carried));
 
+  const ad = view.adaptive;
+  // Starfall v2: a draw's numbers, Moonball range, rung and prize table (its rung's shares).
+  const formatOf = (d: StarfallDrawView) =>
+    d.format
+      ? {
+          format: { numbers: d.format.range, moonball: d.format.moonballs },
+          ...(d.rung !== undefined && ad?.ladder[d.rung] ? { rung: d.rung, allocation_bp: [...ad.ladder[d.rung].shares] } : {}),
+        }
+      : {};
+
   const toFeed = (d: StarfallDrawView): StarfallFeedDraw => {
     const out: StarfallFeedDraw = {
       num: Number(d.id),
+      ...formatOf(d),
       status: starfallFeedStatus(d, opts.nowSecs),
       sales_close: iso(d.salesClose),
       seed_commitment: hex(d.seedCommitment),
@@ -182,11 +216,28 @@ export const buildStarfallFeed = (
         ...(view.finalSales !== undefined ? { final_sales_secs: Number(view.finalSales) } : {}),
         ...(view.ended ? { ended: true as const } : {}),
         ...(view.mustBeWonAfter !== undefined ? { must_be_won_after: Number(view.mustBeWonAfter), rollovers: Number(view.rollovers) } : {}),
-        allocation_bp: [...Starfall.POWERBALL_SHARES_BP],
+        // v2: the prize table of the draw on sale (or of the rung the next draw opens on); each draw carries its own
+        allocation_bp: ad ? [...(ad.ladder[selling?.rung ?? ad.rung]?.shares ?? Starfall.POWERBALL_SHARES_BP)] : [...Starfall.POWERBALL_SHARES_BP],
+        ...(ad
+          ? {
+              adaptive: {
+                rung: ad.rung,
+                aim: ad.aim,
+                target_draws: ad.targetDraws,
+                retarget_every: ad.retargetEvery,
+                floor_star: star(ad.floor),
+                ceiling_per_combination_star: star(ad.ceilingPerCombination),
+                treasury_per_game_star: star(ad.treasuryPerGame),
+                treasury_contract: ad.treasury,
+                ladder: ad.ladder.map((g) => ({ numbers: g.numbers, moonball: g.moonball, odds: Number(g.odds), allocation_bp: [...g.shares] })),
+              },
+            }
+          : {}),
         carry_star: star(view.carry),
         open: selling
           ? {
               num: Number(selling.id),
+              ...formatOf(selling),
               sales_close: iso(selling.salesClose),
               // the keeper must reveal by then or the draw voids (for the monitor's alert)
               reveal_deadline: iso(selling.revealDeadline),

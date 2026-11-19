@@ -83,6 +83,8 @@ export type StarfallDrawView = {
   refundedGames: bigint;
   /** Starfall v2: the draw's format (numbers 1..range, Moonball 1..moonballs; 1 is none). */
   format?: { range: number; moonballs: number };
+  /** Starfall v2: the draw's rung of the ladder (its prize table is that rung's shares). */
+  rung?: number;
 };
 
 /**
@@ -135,6 +137,25 @@ export type StarfallView = {
   /** Starfall v2 only. */
   syndicates?: SyndicateView[];
   memberPayments?: MemberPaymentView[];
+  /** Starfall v2: the format ladder, where the game is on it, and the Treasury (absent on v1). */
+  adaptive?: AdaptiveView;
+};
+
+/** Starfall v2: one rung of the format ladder (numbers 1..numbers, Moonball 1..moonball; 1 is none). */
+export type RungView = { numbers: number; moonball: number; odds: bigint; shares: number[] };
+/** Starfall v2: the ladder, the rung draws open on now and the one the game is headed for, and the Treasury. */
+export type AdaptiveView = {
+  ladder: RungView[];
+  rung: number;
+  aim: number;
+  /** What the Treasury tops the next jackpot up to (STAR), and the most a jackpot may hold per combination of a rung's odds. */
+  floor: bigint;
+  ceilingPerCombination: bigint;
+  /** Draws per jackpot the ladder steers to, and how often (in draws) it moves. */
+  targetDraws: number;
+  retargetEvery: number;
+  treasuryPerGame: bigint;
+  treasury: string;
 };
 
 /** Key of a draw's ticket in the ledger's `tickets` map (the contract's ticketKey). */
