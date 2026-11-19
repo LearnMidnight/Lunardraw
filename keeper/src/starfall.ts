@@ -85,6 +85,10 @@ export type StarfallDrawView = {
   format?: { range: number; moonballs: number };
   /** Starfall v2: the draw's rung of the ladder (its prize table is that rung's shares). */
   rung?: number;
+  /** Starfall v2, fixed when the draw is finalised: the Treasury's share of its sales, what the next jackpot's ceiling couldn't hold (sent to the Treasury), and what the Treasury paid into the next jackpot (into this one for a final draw). */
+  treasuryFee?: bigint;
+  overflow?: bigint;
+  refill?: bigint;
 };
 
 /**

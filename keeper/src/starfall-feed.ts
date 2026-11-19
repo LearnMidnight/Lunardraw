@@ -22,6 +22,10 @@ export type StarfallFeedDraw = Omit<FeedDraw, 'status' | 'claim_deadline'> & {
   format?: FeedFormat;
   rung?: number;
   allocation_bp?: number[];
+  /** Starfall v2, a settled draw: the Treasury's share of its sales, the overflow sent to the Treasury, and the Treasury's top-up (STAR). */
+  treasury_fee_star?: number;
+  overflow_star?: number;
+  refill_star?: number;
   /** Settlement batches in all (ceil(tickets / batch size, 22)) and proven so far. */
   batches?: number;
   batches_done?: number;
@@ -180,6 +184,11 @@ export const buildStarfallFeed = (
       out.carried_in_star = star(d.carried);
       out.prizes_star = d.prizes.map(star);
       out.carry_out_star = star(carryOut.get(d.id) ?? 0n);
+      if (d.treasuryFee !== undefined) {
+        out.treasury_fee_star = star(d.treasuryFee);
+        out.overflow_star = star(d.overflow ?? 0n);
+        out.refill_star = star(d.refill ?? 0n);
+      }
     }
     if (d.final) out.final = true;
     if (d.status === DrawStatus.settled && d.mustBeWon) out.must_be_won = true;

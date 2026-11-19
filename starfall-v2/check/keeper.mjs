@@ -165,14 +165,17 @@ ok("the keeper's view: the draws with their formats, three syndicates, nothing o
 {
   const L = w.ledger();
   const feed = buildStarfallFeed(v, { network: 'preprod', contract: 'c0ffee', nowSecs: w.now });
+  // A real v2 feed for the site's own tests (its prize and number checks run on it).
+  if (process.env.V2_FEED_OUT) (await import('node:fs')).writeFileSync(process.env.V2_FEED_OUT, JSON.stringify(feed, null, 2) + '\n');
   const g = feed.games.starfall;
   const rungOf = (n) => L.ladder[Number(L.draws.lookup(BigInt(n)).rung)];
   const sharesOf = (n) => [...rungOf(n).shares].map(Number);
   const d1f = g.draws.find((d) => d.num === 1);
-  ok('the feed: each draw has its format, rung and prize table, read from the contract',
+  ok('the feed: each draw has its format, rung and prize table, and a settled one its Treasury share, overflow and top-up, read from the contract',
      g.draws.every((d) => d.format?.numbers === Number(L.draws.lookup(BigInt(d.num)).format.range) && d.format.moonball === Number(L.draws.lookup(BigInt(d.num)).format.moonballs)
        && d.rung === Number(L.draws.lookup(BigInt(d.num)).rung) && JSON.stringify(d.allocation_bp) === JSON.stringify(sharesOf(d.num)))
-     && d1f.allocation_bp[0] === 5000 && d1f.format.moonball === 1 && (!g.open || (g.open.format?.numbers === range && JSON.stringify(g.open.allocation_bp) === JSON.stringify(sharesOf(g.open.num)))),
+     && g.draws.filter((d) => d.status === 'settled').every((d) => { const r = L.draws.lookup(BigInt(d.num)); return d.treasury_fee_star === Number(r.treasuryFee) && d.overflow_star === Number(r.overflow) && d.refill_star === Number(r.refill) && d.carried_in_star === Number(r.carried); })
+     && d1f.treasury_fee_star > 0 && d1f.allocation_bp[0] === 5000 && d1f.format.moonball === 1 && (!g.open || (g.open.format?.numbers === range && JSON.stringify(g.open.allocation_bp) === JSON.stringify(sharesOf(g.open.num)))),
      JSON.stringify({ d1: d1f && { format: d1f.format, rung: d1f.rung, a: d1f.allocation_bp }, open: g.open && { format: g.open.format, a: g.open.allocation_bp } }));
   const a = g.adaptive;
   ok(`the feed: the ladder (${a?.ladder.length} rungs from 7 from ${a?.ladder[0]?.numbers}), the rung, the floor and the Treasury, as the contract holds them`,

@@ -88,7 +88,7 @@ export const starfallV2ViewOf = (G: Module, l: any): StarfallView => {
   const view = starfallViewOf(l as Starfall.Ledger);
   view.draws = view.draws.map((d) => {
     const r = l.draws.lookup(d.id);
-    return { ...d, format: { range: Number(r.format.range), moonballs: Number(r.format.moonballs) }, rung: Number(r.rung) };
+    return { ...d, format: { range: Number(r.format.range), moonballs: Number(r.format.moonballs) }, rung: Number(r.rung), treasuryFee: BigInt(r.treasuryFee), overflow: BigInt(r.overflow), refill: BigInt(r.refill) };
   });
   const ladder = [...(l.ladder as Iterable<any>)].slice(0, Number(l.rungCount)).map((g) => ({
     numbers: Number(g.numbers), moonball: Number(g.moonball), odds: BigInt(g.odds), shares: [...(g.shares as Iterable<bigint>)].map(Number),
