@@ -16,7 +16,8 @@ Conflicts=lunardraw-agent@%i.service
 [Service]
 WorkingDirectory=/root/Lunardraw-agents
 Environment=HOME=/root
-Environment=LUNARDRAW_STARFALL_V2_OUT=/root/Lunardraw-v2/starfall-v2/deploy/out
+# a copy of the compiled game in the agents' checkout, so it loads that checkout's Compact runtime (agents-v2.sh)
+Environment=LUNARDRAW_STARFALL_V2_OUT=/root/Lunardraw-agents/starfall-v2/deploy/out
 Environment=NIGHTCAST_BLOCKFROST_USAGE=/root/lunardraw-status/usage/lunardraw-agent-v2-%i.json
 EnvironmentFile=/root/lunardraw-agents/%i.v2.env
 ExecStart=/bin/bash -c 'exec /root/Lunardraw-agents/lunardraw starfall-v2 agent --network preprod --name %i \
