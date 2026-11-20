@@ -76,6 +76,13 @@ player with its own wallet, `/root/lunardraw-agents/<name>.secret`, and style,
 `AGENT_ARGS` in `/root/lunardraw-agents/<name>.env`. See Part 8 of the Preprod
 guide. Logs: `journalctl -u 'lunardraw-agent@*' -f`.
 
+`lunardraw-agent-v2@<name>` runs the same agent on Starfall v2 (`./lunardraw starfall-v2 agent`),
+in each draw's own format, from its own checkout of main (`/root/Lunardraw-agents`), with its style
+in `/root/lunardraw-agents/<name>.v2.env`. `deploy/agents-v2.sh install` builds that checkout,
+writes each agent's v2 style from its Classic one and points the agents' daily window timers at
+the v2 agents; `status`, `update` and `undo` do what they say. Logs:
+`journalctl -u 'lunardraw-agent-v2@*' -f`.
+
 ## Email alerts (the monitor)
 
 `lunardraw-monitor.timer` runs `./lunardraw monitor` every 5 minutes. It emails
