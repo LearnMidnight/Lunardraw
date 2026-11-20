@@ -4,17 +4,18 @@
  * (the same steps; v2 adds paying syndicate members and refunding syndicates) on the v2
  * chain adapter (starfall-v2.ts).
  */
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { parseArgs } from 'node:util';
 import { encodeContractAddress } from '@midnight-ntwrk/compact-runtime';
 import { unshieldedToken } from '@midnight-ntwrk/midnight-js-protocol/v9';
-import { DerivedSeeds, DrawOracle, every, STARFALL_DAILY, StarfallKeeper, type StarfallView, writeFeed, buildStarfallFeed, woundDown } from '@lunardraw/keeper';
+import { DerivedSeeds, DrawOracle, every, PurchaseLog, STARFALL_DAILY, StarfallKeeper, type StarfallView, StepTimes, writeFeed, buildStarfallFeed, woundDown } from '@lunardraw/keeper';
 import { BLOCKFROST, type Session } from '@nightcast/deploy';
 import {
   forceExit,
   hex,
+  indexerUrlsFor,
   iso,
   networkArg,
   oracleKeyFrom,
@@ -50,9 +51,11 @@ import {
   starfallV2Out,
   starfallV2Providers,
   starfallV2ViewOf,
+  v2LedgerOf,
   v2Pure,
 } from './starfall-v2.js';
 import { watchSync } from './sync-watch.js';
+import { backfillJson, contractActions, contractStateOf, indexerGql, indexerSubscribe, named, namingLike, txIdsByDraw } from './tx-backfill.js';
 
 export const STARFALL_V2_USAGE = `usage: ./lunardraw starfall-v2 <command>
 
@@ -78,6 +81,9 @@ export const STARFALL_V2_USAGE = `usage: ./lunardraw starfall-v2 <command>
   accept-key  --network <network> --oracle <file> [--wallet <file>] [--record <file>] [--proof-server-port <port>]
       The oracle accepts the key the deployment proposed (once, before the first draw): needs the oracle's secret.
   status  --network <network> [--record <file>]
+  backfill-tx  --network <network> --feed <file> [--record <file>]
+      The transaction ids of draws from before the keeper kept them, read back from the indexer into
+      <file>.backfill.json, which the keeper's feed merges in (the site's verification links to them).
 
 The deployment is deployments/starfall-v2-<network>.json (or --record), written by
 starfall-v2/deploy/deploy.mjs. The compiled contracts with their keys are in
@@ -211,8 +217,17 @@ export const starfallV2 = async (argv: string[]): Promise<number> => {
           const lead = values['prove-lead'] === undefined ? 300 : Number(values['prove-lead']);
           const chain = new MidnightStarfallV2Chain(v2, joined, providers.publicDataProvider, providers.privateStateProvider as never, record.contractAddress, base, lead);
           const feedPath = values.feed;
+          // As Starfall's keeper: when each draw's steps happened and their transactions (kept beside the
+          // feed across restarts, with older draws' ids from `starfall-v2 backfill-tx`), so the site's
+          // verification can link the draw's record and its settlement; and the recent purchases.
+          const stepTimes = feedPath ? new StepTimes(`${feedPath}.steps.json`, 60, `${feedPath}.backfill.json`) : undefined;
+          const purchases = feedPath ? new PurchaseLog(`${feedPath}.purchases.json`) : undefined;
           const onView = feedPath
-            ? (view: StarfallView, nowSecs: number) => writeFeed(feedPath, buildStarfallFeed(view, { network, contract: record.contractAddress, nowSecs }))
+            ? (view: StarfallView, nowSecs: number) => {
+                stepTimes!.observe(view, nowSecs);
+                purchases!.observe(view, nowSecs);
+                writeFeed(feedPath, buildStarfallFeed(view, { network, contract: record.contractAddress, nowSecs, steps: stepTimes!.lookup(), purchases: purchases!.recent(20) }));
+              }
             : undefined;
           const lastDraw = join(homedir(), 'lunardraw-secrets', `starfall-v2-last-draw-${record.contractAddress.slice(0, 16)}`);
           const keeper = new StarfallKeeper({
@@ -226,6 +241,8 @@ export const starfallV2 = async (argv: string[]): Promise<number> => {
             finalDraw: () => existsSync(lastDraw),
             logger: session.logger,
             onView,
+            // each step's transaction id, for the feed's tx (the site's verification links to them)
+            onTx: stepTimes ? (draw, step, txId) => stepTimes.noteTx(draw, step, txId) : undefined,
             // The big proofs (the numbers, settlement batches) run in the background, one at a time.
             background: ['compute', 'settle'],
             backgroundLimit: 1,
@@ -242,6 +259,62 @@ export const starfallV2 = async (argv: string[]): Promise<number> => {
           await wallet.stop().catch(() => undefined);
         }
       }, proofServerPort(values['proof-server-port']), undefined, { service: true });
+    }
+
+    case 'backfill-tx': {
+      // As `starfall backfill-tx`, with the v2 ledger: every action on the game, oldest first, each
+      // call that moved a draw matched to the draws whose status it changed.
+      const network = networkArg(values.network);
+      if (!values.feed) throw new Error(STARFALL_V2_USAGE);
+      const { record, v2 } = await deployment(network, values.record, false);
+      const urls = indexerUrlsFor(network);
+      const gql = indexerGql(urls.http);
+      process.stdout.write(`Reading every action on ${record.contractAddress} from the indexer, oldest first...\n`);
+      const actions = await contractActions(gql, indexerSubscribe(urls.ws), record.contractAddress, {
+        onResume: (height, attempt, why) => process.stdout.write(`  ${why}; reconnecting and carrying on from block ${height} (${attempt} of 8)\n`),
+        onAction: (a, n) => {
+          if (n % 200 === 0) process.stdout.write(`  ${n} actions so far, at block ${a.height}\n`);
+        },
+      });
+      const own: Record<string, { tx?: Record<string, string> }> = existsSync(`${values.feed}.steps.json`)
+        ? JSON.parse(readFileSync(`${values.feed}.steps.json`, 'utf8'))
+        : {};
+      const known = new Set(Object.values(own).flatMap((r) => Object.values(r.tx ?? {})));
+      const { naming, matched } = namingLike(actions, known);
+      if (known.size && !matched) {
+        process.stdout.write(`None of the indexer's names for these transactions matches the keeper's own records, so nothing was written.\n`);
+        return 1;
+      }
+      process.stdout.write(
+        known.size
+          ? `Naming transactions by their ${naming.label}, as the keeper does (${matched} of its ${known.size} records found).\n`
+          : `The keeper has no records to compare yet: naming transactions by their ${naming.label}.\n`,
+      );
+      const decode = (state: string): StarfallView =>
+        starfallV2ViewOf(v2.G, v2LedgerOf(v2.G, contractStateOf(Buffer.from(state.toLowerCase().replace(/^0x/, ''), 'hex')) as never));
+      const ids = txIdsByDraw(named(actions, naming), decode);
+      let agree = 0;
+      const differ: string[] = [];
+      for (const [d, r] of Object.entries(own)) {
+        for (const [k, v] of Object.entries(r.tx ?? {})) {
+          const b = (ids.get(BigInt(d)) as Record<string, string> | undefined)?.[k];
+          if (!b) continue;
+          if (b === v) agree++;
+          else differ.push(`draw ${d} ${k}: keeper ${v.slice(0, 14)}…, indexer ${b.slice(0, 14)}…`);
+        }
+      }
+      process.stdout.write(`Checked against the keeper's records: ${agree} agree, ${differ.length} differ${differ.length ? ` (${differ.slice(0, 5).join('; ')})` : ''}.\n`);
+      if (differ.length) {
+        process.stdout.write('Nothing was written: the two should name the same transactions.\n');
+        return 1;
+      }
+      const out = `${values.feed}.backfill.json`;
+      writeFileSync(out, backfillJson(ids));
+      const steps = [...ids.values()].reduce((n, r) => n + Object.keys(r).length, 0);
+      process.stdout.write(`${actions.length} actions; ${steps} step transactions for ${ids.size} draws written to ${out}\n`);
+      for (const [id, r] of [...ids.entries()].slice(-3)) process.stdout.write(`  draw ${id}: ${JSON.stringify(r)}\n`);
+      process.stdout.write('The keeper picks it up on its next pass (no restart needed).\n');
+      return 0;
     }
 
     case 'oracle': {
