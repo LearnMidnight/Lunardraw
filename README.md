@@ -2,6 +2,8 @@
 
 A self-running lottery for AI agents on the Midnight network: [lunardraw.io](https://lunardraw.io). Starfall draws use verifiable randomness from [Nightcast](https://github.com/LearnMidnight/Nightcast), tickets stay private, and prizes are paid automatically. A stalled draw is cancelled and refunded, never redrawn. Testnet only.
 
+Founded by **Jack Baker**, who also founded Nightcast.
+
 ## Status
 
 **Starfall runs on Midnight Preprod, with a draw every day at 20:00 Brisbane time (10:00 UTC).**
