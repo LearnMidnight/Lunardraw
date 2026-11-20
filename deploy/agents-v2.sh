@@ -9,12 +9,15 @@
 #   bash agents-v2.sh undo       the timers back to the Classic agents (left switched off)
 #
 # The live keeper's and oracle's checkouts (/root/Lunardraw, /root/Lunardraw-v2) are not touched:
-# the agents read the compiled v2 game and its deployment record from /root/Lunardraw-v2.
+# the agents read the deployment record from /root/Lunardraw-v2, and a copy of its compiled v2 game
+# (the generated code copied into this checkout, so it loads this checkout's Compact runtime; the
+# keys and zkir linked).
 # Prints no secrets and touches no wallet (the agents use their own, as on Classic).
 set -euo pipefail
 REPO=/root/Lunardraw-agents
 V2=/root/Lunardraw-v2
 ENVS=/root/lunardraw-agents
+OUT="$REPO/starfall-v2/deploy/out"
 D=/etc/systemd/system
 AGENTS="nova orbit pixel"
 export PATH="/root/.local/bin:$PATH"
@@ -33,6 +36,27 @@ build() {
   npm run -s build >/dev/null
   grep -q "case 'agent'" cli/dist/starfall-v2-commands.js || die "this checkout's CLI has no 'starfall-v2 agent' (is the PR merged into main?)"
   echo "built"
+}
+
+# The compiled v2 game, for this checkout. Its generated code imports the Compact runtime by name, and
+# Node finds that from where the file is: loaded from /root/Lunardraw-v2 it would bring that checkout's
+# copy of the runtime, a second one beside this checkout's, and fail "expected instance of
+# ChargedState". So the generated code (and the compiler's notes) are copied in; keys and zkir, large
+# and only read, are linked.
+game_copy() {
+  rm -rf "$OUT"
+  for c in "$V2/starfall-v2/deploy/out"/*/; do
+    n="$(basename "$c")"
+    mkdir -p "$OUT/$n"
+    for d in "$c"*; do
+      b="$(basename "$d")"
+      case "$b" in
+        keys | zkir) ln -s "$d" "$OUT/$n/$b" ;;
+        *) cp -r "$d" "$OUT/$n/" ;;
+      esac
+    done
+  done
+  echo "the compiled v2 game ($(ls "$OUT" | tr '\n' ' ')) copied into $OUT, keys linked"
 }
 
 # A Classic agent's arguments as v2 takes them: --style, --games, --rounds, --budget, --max-draws and
@@ -71,7 +95,8 @@ case "${1:-}" in
       echo "$n: $v2args"
     done
     say "3. Can the agents' checkout read the v2 game?"
-    (cd "$REPO" && LUNARDRAW_STARFALL_V2_OUT="$V2/starfall-v2/deploy/out" ./lunardraw starfall-v2 status --network preprod --record "$V2/deployments/starfall-v2-preprod.json" 2>&1 | head -4)
+    game_copy
+    (cd "$REPO" && LUNARDRAW_STARFALL_V2_OUT="$OUT" ./lunardraw starfall-v2 status --network preprod --record "$V2/deployments/starfall-v2-preprod.json" 2>&1 | head -4)
     say "4. The v2 agent unit, and the window timers pointed at it"
     cp "$REPO/deploy/systemd/lunardraw-agent-v2@.service" "$D/"
     systemctl stop lunardraw-agent@nova lunardraw-agent@orbit lunardraw-agent@pixel 2>/dev/null || true
@@ -94,6 +119,7 @@ case "${1:-}" in
     ;;
   update)
     build
+    game_copy
     for n in $AGENTS; do systemctl is-active -q "lunardraw-agent-v2@$n" && systemctl restart "lunardraw-agent-v2@$n" && echo "restarted $n"; done
     ;;
   status)
