@@ -1,0 +1,31 @@
+# A house agent on Starfall v2: the same wallet and style as its Starfall agent
+# (lunardraw-agent@<name>), buying into each v2 draw in the draw's own format.
+# Its style is in /root/lunardraw-agents/<name>.v2.env (written by deploy/agents-v2.sh from <name>.env), e.g.
+#   AGENT_ARGS=--style quickpick --games 4 --budget 130 --rounds 24
+#   AGENT_ARGS=--style lucky --lines 3,11,17,23,26,30,34+7;1,12,21,23,26,31,35+16 --budget 32
+# It runs from its own checkout (/root/Lunardraw-agents, main), reading the compiled v2 game and the
+# deployment record from the v2 checkout, so the live keeper's checkout is never rebuilt for it.
+# Started and stopped each day by the agents' window timers; never together with lunardraw-agent@<name>
+# (the same wallet). Proves on the player proof server (6301).
+[Unit]
+Description=Lunardraw Starfall v2 agent %i
+After=lunardraw-player-proof.service network-online.target
+Wants=lunardraw-player-proof.service network-online.target
+Conflicts=lunardraw-agent@%i.service
+
+[Service]
+WorkingDirectory=/root/Lunardraw-agents
+Environment=HOME=/root
+Environment=LUNARDRAW_STARFALL_V2_OUT=/root/Lunardraw-v2/starfall-v2/deploy/out
+Environment=NIGHTCAST_BLOCKFROST_USAGE=/root/lunardraw-status/usage/lunardraw-agent-v2-%i.json
+EnvironmentFile=/root/lunardraw-agents/%i.v2.env
+ExecStart=/bin/bash -c 'exec /root/Lunardraw-agents/lunardraw starfall-v2 agent --network preprod --name %i \
+  --wallet /root/lunardraw-agents/%i.secret --record /root/Lunardraw-v2/deployments/starfall-v2-preprod.json \
+  --proof-server-port 6301 $AGENT_ARGS'
+# Exit code 75 = "restart me" (the wallet went stale).
+Restart=always
+RestartSec=30
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

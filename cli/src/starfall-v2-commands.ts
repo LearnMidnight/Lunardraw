@@ -36,6 +36,7 @@ import { dustWait } from './dust-wait.js';
 import { statusWriter } from './status-file.js';
 import { freshFees, openServiceWallet, parseUserAddress, settlementFrom } from './starfall-commands.js';
 import { describeStep, loadPlayerState, nextStep, savePlayerState, stepDone, ticketsFor } from './starfall-v2-player.js';
+import { loadV2AgentState, MAX_ROUNDS, parseV2Lines, planV2, saveV2AgentState, ticketGames, type V2AgentOptions, type V2Draw, type V2Style, V2_STYLES } from './starfall-v2-agent.js';
 import { fromHex } from './common.js';
 import { walletBalances } from '@nightcast/deploy';
 import {
@@ -67,6 +68,13 @@ export const STARFALL_V2_USAGE = `usage: ./lunardraw starfall-v2 <command>
           [--syndicate-games 3] [--record <file>] [--proof-server-port <port>]
       A rehearsal player: in each draw on sale, one ticket of --games QuickPick games for itself and,
       with --members, a syndicate of one share per member (paid to that address) and its games.
+  agent   --network <network> --wallet <file> --name <name> [--style quickpick|lucky|moonhit|system|mix]
+          [--games 2] [--lines "3,11,17,23,26,30,34+7;..."] [--rounds <n>] [--budget <tNIGHT>] [--max-draws <n>]
+          [--record <file>] [--proof-server-port <port>]
+      A house agent on v2: buys once a draw in its style, in the draw's own format (lucky sets that
+      don't fit its range are folded into it), --rounds purchases' worth in one go, at most --budget
+      (default 60) a draw; prizes and refunds come to its wallet by themselves. State in
+      ~/lunardraw-agents/<name>.v2-agent.json.
   accept-key  --network <network> --oracle <file> [--wallet <file>] [--record <file>] [--proof-server-port <port>]
       The oracle accepts the key the deployment proposed (once, before the first draw): needs the oracle's secret.
   status  --network <network> [--record <file>]
@@ -164,6 +172,11 @@ export const starfallV2 = async (argv: string[]): Promise<number> => {
       games: { type: 'string' },
       members: { type: 'string' },
       'syndicate-games': { type: 'string' },
+      style: { type: 'string' },
+      lines: { type: 'string' },
+      budget: { type: 'string' },
+      rounds: { type: 'string' },
+      'max-draws': { type: 'string' },
     },
   });
 
@@ -352,6 +365,142 @@ export const starfallV2 = async (argv: string[]): Promise<number> => {
                   refusals = 0;
                   spentThisRun = true;
                   log(`done in ${Math.round((Date.now() - started) / 1000)} s${syndicateId !== undefined ? `: syndicate ${syndicateId}` : ''}${tickets.length ? `: ${tickets.map((t) => (t as { entry: { numbers: bigint[] } }).entry.numbers.slice(0, 7).join(' ')).join('; ')}${tickets.length && (tickets[0] as { lines: { moonball: bigint }[] }).lines[0]!.moonball ? ' (+ more lines)' : ''}` : ''}`);
+                }
+              }
+            } catch (err) {
+              refusals += 1;
+              session.logger.warn(`[${name}] ${err instanceof Error ? err.message.slice(0, 600) : String(err)} (${refusals} in a row; trying again in 3 minutes)`);
+              waitUntil = Date.now() + 3 * 60_000;
+              if (refusals >= 3) {
+                session.logger.error(`[${name}] 3 failures in a row: restarting to resync the wallet`);
+                restart = true;
+                break;
+              }
+            }
+            lastPassAt = Date.now();
+            await Promise.race([new Promise((r) => setTimeout(r, 60_000)), stopped]);
+          }
+          sync.stop();
+          silence.cancel();
+          if (restart) forceExit(RESTART);
+          return restart ? RESTART : 0;
+        } finally {
+          await wallet.stop().catch(() => undefined);
+        }
+      }, proofServerPort(values['proof-server-port']), undefined, { service: true });
+    }
+
+    case 'agent': {
+      const network = networkArg(values.network);
+      const name = (values.name ?? '').replace(/[^A-Za-z0-9_-]/g, '');
+      if (!name || !values.wallet) throw new Error(STARFALL_V2_USAGE);
+      const style = (values.style ?? 'mix') as V2Style;
+      if (!V2_STYLES.includes(style)) throw new Error(`--style must be one of ${V2_STYLES.join(', ')}`);
+      const opts: V2AgentOptions = {
+        name,
+        style,
+        games: values.games !== undefined ? Number(values.games) : undefined,
+        lines: values.lines !== undefined ? parseV2Lines(values.lines) : undefined,
+        rounds: values.rounds !== undefined ? Number(values.rounds) : undefined,
+        budget: values.budget !== undefined ? BigInt(Math.round(Number(values.budget) * 1e6)) : undefined,
+        maxDraws: values['max-draws'] !== undefined ? Number(values['max-draws']) : 0,
+      };
+      if (opts.rounds !== undefined && !(Number.isInteger(opts.rounds) && opts.rounds >= 1 && opts.rounds <= MAX_ROUNDS)) throw new Error(`--rounds takes 1 to ${MAX_ROUNDS}`);
+      if (opts.games !== undefined && !(Number.isInteger(opts.games) && opts.games >= 1 && opts.games <= 18)) throw new Error('--games takes 1 to 18');
+      if (style === 'lucky' && !opts.lines?.length) throw new Error('--style lucky needs --lines "3,11,17,23,26,30,34+7;..."');
+      if (opts.lines && style !== 'lucky') throw new Error('--lines goes with --style lucky');
+      const { record, v2 } = await deployment(network, values.record, false);
+      const statePath = join(homedir(), 'lunardraw-agents', `${name}.v2-agent.json`);
+      const dustMinutes = dustWait(values['dust-wait']);
+      return withSession(network, async (session) => {
+        const wallet = await openServiceWallet(session, walletSeed(values.wallet), dustMinutes);
+        if (!wallet) return RESTART;
+        try {
+          const meter = new DustMeter(undefined);
+          const raw = await starfallV2Providers(session, wallet, v2, record.treasuryAddress);
+          const { providers } = freshFees(raw, wallet, session.logger, meter);
+          const joined = await joinStarfallV2(providers, v2, record.contractAddress, {});
+          const store = (providers.privateStateProvider as never as { forContract(a: string): { set(id: string, s: unknown): Promise<void> } }).forContract(record.contractAddress);
+          const me = fromHex(wallet.unshieldedKeystore.getAddress());
+          const game = { bytes: fromHex(record.contractAddress) };
+          const state = loadV2AgentState(statePath, record.contractAddress);
+          saveV2AgentState(statePath, state);
+          const log = (m: string) => session.logger.info(`[${name}] ${m}`);
+          log(`playing Starfall v2 at ${record.contractAddress} in the ${style} style${opts.rounds ? `, ${opts.rounds} rounds a purchase` : ''}; ${new Set(state.purchases.map((p) => p.draw)).size} draw(s) played so far; state in ${statePath}`);
+          let stop = false;
+          const stopped = untilStopped().then(() => { stop = true; });
+          const sync = watchSync(wallet, { stallMinutes: stallAfter(values['stall-after']), logger: session.logger });
+          let lastPassAt = Date.now();
+          const silence = untilSilentFor(silentAfter(values['silent-after']), () => lastPassAt, session.logger);
+          let restart = false;
+          void Promise.race([sync.stalled, silence.done]).then((fired) => { if (fired && !stop) { restart = true; stop = true; forceExit(RESTART); } });
+          let refusals = 0;
+          let waitUntil = 0;
+          let sittingOut = '';
+          while (!stop) {
+            try {
+              const l = await readV2Ledger(v2.G, providers.publicDataProvider, record.contractAddress);
+              const view = starfallV2ViewOf(v2.G, l);
+              // the draws this agent played that have been settled or cancelled since
+              for (const d of view.draws) {
+                const key = d.id.toString();
+                if (!state.purchases.some((p) => p.draw === key) || state.reported.includes(key) || (d.status !== 4 && d.status !== 5)) continue;
+                log(d.status === 4 ? `draw ${key}: ${d.numbers.join(' ')}${d.format && d.format.moonballs > 1 ? ` + ${d.moonball}` : ''}; any prize is paid to this wallet by itself` : `draw ${key} was cancelled: its games are refunded to this wallet`);
+                state.reported.push(key);
+                saveV2AgentState(statePath, state);
+              }
+              const draws: V2Draw[] = view.draws.map((d) => {
+                const r = l.draws.lookup(d.id);
+                return { id: d.id, status: d.status, salesClose: d.salesClose, format: { range: Number(r.format.range), moonballs: Number(r.format.moonballs), pick5: BigInt(r.format.pick5) } };
+              });
+              const plan = Date.now() >= waitUntil ? planV2(v2.G, draws, view.ticketPrice, Date.now() / 1000, state, opts, me) : null;
+              if (plan && 'skipped' in plan) {
+                if (plan.draw.toString() !== sittingOut) log(`sitting out draw ${plan.draw}: ${plan.skipped}`);
+                sittingOut = plan.draw.toString();
+                if (opts.maxDraws && new Set(state.purchases.map((p) => p.draw)).size >= opts.maxDraws) break;
+              } else if (plan) {
+                const { night } = await walletBalances(wallet);
+                if (night < plan.cost) {
+                  if (plan.draw.toString() !== sittingOut) log(`sitting out draw ${plan.draw} for now: ${plan.games} game(s) cost ${tn(plan.cost)}, the wallet holds ${tn(night)}`);
+                  sittingOut = plan.draw.toString();
+                  waitUntil = Date.now() + 10 * 60_000;
+                } else {
+                  const f = plan.format;
+                  log(`draw ${plan.draw} (7 from ${f.range}${f.moonballs > 1 ? ` + Moonball 1-${f.moonballs}` : ''}, sales close ${iso(plan.salesClose)}): buying ${plan.games} game(s) for ${tn(plan.cost)} in ${plan.txs.length} transaction(s)`);
+                  const landed = async (t: unknown): Promise<boolean> => {
+                    const now = await readV2Ledger(v2.G, providers.publicDataProvider, record.contractAddress);
+                    return now.ticketCommitments.member(v2.G.pureCircuits.ticketCommitment(game, t));
+                  };
+                  let done = 0;
+                  let games = 0;
+                  const numbers: number[][] = [];
+                  for (const tickets of plan.txs) {
+                    if (Date.now() / 1000 > Number(plan.salesClose) - 120) { log('sales close too soon for the rest'); break; }
+                    await store.set('starfall-v2', { pendingTickets: tickets });
+                    try {
+                      await joined.callTx.buyTickets(BigInt(tickets.length), { bytes: me });
+                    } catch (err) {
+                      // a purchase that timed out may still have landed: never buy the same games twice
+                      if (!(await landed(tickets[0]).catch(() => false))) {
+                        if (done === 0) throw err;
+                        log(`stopped after ${done} of ${plan.txs.length} transaction(s): ${err instanceof Error ? err.message.slice(0, 300) : String(err)}`);
+                        break;
+                      }
+                    }
+                    done += 1;
+                    for (const t of tickets) {
+                      games += ticketGames(v2.G, t, f);
+                      const tt = t as { entry: { numbers: bigint[]; count: bigint } };
+                      numbers.push(tt.entry.numbers.slice(0, Number(tt.entry.count)).map(Number));
+                    }
+                    if (plan.txs.length > 1) log(`transaction ${done} of ${plan.txs.length} landed`);
+                  }
+                  if (done > 0) {
+                    state.purchases.push({ draw: plan.draw.toString(), at: new Date().toISOString(), games, cost: (view.ticketPrice * BigInt(games)).toString(), txs: done, numbers });
+                    saveV2AgentState(statePath, state);
+                    log(`in draw ${plan.draw} with ${games} game(s) in ${done} transaction(s)`);
+                  }
+                  refusals = 0;
                 }
               }
             } catch (err) {
