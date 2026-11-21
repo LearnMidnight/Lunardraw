@@ -15,9 +15,11 @@
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import { type AgentAnalytics, agentAnalytics, type AgentDraw, agentHistory, type AgentStats, agentReport, type AgentWin, type DrawOutcome, emptyStats, LISTING_PREFIX, type ListingPayload, listingProblem, periodStart, type Via } from './listing.js';
+import { type AgentAnalytics, agentAnalytics, type AgentDraw, agentHistory, type AgentReport, type AgentStats, agentReport, type AgentWin, type DrawOutcome, emptyStats, LISTING_PREFIX, type ListingPayload, listingProblem, periodStart, type Via } from './listing.js';
+import { addressHexOf, addStats, readV2Feed, type V2Directory, v2PlayedFromFeed, v2PlayedFromState, v2Recent, v2Report } from './listing-v2.js';
+import type { V2Purchase } from './starfall-v2-agent.js';
 import { emptyAgentState, loadAgentState } from './starfall-agent.js';
 
 export type DirectoryAgent = {
@@ -96,8 +98,13 @@ export type RegistryOptions = {
   dir: string;
   /** The site feed (feed.json): the draws' numbers and prizes. */
   feedPath: string;
-  /** The house agents' folder: <name>.env and <name>.state.json. */
+  /**
+   * The house agents' folder: <name>.env and <name>.state.json (Classic), <name>.v2.env and
+   * <name>.v2-agent.json (Starfall v2).
+   */
   houseDir: string;
+  /** The Starfall v2 feed (feed-v2.json); default: beside feedPath. */
+  feedV2Path?: string;
   verifier: Verifier;
   /** Whether a systemd unit is active (house agents' online/offline). */
   isActive?: (unit: string) => Promise<boolean>;
@@ -206,12 +213,16 @@ export const createRegistry = (o: RegistryOptions) => {
   const playing = (status: DirectoryAgent['status'], lastDraw: number | undefined, outcomes: DrawOutcome[]): DirectoryAgent['status'] =>
     status === 'online' && lastDraw !== undefined && lastDraw > 0 && lastDraw < currentDraw(outcomes) - 3 ? 'idle' : status;
 
-  const house = async (outcomes: DrawOutcome[]): Promise<{ agents: DirectoryAgent[]; events: DirectoryEvent[]; wins: DirectoryWin[] }> => {
+  const feedV2Path = o.feedV2Path ?? join(dirname(o.feedPath), 'feed-v2.json');
+
+  const house = async (outcomes: DrawOutcome[], v2: V2Directory | undefined): Promise<{ agents: DirectoryAgent[]; events: DirectoryEvent[]; wins: DirectoryWin[] }> => {
     if (!existsSync(o.houseDir)) return { agents: [], events: [], wins: [] };
+    // an agent has a record of its own in one game or the other (other .env files are not agents)
     const names = readdirSync(o.houseDir)
       .filter((f) => f.endsWith('.env'))
       .map((f) => f.slice(0, -4))
-      .filter((n) => /^[a-z0-9-]+$/.test(n));
+      .filter((n) => /^[a-z0-9-]+$/.test(n))
+      .filter((n) => existsSync(join(o.houseDir, `${n}.state.json`)) || existsSync(join(o.houseDir, `${n}.v2-agent.json`)));
     const agents: DirectoryAgent[] = [];
     const events: DirectoryEvent[] = [];
     const wins: DirectoryWin[] = [];
@@ -221,20 +232,30 @@ export const createRegistry = (o: RegistryOptions) => {
       // read only (the agent itself moves an old deployment's state aside): another deployment's counts as nothing yet
       const kept = loadAgentState(statePath);
       const state = current === undefined || kept.contract?.toLowerCase() === current ? kept : emptyAgentState();
-      const env = readFileSync(join(o.houseDir, `${n}.env`), 'utf8');
+      const v2Env = join(o.houseDir, `${n}.v2.env`);
+      const env = readFileSync(existsSync(v2Env) ? v2Env : join(o.houseDir, `${n}.env`), 'utf8');
       const style = /--style\s+(\w+)/.exec(env)?.[1] ?? 'mix';
-      const r = agentReport(state, outcomes, now());
+      const classic = agentReport(state, outcomes, now());
+      // Starfall v2: its own record (another deployment's counts as nothing), and the prizes paid to its wallet
+      const v2Path = join(o.houseDir, `${n}.v2-agent.json`);
+      const v2State = readJson<{ contract?: string; address?: string; purchases?: V2Purchase[] }>(v2Path);
+      const v2Mine = v2 && v2State && (!v2.contract || v2State.contract?.toLowerCase() === v2.contract) ? v2State : undefined;
+      const played = v2Mine ? v2PlayedFromState(v2Mine) : [];
+      const r2 = v2 && played.length ? v2Report(played, v2, addressHexOf(v2Mine?.address), now()) : undefined;
+      const r = r2 ? combined(classic, r2) : classic;
       const stats = r.stats;
-      const history = agentHistory(state, outcomes);
-      const active = await isActive(`lunardraw-agent@${n}`);
-      const seen = existsSync(statePath) ? statSync(statePath).mtimeMs : undefined;
+      const history = [...agentHistory(state, outcomes), ...(r2?.history ?? [])].sort((a, b) => ((a.at ?? '') < (b.at ?? '') ? -1 : 1));
+      const active = (await isActive(`lunardraw-agent@${n}`)) || (await isActive(`lunardraw-agent-v2@${n}`));
+      const seen = Math.max(...[statePath, v2Path].map((f) => (existsSync(f) ? statSync(f).mtimeMs : 0))) || undefined;
       const name = n.toUpperCase();
+      const status = active ? 'online' : statusOf(seen, now()) === 'online' ? 'idle' : 'offline';
       agents.push({
         id: slug(n),
         name,
         via: 'lunardraw',
         house: true,
-        status: playing(active ? 'online' : statusOf(seen, now()) === 'online' ? 'idle' : 'offline', stats.last_draw, outcomes),
+        // playing v2 recently counts as playing (each game numbers its own draws)
+        status: v2Recent(played, v2) ? status : playing(status, classic.stats.last_draw, outcomes),
         style: STYLES[style] ?? style,
         stats,
         week: strip(r.week),
@@ -248,6 +269,9 @@ export const createRegistry = (o: RegistryOptions) => {
       for (const p of state.purchases.slice(-10)) {
         events.push({ at: p.at, agent: name, text: `bought ${p.games} game${p.games === 1 ? '' : 's'} in draw ${p.draw}` });
       }
+      for (const p of (v2Mine?.purchases ?? []).slice(-10)) {
+        events.push({ at: p.at, agent: name, text: `bought ${p.games} game${p.games === 1 ? '' : 's'} in Starfall draw ${p.draw}` });
+      }
       for (const w of r.wins) wins.push({ ...w, agent: name });
     }
     return { agents, events, wins };
@@ -256,41 +280,56 @@ export const createRegistry = (o: RegistryOptions) => {
   /** The directory: house agents first in ties, then by tNIGHT won, winning games, games. */
   const directory = async (): Promise<Directory> => {
     const outcomes = draws();
-    const h = await house(outcomes);
+    const v2 = readV2Feed(feedV2Path);
+    const h = await house(outcomes, v2);
     const s = load();
     const t = now();
     const weekStart = periodStart('week', t);
     const monthStart = periodStart('month', t);
+    const listedV2Wins: DirectoryWin[] = [];
     const listed: DirectoryAgent[] = Object.values(s.listed)
       .filter((l) => !s.hidden.includes(l.address) && !s.hidden.includes(slug(l.name)))
-      .map((l) => ({
-        id: slug(l.name),
-        name: l.name,
-        via: l.via,
-        house: false,
-        status: playing(statusOf(Date.parse(l.last_seen), t), l.stats.last_draw, outcomes),
-        style: l.style,
-        stats: l.stats,
-        week: l.week?.since === weekStart ? strip(l.week) : emptyStats(),
-        month: l.month?.since === monthStart ? strip(l.month) : emptyStats(),
-        history: l.history ?? [],
-        analytics: agentAnalytics(l.history ?? [], l.wins ?? []),
-        joined: l.joined,
-        last_seen: l.last_seen,
-        address: l.address,
-      }));
+      .map((l) => {
+        const week = l.week?.since === weekStart ? strip(l.week) : emptyStats();
+        const month = l.month?.since === monthStart ? strip(l.month) : emptyStats();
+        // Starfall v2, from the chain's own record of its wallet: what it bought and the prizes paid to it
+        const hex = addressHexOf(l.address);
+        const played = v2 && hex ? v2PlayedFromFeed(v2, hex) : [];
+        const r2 = v2 && played.length ? v2Report(played, v2, hex, t) : undefined;
+        const history = [...(l.history ?? []), ...(r2?.history.map(({ at: _at, ...x }) => x) ?? [])].slice(-60);
+        const allWins = [...(l.wins ?? []), ...(r2?.wins ?? [])];
+        for (const w of r2?.wins ?? []) listedV2Wins.push({ ...w, agent: l.name });
+        const status = statusOf(Date.parse(l.last_seen), t);
+        return {
+          id: slug(l.name),
+          name: l.name,
+          via: l.via,
+          house: false,
+          status: v2Recent(played, v2) ? status : playing(status, l.stats.last_draw, outcomes),
+          style: l.style,
+          stats: r2 ? addStats(l.stats, r2.stats) : l.stats,
+          week: r2 ? addStats(week, strip(r2.week)) : week,
+          month: r2 ? addStats(month, strip(r2.month)) : month,
+          history,
+          analytics: agentAnalytics(history, allWins),
+          joined: l.joined,
+          last_seen: l.last_seen,
+          address: l.address,
+        };
+      });
     const agents = [...h.agents, ...listed].sort(
       (a, b) => b.stats.won_star - a.stats.won_star || b.stats.winning_games - a.stats.winning_games || b.stats.games - a.stats.games || Number(b.house) - Number(a.house),
     );
     const shown = new Set(listed.map((a) => a.name));
     const events = [...h.events, ...s.events.filter((e) => shown.has(e.agent))].sort((a, b) => (a.at < b.at ? 1 : -1)).slice(0, 30);
     const drawnAt = new Map(outcomes.map((d) => [d.num, d.drawn_at]));
+    const drawnAtV2 = new Map((v2?.draws ?? []).map((d) => [d.num, d.drawn_at]));
     const listedWins = Object.values(s.listed)
       .filter((l) => shown.has(l.name))
       .flatMap((l) => (l.wins ?? []).map((w) => ({ ...w, agent: l.name })));
-    const wins = [...h.wins, ...listedWins]
+    const wins = [...h.wins, ...listedWins, ...listedV2Wins.filter((w) => shown.has(w.agent))]
       .filter((w) => w.won_star > 0)
-      .map((w) => ({ ...w, drawn_at: drawnAt.get(w.draw) }))
+      .map((w) => ({ ...w, drawn_at: (w.game === 'starfall' ? drawnAtV2 : drawnAt).get(w.draw) }))
       .sort((a, b) => b.won_star - a.won_star || b.draw - a.draw)
       .slice(0, 20);
     return { schema: 'lunardraw-agents/1', network: o.network, generated_at: new Date(t).toISOString(), agents, events, wins };
@@ -373,6 +412,23 @@ export const createRegistry = (o: RegistryOptions) => {
 };
 
 export class Refused extends Error {}
+
+const readJson = <T>(path: string): T | undefined => {
+  try {
+    return JSON.parse(readFileSync(path, 'utf8')) as T;
+  } catch {
+    return undefined;
+  }
+};
+
+/** Classic's report and v2's added up: totals, wins newest first. */
+const combined = (a: AgentReport, b: AgentReport): AgentReport => ({
+  stats: addStats(a.stats, b.stats),
+  week: { ...addStats(a.week, b.week), since: a.week.since },
+  month: { ...addStats(a.month, b.month), since: a.month.since },
+  wins: [...a.wins, ...b.wins].sort((x, y) => (y.won_star - x.won_star) || (y.draw - x.draw)).slice(0, 20),
+  history: [...a.history, ...b.history],
+});
 
 const strip = (x: AgentStats & { since?: string }): AgentStats => {
   const { since: _since, ...rest } = x;

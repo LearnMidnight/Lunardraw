@@ -7,7 +7,7 @@
  */
 import { Starfall } from '@lunardraw/contract';
 import type { FeedDraw } from './feed.js';
-import { mustBeWonStatus, type StarfallDrawView, type StarfallView } from './starfall.js';
+import { mustBeWonStatus, payeeAddress, type StarfallDrawView, type StarfallView } from './starfall.js';
 import type { Purchase } from './purchase-log.js';
 import type { StepRecord } from './step-times.js';
 
@@ -53,7 +53,20 @@ export type StarfallFeedDraw = Omit<FeedDraw, 'status' | 'claim_deadline'> & {
    * record check to `numbers` and its settlement check to `finalise`.
    */
   tx?: Partial<Record<'open' | 'reveal' | 'numbers' | 'finalise' | 'void', string>>;
+  /**
+   * Who bought: games per buyer, by the refund address its tickets name (a wallet's 32 bytes in
+   * hex). Public on the chain; for the agent directory and the leaderboard.
+   */
+  buyers?: FeedBuyer[];
+  /**
+   * A settled draw's prizes by payee and division: a wallet's 32 bytes in hex, or
+   * "syndicate:<n>" for a syndicate's pot (shared by its members). `star` is the payee's share.
+   */
+  payouts?: FeedPayout[];
 };
+
+export type FeedBuyer = { address: string; games: number };
+export type FeedPayout = { address: string; division: number; games: number; star: number };
 
 export type StarfallFeed = {
   schema: 'lunardraw-feed/1';
@@ -102,6 +115,8 @@ export type StarfallFeed = {
         final?: true;
         /** Its jackpot must be won ('yes'), or will be if the draws before it roll over ('possible'). */
         must_be_won?: 'yes' | 'possible';
+        /** Who has bought so far (as a draw's `buyers`). */
+        buyers?: FeedBuyer[];
       };
       /** Recent purchases, newest first, as the keeper saw them (PurchaseLog): draw, games and tickets only. */
       purchases?: Purchase[];
@@ -156,6 +171,29 @@ export const buildStarfallFeed = (
         }
       : {};
 
+  const buyersOf = (d: StarfallDrawView): { buyers?: FeedBuyer[] } =>
+    d.buyers && d.buyers.length ? { buyers: d.buyers.map((b) => ({ address: b.address, games: Number(b.games) })) } : {};
+  // a settled draw's prizes, by payee and division (each payee's share of each winning ticket's prize)
+  const payoutsOf = (d: StarfallDrawView): FeedPayout[] => {
+    const by = new Map<string, { address: string; division: number; games: number; star: bigint }>();
+    for (const e of view.entitlements) {
+      if (e.drawId !== d.id || !e.payees) continue;
+      for (const p of e.payees) {
+        if (p.share === 0n) continue;
+        const address = payeeAddress(p);
+        e.games.forEach((g, i) => {
+          if (g === 0n) return;
+          const k = `${address}:${i}`;
+          const row = by.get(k) ?? { address, division: i + 1, games: 0, star: 0n };
+          row.games += Number(g);
+          row.star += (g * (d.prizes[i] ?? 0n) * p.share) / 10_000n;
+          by.set(k, row);
+        });
+      }
+    }
+    return [...by.values()].map((r) => ({ ...r, star: star(r.star) }));
+  };
+
   const toFeed = (d: StarfallDrawView): StarfallFeedDraw => {
     const out: StarfallFeedDraw = {
       num: Number(d.id),
@@ -204,6 +242,11 @@ export const buildStarfallFeed = (
       const seen = Object.entries(timeline).filter(([, v]) => v !== undefined);
       if (seen.length) out.timeline = Object.fromEntries(seen); // a draw known only from the backfill has ids but no times
       if (t.tx && Object.keys(t.tx).length) out.tx = { ...t.tx };
+    }
+    Object.assign(out, buyersOf(d));
+    if (d.status === DrawStatus.settled) {
+      const payouts = payoutsOf(d);
+      if (payouts.length) out.payouts = payouts;
     }
     return out;
   };
@@ -254,6 +297,7 @@ export const buildStarfallFeed = (
               games_sold: Number(selling.games),
               tickets: Number(selling.tickets),
               ...(selling.final ? { final: true as const } : {}),
+              ...buyersOf(selling),
               ...(() => {
                 const m = mustBeWonStatus(view, selling.id);
                 return m === 'no' ? {} : { must_be_won: m };

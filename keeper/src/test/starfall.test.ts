@@ -690,7 +690,8 @@ describe('the Starfall site feed', () => {
     const feed = async () => buildStarfallFeed(await chain.view(), { network: 'local', contract: sim.address, nowSecs: sim.now });
     await keeper.tick();
     const { numbers, moonball } = numbersOf(ctx, 1n);
-    const games = [makeTicket(1n, lineHitting(numbers, moonball, 3), randomAddress())];
+    const winner = randomAddress();
+    const games = [makeTicket(1n, lineHitting(numbers, moonball, 3), winner)];
     for (let i = 1; i < TWO_BATCHES; i++) games.push(makeTicket(1n, quickPick(), randomAddress()));
     sim.buyPackage(games, BUYER);
 
@@ -728,6 +729,12 @@ describe('the Starfall site feed', () => {
     expect(d1.prizes_star).toEqual(expected.prizes.map(Number));
     expect(d1.carry_out_star).toBe(Number(expected.carry));
     expect(d1.winners![7]).toBeGreaterThanOrEqual(1); // the sure 3 + Moonball
+    // who bought (by refund address) and who each prize is paid to, for the agent directory
+    expect(d1.buyers).toEqual([{ address: hex(BUYER), games: TWO_BATCHES }]);
+    const mine = d1.payouts!.filter((p) => p.address === hex(winner));
+    expect(mine).toContainEqual({ address: hex(winner), division: 8, games: 1, star: d1.prizes_star![7] });
+    const paid = d1.payouts!.reduce((a, p) => a + p.star, 0);
+    expect(paid).toBe(d1.winners!.reduce((a, w, i) => a + w * d1.prizes_star![i]!, 0));
   }, 60_000);
 
   it('records when each step happened, as the keeper saw it, and keeps them across a restart', async () => {

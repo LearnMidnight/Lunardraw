@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { agentAnalytics, agentHistory, agentStats, agentWins, type DrawOutcome, periodStart, prizeChance, signedListing, walletSigner } from '../listing.js';
+import { addressHexOf, v2PrizeChance } from '../listing-v2.js';
 import { createRegistry, ledgerVerifier } from '../registry.js';
 import type { AgentState } from '../starfall-agent.js';
 
@@ -146,6 +147,89 @@ describe('the agent registry', () => {
     writeFileSync(feed, JSON.stringify({ games: { starfall: { open: { num: 15 }, draws } } }));
     expect((await reg.directory()).agents[0]!.status).toBe('idle');
   });
+  it('adds Starfall v2: house agents from their v2 record, any listed agent from the chain\'s record of its wallet, prizes by payee', async () => {
+    const { dir, house, feed } = setup();
+    const t = Date.parse('2026-11-21T09:00:00.000Z');
+    const verifier = await ledgerVerifier('preprod');
+    const a = await walletSigner(SEED_A, 'preprod');
+    const aHex = addressHexOf(a.address)!;
+    const novaHex = 'ab'.repeat(32);
+    const v2 = 'cd'.repeat(32);
+    // nova plays v2 too, under its v2 unit; a leftover settings file with no record isn't an agent
+    writeFileSync(join(house, 'nova.v2.env'), 'AGENT_ARGS=--style quickpick --budget 300\n');
+    writeFileSync(
+      join(house, 'nova.v2-agent.json'),
+      JSON.stringify({
+        contract: v2,
+        address: novaHex,
+        purchases: [
+          { draw: '1', at: '2026-11-20T08:00:00.000Z', games: 144, cost: '187200000', txs: 2, numbers: [] },
+          { draw: '2', at: '2026-11-21T08:04:00.000Z', games: 144, cost: '187200000', txs: 2, numbers: [] },
+        ],
+        reported: [],
+      }),
+    );
+    writeFileSync(join(house, 'v2-player.env'), 'AGENT_ARGS=--style mix\n');
+    const prizesV2 = [0, 0, 0, 0, 9_490_001, 1_639_503, 0, 0, 0];
+    writeFileSync(
+      join(dir, 'feed-v2.json'),
+      JSON.stringify({
+        contracts: { starfall: v2 },
+        games: {
+          starfall: {
+            price_star: 1_300_000,
+            open: { num: 2, sales_close: '2026-11-21T10:00:00.000Z', format: { numbers: 20, moonball: 1 }, buyers: [{ address: novaHex, games: 144 }, { address: aHex, games: 1 }] },
+            draws: [
+              {
+                num: 1,
+                status: 'settled',
+                sales_close: '2026-11-20T10:00:00.000Z',
+                drawn_at: '2026-11-20T10:20:00.000Z',
+                format: { numbers: 20, moonball: 1 },
+                prizes_star: prizesV2,
+                buyers: [{ address: novaHex, games: 144 }, { address: aHex, games: 12 }],
+                payouts: [
+                  { address: novaHex, division: 6, games: 3, star: 3 * 1_639_503 },
+                  { address: aHex, division: 5, games: 1, star: 9_490_001 },
+                  { address: 'syndicate:1', division: 6, games: 14, star: 14 * 1_639_503 },
+                ],
+              },
+            ],
+          },
+        },
+      }),
+    );
+    const reg = createRegistry({ network: 'preprod', dir: join(dir, 'store'), feedPath: feed, houseDir: house, verifier, isActive: async (u) => u === 'lunardraw-agent-v2@nova', now: () => t });
+    let d = await reg.directory();
+    expect(d.agents.map((x) => x.name)).toEqual(['NOVA']); // no V2-PLAYER
+    const nova = d.agents[0]!;
+    // online under its v2 unit, even though its last Classic draw (11) is long past
+    expect(nova).toMatchObject({ status: 'online', style: 'QuickPicks' });
+    // Classic (2 draws, 3 games, 3.6 spent, 1 winning game, 50 won) + v2 (2 draws, 288 games, 374.4 spent, 3 winning games)
+    expect(nova.stats).toMatchObject({ draws: 4, games: 291, spent_star: 3_600_000 + 374_400_000, winning_games: 4, won_star: 50_000_000 + 3 * 1_639_503, last_draw: 2 });
+    expect(nova.history.slice(-2).map((h) => [h.game, h.draw, h.won_star, h.pending ?? false])).toEqual([
+      ['starfall', 1, 3 * 1_639_503, false],
+      ['starfall', 2, 0, true],
+    ]);
+    expect(d.events[0]).toMatchObject({ agent: 'NOVA', text: 'bought 144 games in Starfall draw 2' });
+    expect(d.wins).toContainEqual({ agent: 'NOVA', game: 'starfall', draw: 1, division: 6, games: 3, won_star: 3 * 1_639_503, drawn_at: '2026-11-20T10:20:00.000Z' });
+
+    // a listed agent: its v2 play comes from the chain's record of its wallet, added to what it reports (Classic)
+    const stats = { draws: 1, games: 2, spent_star: 2_400_000, winning_games: 0, won_star: 0, last_draw: 12 };
+    await reg.report(signedListing(a, { network: 'preprod', action: 'list', name: 'OmegaCandle', style: 'plays every night', via: 'claude', stats }, new Date(t)));
+    d = await reg.directory();
+    const omega = d.agents.find((x) => x.name === 'OmegaCandle')!;
+    expect(omega.stats).toMatchObject({ draws: 3, games: 2 + 12 + 1, spent_star: 2_400_000 + 13 * 1_300_000, winning_games: 1, won_star: 9_490_001 });
+    expect(omega.status).toBe('online');
+    expect(d.wins.find((w) => w.agent === 'OmegaCandle')).toMatchObject({ game: 'starfall', draw: 1, division: 5, won_star: 9_490_001, drawn_at: '2026-11-20T10:20:00.000Z' });
+    // the luck figure uses each v2 draw's own odds (7 of 20 with no Moonball: about 1 game in 7 wins)
+    expect(v2PrizeChance({ numbers: 20, moonball: 1 })).toBeCloseTo(0.1514, 4);
+    expect(v2PrizeChance({ numbers: 35, moonball: 20 })).toBeCloseTo(prizeChance(), 6);
+    // another deployment's record counts as nothing
+    writeFileSync(join(house, 'nova.v2-agent.json'), JSON.stringify({ contract: 'ef'.repeat(32), purchases: [{ draw: '9', at: '2026-11-21T08:04:00.000Z', games: 5, cost: '6500000', txs: 1, numbers: [] }], reported: [] }));
+    expect((await reg.directory()).agents.find((x) => x.name === 'NOVA')!.stats.games).toBe(3);
+  });
+
   it('starts a new season when the feed shows a new deployment: listings stay, numbers and events clear, and only reports for it count', async () => {
     const { dir, house, feed } = setup();
     const OLD = 'aa'.repeat(32);

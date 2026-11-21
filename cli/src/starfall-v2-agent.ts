@@ -233,7 +233,8 @@ export const describeSavedTicket = (s: SavedV2Ticket, f?: { moonballs: number })
 
 /** `tickets`: the tickets bought (savedTicketOf), for working out their results; older states have only `numbers`. */
 export type V2Purchase = { draw: string; at: string; games: number; cost: string; txs: number; numbers: number[][]; tickets?: SavedV2Ticket[] };
-export type V2AgentState = { contract: string; purchases: V2Purchase[]; reported: string[] };
+/** `address`: the agent's wallet (32 bytes in hex), for the directory to find the prizes paid to it. */
+export type V2AgentState = { contract: string; purchases: V2Purchase[]; reported: string[]; address?: string };
 
 export const loadV2AgentState = (path: string, contract: string): V2AgentState => {
   const fresh = { contract, purchases: [], reported: [] };
