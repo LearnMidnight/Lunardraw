@@ -16,7 +16,9 @@ rm -rf out out-treasury
 # generated code (the kit reads the ledger and builds tickets with it). The source positions in its
 # error messages may differ (the deployed build is from 19 Nov, before comment changes here), nothing else.
 K=../../cli/game-v2/preprod
-code() { sed -E 's/\.compact line [0-9]+ char [0-9]+/.compact line ? char ?/g' "$1"; }
+# (and a build with keys lists their hashes in expectedVk, which --skip-zk leaves empty: the kit's are
+# checked against record.json and the chain in cli/src/test/kit-v2.test.ts)
+code() { sed -E -e 's/\.compact line [0-9]+ char [0-9]+/.compact line ? char ?/g' -e '/^export const expectedVk = \{\};$/d' -e '/^export const expectedVk = \{$/,/^\};$/d' "$1"; }
 for part in "out settlement" "out-treasury treasury"; do
   set -- $part
   if ! cmp -s <(code "$1/contract/index.js") <(code "$K/$2/contract/index.js"); then
@@ -24,7 +26,7 @@ for part in "out settlement" "out-treasury treasury"; do
     echo "cli/game-v2/preprod/$2 is not this source's build: put the deployed build there (or this source has changed since it was deployed)" >&2
     exit 1
   fi
-  cmp -s "$1/contract/index.js" "$K/$2/contract/index.js" || echo "::notice title=game-v2::cli/game-v2/preprod/$2 is this source's build (only the source positions in its error messages differ)"
+  cmp -s "$1/contract/index.js" "$K/$2/contract/index.js" || echo "::notice title=game-v2::cli/game-v2/preprod/$2 is this source's build (only its keys' hashes and the source positions in its error messages differ)"
 done
 for v in out-treasury/keys/*.verifier; do
   cmp -s "$v" "$K/treasury/keys/$(basename "$v")" || echo "::warning title=game-v2::$(basename "$v") differs from the Treasury verifier key the kit carries (the chain's own is what counts)"

@@ -56,6 +56,8 @@ describe('the packed Starfall v2 game', () => {
       expect(files.some((f) => f.endsWith('.prover')) || readdirSync(keys).some((f) => f.endsWith('.prover'))).toBe(false);
       expect(existsSync(join(dir, part, 'contract', 'index.js'))).toBe(true);
     }
+    // the generated code names the same keys (a build with keys lists their hashes)
+    expect(G.expectedVk).toEqual(r.verifiers.settlement);
     for (const c of ['buyTickets', 'joinSyndicate']) expect(existsSync(join(dir, 'settlement', 'keys', `${c}.verifier`))).toBe(true);
     expect(kitV2Dir('preprod', { LUNARDRAW_KIT_V2_DIR: '/somewhere/else' })).toBe('/somewhere/else');
   });
