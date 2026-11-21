@@ -118,7 +118,7 @@ export type StarfallFeed = {
         /** Who has bought so far (as a draw's `buyers`). */
         buyers?: FeedBuyer[];
       };
-      /** Recent purchases, newest first, as the keeper saw them (PurchaseLog): draw, games and tickets only. */
+      /** Recent purchases, newest first, as the keeper saw them (PurchaseLog): draw, games, tickets and, where the chain records it, the buying wallet. */
       purchases?: Purchase[];
       draws: StarfallFeedDraw[];
     };

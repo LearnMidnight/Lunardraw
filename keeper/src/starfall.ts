@@ -85,7 +85,7 @@ export type StarfallDrawView = {
    * Who bought: games per refund address (the buyer's wallet, 32 bytes in hex), as the tickets
    * record it publicly. In the order first seen.
    */
-  buyers?: { address: string; games: bigint }[];
+  buyers?: { address: string; games: bigint; tickets?: number }[];
   /** Starfall v2: the draw's format (numbers 1..range, Moonball 1..moonballs; 1 is none). */
   format?: { range: number; moonballs: number };
   /** Starfall v2: the draw's rung of the ladder (its prize table is that rung's shares). */
@@ -136,22 +136,23 @@ export const payeeAddress = (p: { lo: bigint; hi: bigint }): string =>
   p.hi === SYNDICATE_PAYEE_HI ? `syndicate:${p.lo}` : Buffer.concat([le16(p.lo), le16(p.hi)]).toString('hex');
 
 /** Who bought in a draw, by refund address, kept while its ticket count stays the same (tickets never change once bought). */
-const buyersSeen = new Map<string, { address: string; games: bigint }[]>();
-const buyersOf = (l: Starfall.Ledger, id: bigint, tickets: bigint): { address: string; games: bigint }[] => {
+const buyersSeen = new Map<string, { address: string; games: bigint; tickets: number }[]>();
+const buyersOf = (l: Starfall.Ledger, id: bigint, tickets: bigint): { address: string; games: bigint; tickets: number }[] => {
   if (tickets === 0n) return [];
   const first = l.tickets.member(ticketKeyOf(id, 0n)) ? Buffer.from(l.tickets.lookup(ticketKeyOf(id, 0n)).commitment).toString('hex') : '';
   const key = `${id}:${tickets}:${first}`;
   const kept = buyersSeen.get(key);
   if (kept) return kept;
-  const by = new Map<string, bigint>();
+  const by = new Map<string, { games: bigint; tickets: number }>();
   for (let i = 0n; i < tickets; i++) {
     const k = ticketKeyOf(id, i);
     if (!l.tickets.member(k)) continue;
     const rec = l.tickets.lookup(k);
     const a = Buffer.from((rec.refundTo as { bytes: Uint8Array }).bytes).toString('hex');
-    by.set(a, (by.get(a) ?? 0n) + rec.games);
+    const was = by.get(a) ?? { games: 0n, tickets: 0 };
+    by.set(a, { games: was.games + rec.games, tickets: was.tickets + 1 });
   }
-  const out = [...by].map(([address, games]) => ({ address, games }));
+  const out = [...by].map(([address, b]) => ({ address, ...b }));
   for (const k of buyersSeen.keys()) if (k.startsWith(`${id}:`)) buyersSeen.delete(k);
   buyersSeen.set(key, out);
   return out;

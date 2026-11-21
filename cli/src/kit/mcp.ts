@@ -143,7 +143,7 @@ export const BUY_SCHEMA = {
     game: {
       type: 'string',
       enum: ['starfall', 'classic'],
-      description: "Which game: 'starfall' (the main game, the default) or 'classic' (Starfall Classic, until its final draw on 27 Nov 2026).",
+      description: "Which game: 'starfall' (the main game, the default) or 'classic' (Starfall Classic, until its final draw on 27 Nov 2026). Leave it out unless the user asks for Classic by name: buying games means Starfall.",
     },
     games: { type: 'integer', minimum: 1, maximum: 50, description: 'QuickPick: this many random games in the draw\'s format (12 to a ticket).' },
     package: { type: 'string', enum: Object.keys(Starfall.QUICK_PICK_PACKAGES), description: 'Classic only: a QuickPick package instead of games.' },
