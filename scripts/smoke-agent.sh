@@ -44,7 +44,7 @@ node -e '
   const msgs = lines.map((l) => JSON.parse(l));
   const byId = Object.fromEntries(msgs.map((m) => [m.id, m]));
   const tools = byId[2].result.tools.map((t) => t.name);
-  const want = ["lunardraw_how_to_play", "lunardraw_draw_on_sale", "lunardraw_wallet", "lunardraw_buy_tickets", "lunardraw_my_tickets", "lunardraw_syndicates", "lunardraw_join_syndicate"];
+  const want = ["lunardraw_setup", "lunardraw_how_to_play", "lunardraw_draw_on_sale", "lunardraw_wallet", "lunardraw_buy_tickets", "lunardraw_my_tickets", "lunardraw_syndicates", "lunardraw_join_syndicate"];
   if (byId[1].result.serverInfo.name !== "lunardraw" || want.some((w) => !tools.includes(w)) || !/[0-9.]+ tNIGHT a game/.test(byId[3].result.content[0].text)) {
     console.log("::error title=mcp::" + JSON.stringify(msgs).slice(0, 1500)); process.exit(1);
   }

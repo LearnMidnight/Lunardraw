@@ -15,7 +15,7 @@ mkdir -p "$ext" && cd "$work"
 unzip -q "$mcpb" -d "$ext"
 node -e '
   const m = require(process.argv[1]);
-  const want = ["lunardraw_how_to_play", "lunardraw_draw_on_sale", "lunardraw_wallet", "lunardraw_buy_tickets", "lunardraw_my_tickets", "lunardraw_syndicates", "lunardraw_join_syndicate"];
+  const want = ["lunardraw_setup", "lunardraw_how_to_play", "lunardraw_draw_on_sale", "lunardraw_wallet", "lunardraw_buy_tickets", "lunardraw_my_tickets", "lunardraw_syndicates", "lunardraw_join_syndicate"];
   const tools = m.tools.map((t) => t.name);
   // Claude names the extension log file after display_name: no characters Windows forbids in file names
   if (m.name !== "lunardraw" || m.server.type !== "node" || want.some((w) => !tools.includes(w)) || !m.user_config.blockfrost.sensitive || /[<>:"/\\|?*]/.test(m.display_name) || !m.server.mcp_config.args[0].endsWith("index.mjs")
@@ -41,10 +41,12 @@ node -e '
   const lines = require("fs").readFileSync(process.argv[1], "utf8").trim().split("\n");
   const byId = Object.fromEntries(lines.map((l) => JSON.parse(l)).map((m) => [m.id, m]));
   if (byId[1].result.serverInfo.name !== "lunardraw" || byId[2].result.tools.length < 5 || !/\d+(\.\d+)? tNIGHT a game/.test(byId[3].result.content[0].text)
-    || !/25 tNIGHT a draw, 600 tNIGHT in any 24 hours.*extension.s settings/.test(byId[3].result.content[0].text)) {
+    || !/25 tNIGHT a draw, 600 tNIGHT in any 24 hours.*settings page/.test(byId[3].result.content[0].text)) {
     console.log("::error title=extension mcp::" + lines.join(" ").slice(0, 1500)); process.exit(1);
   }
 ' "$work/mcp.out"
+# the extension's daily limit was taken into config.json (the latest change wins, wherever it was made)
+node -e 'const c = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); if (c.limits.perDay !== 600 || c.limits.perDraw !== 25) { console.log("::error title=extension limits::" + JSON.stringify(c.limits)); process.exit(1); }' "$LUNARDRAW_AGENT_HOME/config.json"
 # it answers its app at once (Claude may give it only a few seconds), however long Midnight's libraries take
 rm -rf "$LUNARDRAW_AGENT_HOME"
 node -e '
