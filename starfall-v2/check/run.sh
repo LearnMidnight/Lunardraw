@@ -18,6 +18,7 @@ K=../../cli/game-v2/preprod
 for part in "out settlement" "out-treasury treasury"; do
   set -- $part
   cmp -s "$1/contract/index.js" "$K/$2/contract/index.js" || {
+    diff "$1/contract/index.js" "$K/$2/contract/index.js" | head -40 >&2 || true
     echo "cli/game-v2/preprod/$2 is not this source's build: put the deployed build there (or this source has changed since it was deployed)" >&2
     exit 1
   }
