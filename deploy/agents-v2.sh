@@ -125,7 +125,7 @@ case "${1:-}" in
   status)
     for n in $AGENTS; do
       echo "$n: $(systemctl is-active lunardraw-agent-v2@$n) ($(sed -n 's/^AGENT_ARGS=//p' "$ENVS/$n.v2.env" 2>/dev/null))"
-      journalctl -u "lunardraw-agent-v2@$n" --since '26 hours ago' -o short --no-pager 2>/dev/null | grep -E "\[$n\] (in draw|draw |sitting out|playing)" | tail -2 | cut -c1-220 | sed 's/^/  /'
+      journalctl -u "lunardraw-agent-v2@$n" --since '26 hours ago' -o short --no-pager 2>/dev/null | grep -E "\[$n\] (in draw|draw |sitting out|playing)" | tail -2 | cut -c1-220 | sed 's/^/  /' || true  # (none yet: grep finds nothing, which isn't a failure)
     done
     systemctl list-timers 'lunardraw-agent-window-*' --no-pager | head -8
     ;;
