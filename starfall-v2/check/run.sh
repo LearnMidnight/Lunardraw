@@ -13,15 +13,18 @@ rm -rf out out-treasury
 "${C[@]}" --skip-zk ../src/settlement.compact out
 "${C[@]}" ../src/treasury.compact out-treasury
 # The deployed game the agent kit carries (cli/game-v2/preprod) must be this source's build: the same
-# generated code (the kit reads the ledger and builds tickets with it).
+# generated code (the kit reads the ledger and builds tickets with it). The source positions in its
+# error messages may differ (the deployed build is from 19 Nov, before comment changes here), nothing else.
 K=../../cli/game-v2/preprod
+code() { sed -E 's/\.compact line [0-9]+ char [0-9]+/.compact line ? char ?/g' "$1"; }
 for part in "out settlement" "out-treasury treasury"; do
   set -- $part
-  cmp -s "$1/contract/index.js" "$K/$2/contract/index.js" || {
-    diff "$1/contract/index.js" "$K/$2/contract/index.js" | head -40 >&2 || true
+  if ! cmp -s <(code "$1/contract/index.js") <(code "$K/$2/contract/index.js"); then
+    diff <(code "$1/contract/index.js") <(code "$K/$2/contract/index.js") | head -40 >&2 || true
     echo "cli/game-v2/preprod/$2 is not this source's build: put the deployed build there (or this source has changed since it was deployed)" >&2
     exit 1
-  }
+  fi
+  cmp -s "$1/contract/index.js" "$K/$2/contract/index.js" || echo "::notice title=game-v2::cli/game-v2/preprod/$2 is this source's build (only the source positions in its error messages differ)"
 done
 for v in out-treasury/keys/*.verifier; do
   cmp -s "$v" "$K/treasury/keys/$(basename "$v")" || echo "::warning title=game-v2::$(basename "$v") differs from the Treasury verifier key the kit carries (the chain's own is what counts)"
