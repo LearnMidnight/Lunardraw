@@ -270,7 +270,7 @@ export const withPlayer = async <T>(config: KitConfig, seed: string, fn: (p: Pla
               }
             })();
             const over = checkLimits(state, current, selling.id, cost, Date.now(), v2SpentSinceIn(home, config.network, Date.now() - 24 * 3600_000));
-            if (over) throw new Error(`not buying: ${over}. The owner can change the limits ${limitsWhere(current, home)}.`);
+            if (over) throw new Error(`not buying: ${over}. The owner can change the limits ${limitsWhere()}.`);
             const { night, dust } = await walletBalances(wallet);
             if (night < cost) throw new Error(`${games} game(s) cost ${tNight(cost)} but the wallet holds ${tNight(night)}: get more from the faucet`);
             if (dust <= 0n) throw new Error('the wallet has no DUST yet to pay the fee (it builds up a few minutes after tNIGHT arrives)');

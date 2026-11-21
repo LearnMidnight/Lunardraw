@@ -9,11 +9,12 @@ Let an AI agent play **Starfall**, [Lunardraw](https://lunardraw.io)'s lottery o
 - **Starfall Classic** (7 of 1–35 and a Moonball of 1–20, the first game) ends with its final draw on 27 Nov 2026, whose jackpot must be won: add `--game classic` to play it.
 - **Nothing to claim.** Prizes, and refunds if a draw is cancelled, are paid to the wallet automatically.
 - **No proof server needed.** Ticket purchases are proved by Lunardraw's hosted prover (it sees the ticket being bought, never the draw), and the wallet proves its own fees on your machine.
-- **Spending limits** (25 tNIGHT a draw and 100 a day by default) are set by the owner: in the Claude extension's settings, or with `lunardraw-agent limits --per-draw 25 --per-day 100` (they're kept in `config.json`). An AI using the MCP server can read them but can't change them. A change takes effect at the next purchase, without restarting anything.
+- **One settings page** for the owner: ask your AI *"Open my Lunardraw settings"* (or run `lunardraw-agent settings`) and a page opens in your browser, on your own computer: paste the Blockfrost key, copy the wallet's address for the faucet, watch the first sync, choose the name your agent shows on [lunardraw.io](https://lunardraw.io/agents/) (or keep it off), and set the spending limits.
+- **Spending limits** (25 tNIGHT a draw and 100 a day by default) are the owner's: on the settings page, with `lunardraw-agent limits --per-draw 50 --per-day 500`, or in the Claude extension's settings. The latest change wins, wherever it was made, and takes effect at the next purchase without restarting anything. An AI using the agent can read them but can't change them.
 
 ## The easiest way: the Claude extension
 
-Using the Claude desktop app? Download **[lunardraw.mcpb](https://github.com/LearnMidnight/Lunardraw/releases/latest/download/lunardraw.mcpb)** and open it: Claude installs it, with no Node.js or terminal needed. Paste a free Blockfrost key (blockfrost.io, a **Midnight Preprod** project) into its settings, then ask Claude *"Set me up for Starfall"*: it shows your wallet's address, the faucet for free tNIGHT, and how far the first sync has got. It's the same kit as below and shares its folder (`~/.lunardraw-agent`), so use one or the other in Claude, not both.
+Using the Claude desktop app? Download **[lunardraw.mcpb](https://github.com/LearnMidnight/Lunardraw/releases/latest/download/lunardraw.mcpb)** and open it: Claude installs it, with no Node.js or terminal needed. Then ask Claude *"Set me up for Starfall"*: it gives you a link to your agent's settings page, where you paste a free Blockfrost key (blockfrost.io, a **Midnight Preprod** project), get free tNIGHT for your wallet's address, pick its name on lunardraw.io and set your limits, and see how far the first sync has got. It's the same kit as below and shares its folder (`~/.lunardraw-agent`), so use one or the other in Claude, not both.
 
 ## Set up (about 10 minutes, then a long first sync)
 
@@ -106,6 +107,7 @@ The tools:
 
 | Tool | What it does |
 |---|---|
+| `lunardraw_setup` | A setup checklist and a link to the owner's settings page (on the computer the agent runs on) |
 | `lunardraw_how_to_play` | The rules, prices, prize divisions, syndicates and the owner's limits |
 | `lunardraw_draw_on_sale` | The draw on sale, its format, the jackpot, open syndicates and the latest results; Classic's final draw while it's on (no wallet needed) |
 | `lunardraw_wallet` | The wallet's address, tNIGHT and DUST |
@@ -139,7 +141,7 @@ Downloaded proving keys for the wallet's own proofs are cached in `~/.cache/nigh
 |---|---|
 | Syncing… for hours | A new wallet's first sync. Leave it running; it saves progress. |
 | "the wallet has no DUST yet" | DUST builds up a few minutes after tNIGHT arrives. Try again shortly. |
-| "not buying: … over the owner's limit" | The purchase would pass the limits (the extension's settings, or `config.json`): raise them with `lunardraw-agent limits --per-day <tNIGHT>` or in the extension's settings. |
+| "not buying: … over the owner's limit" | The purchase would pass the limits (the extension's settings, or `config.json`): raise them on the settings page (`lunardraw-agent settings`), with `lunardraw-agent limits --per-day <tNIGHT>`, or in the extension's settings. |
 | "this agent plays an old Starfall contract" | Starfall was deployed again and this copy of the kit still has the old contract. Update it: reinstall the Claude extension from [lunardraw.io/play-with-ai](https://lunardraw.io/play-with-ai/), or `npm install -g @lunardraw/agent`. The wallet stays. |
 | "no draw is on sale right now" | Between a draw closing (20:00 Brisbane time, 10:00 UTC) and the next opening, a few minutes later. |
 | "wallet in use" | Another program has the wallet open (`lunardraw-agent play`, say, or an older kit). Stop it first. Connected apps and `buy` share the agent that's running, so they don't clash. |

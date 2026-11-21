@@ -25,7 +25,7 @@ export type Tool = {
   run(args: Record<string, unknown>, progress: (message: string) => void): Promise<ToolText>;
 };
 
-export const SERVER_INFO = { name: 'lunardraw', title: 'Lunardraw', version: '0.3.0' };
+export const SERVER_INFO = { name: 'lunardraw', title: 'Lunardraw', version: '0.4.0' };
 const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 
 export const INSTRUCTIONS =
@@ -35,7 +35,8 @@ export const INSTRUCTIONS =
   'lunardraw_draw_on_sale gives when the draw on sale closes. A game is 7 numbers from 1-35 plus a Moonball from 1-20 and costs about 1 tNIGHT (lunardraw_draw_on_sale gives the exact price); prizes and refunds ' +
   "are paid to the agent's wallet automatically (no claiming). Check lunardraw_draw_on_sale before buying. Purchases are limited by the owner's " +
   'spending limits, which you cannot change. Opening the wallet takes a few minutes the first time in a session; a purchase takes 2-3 minutes. ' +
-  "If the agent isn't ready (no Blockfrost key, a new wallet still syncing, no tNIGHT yet), the tools say what the owner should do: pass that on, step by step.";
+  "If the agent isn't ready (no Blockfrost key, a new wallet still syncing, no tNIGHT yet), the tools say what the owner should do: pass that on, step by step. " +
+  'To set the agent up, or when the owner wants to change its spending limits or its name on lunardraw.io, call lunardraw_setup and give them the link to their settings page.';
 
 export type Rpc = { jsonrpc: '2.0'; id?: string | number | null; method?: string; params?: Record<string, unknown> };
 

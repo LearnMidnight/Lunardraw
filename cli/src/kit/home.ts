@@ -11,7 +11,9 @@
  *   agent.log                   what the agent running in the background did
  *
  * The limits are in the owner's config file on purpose: an AI using the kit
- * (through the MCP server) can read them but never change them.
+ * (through the MCP server) can read them but never change them. The owner
+ * changes them on the settings page (settings.ts), with `lunardraw-agent
+ * limits`, in the Claude extension's settings, or in the file itself.
  */
 import { webcrypto } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -40,11 +42,15 @@ export type KitConfig = {
   /** The relay (default: Lunardraw's). */
   relay?: string;
   /**
-   * config.json's own limits, when the extension's settings override them (loadConfig):
-   * saveConfig writes these back, so settings never end up in the file.
+   * The Claude extension's limit settings as last seen (adoptSettingsLimits): when the owner
+   * changes them there, they're copied into `limits` once, so the latest change wins wherever
+   * it was made (the extension, the settings page, the command line or this file).
    */
-  fileLimits?: { perDraw: number; perDay: number };
+  settingsSeen?: { perDraw?: number; perDay?: number };
 };
+
+/** The most a limit can be set to, in tNIGHT (a typo guard; Preprod tNIGHT has no value). */
+export const MAX_LIMIT = 1_000_000;
 
 /** Lunardraw's agent registry (the agent directory on lunardraw.io reads it). */
 export const DEFAULT_REGISTRY = 'https://207-180-249-120.sslip.io/agents';
@@ -85,7 +91,7 @@ export const parseConfig = (raw: unknown): KitConfig => {
   if (network !== 'preprod' && network !== 'preview') throw new Error(`config.json: network must be preprod or preview (Lunardraw is test tokens only), not ${String(network)}`);
   const limits = { ...DEFAULT_CONFIG.limits, ...(c.limits ?? {}) };
   for (const [k, v] of Object.entries(limits)) {
-    if (typeof v !== 'number' || !(v >= 0) || !Number.isFinite(v)) throw new Error(`config.json: limits.${k} must be a number of tNIGHT, 0 or more`);
+    if (typeof v !== 'number' || !(v >= 0) || !(v <= MAX_LIMIT)) throw new Error(`config.json: limits.${k} must be a number of tNIGHT from 0 to ${MAX_LIMIT.toLocaleString('en')} (it is ${JSON.stringify(v)})`);
   }
   const prover = c.prover ?? DEFAULT_CONFIG.prover;
   if (typeof prover !== 'string' || !(prover === 'hosted' || /^https?:\/\/\S+$/.test(prover) || /^local:\d+$/.test(prover))) {
@@ -105,7 +111,44 @@ export const parseConfig = (raw: unknown): KitConfig => {
     ...(c.port ? { port: c.port } : {}),
     ...(c.remote ? { remote: true } : {}),
     ...(c.relay ? { relay: c.relay.replace(/\/+$/, '') } : {}),
+    ...(c.settingsSeen && typeof c.settingsSeen === 'object' ? { settingsSeen: { ...c.settingsSeen } } : {}),
   };
+};
+
+/**
+ * config.json's text, however it was saved: UTF-8 with or without a byte-order mark, or UTF-16
+ * (what Windows PowerShell 5.1 and some editors write when a person edits the file by hand).
+ */
+export const readConfigText = (bytes: Buffer): string => {
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) return bytes.subarray(2).toString('utf16le');
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) {
+    const swapped = Buffer.from(bytes.subarray(2));
+    swapped.swap16();
+    return swapped.toString('utf16le');
+  }
+  // UTF-16 without a mark: every other byte is zero in a file of plain JSON
+  if (bytes.length >= 4 && bytes[1] === 0 && bytes[3] === 0) return bytes.toString('utf16le');
+  if (bytes.length >= 4 && bytes[0] === 0 && bytes[2] === 0) {
+    const swapped = Buffer.from(bytes.subarray(0, bytes.length - (bytes.length % 2)));
+    swapped.swap16();
+    return swapped.toString('utf16le');
+  }
+  const text = bytes.toString('utf8');
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+};
+
+/** Read and check config.json, saying exactly what's wrong (and where) if it can't be used. */
+export const readConfigFile = (path: string): KitConfig => {
+  const text = readConfigText(readFileSync(path));
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (err) {
+    const at = /position (\d+)/.exec(err instanceof Error ? err.message : '')?.[1];
+    const line = at === undefined ? undefined : text.slice(0, Number(at)).split('\n').length;
+    throw new Error(`${path} isn't valid JSON${line ? ` (around line ${line})` : ''}: check for a missing comma or quote. Or set the limits with \`lunardraw-agent settings\` instead of editing the file.`);
+  }
+  return parseConfig(raw);
 };
 
 /**
@@ -124,34 +167,52 @@ export const settingsLimits = (env: NodeJS.ProcessEnv = process.env): Partial<Ki
   return { ...(perDraw !== undefined ? { perDraw } : {}), ...(perDay !== undefined ? { perDay } : {}) };
 };
 
-/** The config, with any limits from the app's settings (settingsLimits) in force over config.json's. */
-export const loadConfig = (home = kitHome(), env: NodeJS.ProcessEnv = process.env): KitConfig => {
+/** The config in the home (config.json). */
+export const loadConfig = (home = kitHome()): KitConfig => {
   const path = kitPaths(home).config;
-  if (!existsSync(path)) throw new Error(`no agent set up in ${home} yet: run \`lunardraw-agent init\` first`);
-  const config = parseConfig(JSON.parse(readFileSync(path, 'utf8')));
+  if (!existsSync(path)) throw new Error(`no agent set up in ${home} yet: run \`lunardraw-agent setup\` first`);
+  return readConfigFile(path);
+};
+
+/**
+ * The Claude extension's limit settings into config.json, when the owner has changed them there
+ * since they were last seen. Called when the extension starts the agent. So the latest change
+ * wins: a change in the extension's settings is used once Claude restarts the extension, and a
+ * later change on the settings page or the command line isn't undone by the extension's old values.
+ * Returns the new limits when it changed them.
+ */
+export const adoptSettingsLimits = (home = kitHome(), env: NodeJS.ProcessEnv = process.env): KitConfig['limits'] | undefined => {
   const set = settingsLimits(env);
-  if (set.perDraw === undefined && set.perDay === undefined) return config;
-  return { ...config, limits: { ...config.limits, ...set }, fileLimits: config.limits };
+  let config: KitConfig;
+  try {
+    config = loadConfig(home);
+  } catch {
+    return undefined;
+  }
+  const seen = config.settingsSeen ?? {};
+  if (set.perDraw === seen.perDraw && set.perDay === seen.perDay) return undefined;
+  const limits = { perDraw: set.perDraw ?? config.limits.perDraw, perDay: set.perDay ?? config.limits.perDay };
+  const changed = limits.perDraw !== config.limits.perDraw || limits.perDay !== config.limits.perDay;
+  saveConfig({ ...config, limits, settingsSeen: set }, home);
+  return changed ? limits : undefined;
 };
 
 /** The limits in force now: re-read, so a change takes effect without restarting the agent. */
 export const limitsNow = (fallback: KitConfig, home = kitHome()): KitConfig['limits'] => {
   try {
     return loadConfig(home).limits;
-  } catch {
+  } catch (err) {
+    process.stderr.write(`lunardraw: config.json can't be read, so the limits stay at ${fallback.limits.perDraw} / ${fallback.limits.perDay}: ${err instanceof Error ? err.message : String(err)}\n`);
     return fallback.limits;
   }
 };
 
 /** Where the owner changes the limits, for messages. */
-export const limitsWhere = (config: KitConfig, home = kitHome()): string =>
-  config.fileLimits
-    ? "in the Lunardraw extension's settings in Claude (Settings, Extensions, Lunardraw (Starfall), Configure)"
-    : `in ${kitPaths(home).config}, or with \`lunardraw-agent limits --per-draw <tNIGHT> --per-day <tNIGHT>\``;
+export const limitsWhere = (): string =>
+  "on the agent's settings page (lunardraw_setup gives its link; in a terminal, `lunardraw-agent settings`), or with `lunardraw-agent limits --per-draw <tNIGHT> --per-day <tNIGHT>`";
 
 export const saveConfig = (config: KitConfig, home = kitHome()): void => {
-  const { fileLimits, ...rest } = config;
-  writePrivate(kitPaths(home).config, JSON.stringify({ ...rest, limits: fileLimits ?? rest.limits }, null, 2) + '\n');
+  writePrivate(kitPaths(home).config, JSON.stringify(config, null, 2) + '\n');
 };
 
 /** Create the wallet seed if there isn't one; returns the seed and whether it was new. */
