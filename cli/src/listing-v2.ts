@@ -19,8 +19,11 @@ export type V2FeedDraw = {
   payouts?: { address: string; division: number; games: number; star: number }[];
 };
 
-/** The v2 feed as the directory reads it: the price of a game and every draw, the one on sale included (status "open"). */
-export type V2Directory = { contract?: string; price: number; draws: V2FeedDraw[]; current: number };
+/** A purchase as the v2 keeper saw it; `buyer` is the buying wallet in hex, where the keeper could tell. */
+export type V2FeedPurchase = { draw: number; games: number; at: string; buyer?: string };
+
+/** The v2 feed as the directory reads it: the price of a game, every draw (the one on sale included, status "open") and the recent purchases. */
+export type V2Directory = { contract?: string; price: number; draws: V2FeedDraw[]; current: number; purchases: V2FeedPurchase[] };
 
 /** The v2 feed at `path` (feed-v2.json), or undefined. */
 export const readV2Feed = (path: string): V2Directory | undefined => {
@@ -28,14 +31,15 @@ export const readV2Feed = (path: string): V2Directory | undefined => {
   try {
     const feed = JSON.parse(readFileSync(path, 'utf8')) as {
       contracts?: { starfall?: string };
-      games?: { starfall?: { price_star?: number; open?: V2FeedDraw & { num?: number }; draws?: V2FeedDraw[] } };
+      games?: { starfall?: { price_star?: number; open?: V2FeedDraw & { num?: number }; draws?: V2FeedDraw[]; purchases?: V2FeedPurchase[] } };
     };
     const g = feed.games?.starfall;
     if (!g) return undefined;
     const draws = [...(g.draws ?? [])];
     if (g.open?.num) draws.push({ ...g.open, num: Number(g.open.num), status: 'open' });
     const current = g.open?.num ? Number(g.open.num) : draws.reduce((m, d) => Math.max(m, d.num), 0) + 1;
-    return { contract: feed.contracts?.starfall?.toLowerCase(), price: Number(g.price_star ?? 0), draws, current };
+    const purchases = (Array.isArray(g.purchases) ? g.purchases : []).filter((p) => p && Number(p.draw) > 0 && Number(p.games) > 0 && typeof p.at === 'string');
+    return { contract: feed.contracts?.starfall?.toLowerCase(), price: Number(g.price_star ?? 0), draws, current, purchases };
   } catch {
     return undefined;
   }
@@ -178,3 +182,10 @@ export const addStats = (a: AgentStats, b: AgentStats): AgentStats => {
 /** Whether an agent has bought in one of the last 3 draws of v2 (for "online" versus "idle"). */
 export const v2Recent = (played: V2Played[], f: V2Directory | undefined): boolean =>
   !!f && played.some((p) => p.draw >= f.current - 3);
+
+/** The purchases `address` (hex) made, as the v2 keeper saw them, newest first. */
+export const v2PurchasesOf = (v2: V2Directory, address: string): V2FeedPurchase[] =>
+  v2.purchases.filter((p) => p.buyer?.toLowerCase() === address);
+
+/** The directory's line for a v2 purchase (the site's feed matches it to the purchase it names). */
+export const v2PurchaseText = (p: { games: number; draw: number | string }): string => `bought ${p.games} game${p.games === 1 ? '' : 's'} in Starfall draw ${p.draw}`;

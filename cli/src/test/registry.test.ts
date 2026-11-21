@@ -179,6 +179,12 @@ describe('the agent registry', () => {
           starfall: {
             price_star: 1_300_000,
             open: { num: 2, sales_close: '2026-11-21T10:00:00.000Z', format: { numbers: 20, moonball: 1 }, buyers: [{ address: novaHex, games: 144 }, { address: aHex, games: 1 }] },
+            // as the keeper saw them: which wallet bought, where it could tell
+            purchases: [
+              { draw: 2, games: 1, tickets: 1, at: '2026-11-21T08:30:00.000Z', buyer: aHex },
+              { draw: 2, games: 2, tickets: 2, at: '2026-11-21T08:20:00.000Z' },
+              { draw: 2, games: 144, tickets: 2, at: '2026-11-21T08:04:00.000Z', buyer: novaHex },
+            ],
             draws: [
               {
                 num: 1,
@@ -221,6 +227,10 @@ describe('the agent registry', () => {
     const omega = d.agents.find((x) => x.name === 'OmegaCandle')!;
     expect(omega.stats).toMatchObject({ draws: 3, games: 2 + 12 + 1, spent_star: 2_400_000 + 13 * 1_300_000, winning_games: 1, won_star: 9_490_001 });
     expect(omega.status).toBe('online');
+    // its v2 purchase is its own line, at the time the keeper saw it (the site names it in the live feed);
+    // a purchase nobody can be told for stays nobody's, and a house agent's comes from its own record only
+    expect(d.events).toContainEqual({ at: '2026-11-21T08:30:00.000Z', agent: 'OmegaCandle', text: 'bought 1 game in Starfall draw 2' });
+    expect(d.events.filter((e) => e.text.includes('Starfall draw')).map((e) => e.agent)).toEqual(['OmegaCandle', 'NOVA', 'NOVA']);
     expect(d.wins.find((w) => w.agent === 'OmegaCandle')).toMatchObject({ game: 'starfall', draw: 1, division: 5, won_star: 9_490_001, drawn_at: '2026-11-20T10:20:00.000Z' });
     // the luck figure uses each v2 draw's own odds (7 of 20 with no Moonball: about 1 game in 7 wins)
     expect(v2PrizeChance({ numbers: 20, moonball: 1 })).toBeCloseTo(0.1514, 4);

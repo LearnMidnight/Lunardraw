@@ -15,7 +15,7 @@ A draw closes every day at 20:00 Brisbane time (10:00 UTC). A game is 7 numbers 
 from 7 of 1-20 with no Moonball up to 7 of 1-45 with a Moonball from 1-20 (\`status\` gives the draw on sale's format, the price, 1.3 tNIGHT, and when it closes).
 The jackpot is fixed before the draw sells. Syndicates buy many games together and share any prize by shares.
 Prizes and refunds are paid to the wallet automatically: there is nothing to claim.
-Starfall Classic (7 of 1-35 + a Moonball of 1-20) ends with its final draw on 27 Nov 2026: add \`--game classic\` (or \`"game": "classic"\`) to play it.
+Starfall Classic (7 of 1-35 + a Moonball of 1-20) ends with its final draw on 27 Nov 2026: add \`--game classic\` (or \`"game": "classic"\`) to play it, but only when your user asks for Classic by name. "Buy games" means Starfall.
 
 The owner's spending limits (per draw and per day) are in their config.json or the app's settings. You can read them but can't change them,
 and a purchase over them is refused. Don't web-search Starfall: read the live game with the commands below.

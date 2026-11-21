@@ -18,7 +18,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { type AgentAnalytics, agentAnalytics, type AgentDraw, agentHistory, type AgentReport, type AgentStats, agentReport, type AgentWin, type DrawOutcome, emptyStats, LISTING_PREFIX, type ListingPayload, listingProblem, periodStart, type Via } from './listing.js';
-import { addressHexOf, addStats, readV2Feed, type V2Directory, v2PlayedFromFeed, v2PlayedFromState, v2Recent, v2Report } from './listing-v2.js';
+import { addressHexOf, addStats, readV2Feed, type V2Directory, v2PlayedFromFeed, v2PlayedFromState, v2PurchasesOf, v2PurchaseText, v2Recent, v2Report } from './listing-v2.js';
 import type { V2Purchase } from './starfall-v2-agent.js';
 import { emptyAgentState, loadAgentState } from './starfall-agent.js';
 
@@ -270,7 +270,7 @@ export const createRegistry = (o: RegistryOptions) => {
         events.push({ at: p.at, agent: name, text: `bought ${p.games} game${p.games === 1 ? '' : 's'} in draw ${p.draw}` });
       }
       for (const p of (v2Mine?.purchases ?? []).slice(-10)) {
-        events.push({ at: p.at, agent: name, text: `bought ${p.games} game${p.games === 1 ? '' : 's'} in Starfall draw ${p.draw}` });
+        events.push({ at: p.at, agent: name, text: v2PurchaseText(p) });
       }
       for (const w of r.wins) wins.push({ ...w, agent: name });
     }
@@ -287,6 +287,7 @@ export const createRegistry = (o: RegistryOptions) => {
     const weekStart = periodStart('week', t);
     const monthStart = periodStart('month', t);
     const listedV2Wins: DirectoryWin[] = [];
+    const listedV2Events: DirectoryEvent[] = [];
     const listed: DirectoryAgent[] = Object.values(s.listed)
       .filter((l) => !s.hidden.includes(l.address) && !s.hidden.includes(slug(l.name)))
       .map((l) => {
@@ -299,6 +300,8 @@ export const createRegistry = (o: RegistryOptions) => {
         const history = [...(l.history ?? []), ...(r2?.history.map(({ at: _at, ...x }) => x) ?? [])].slice(-60);
         const allWins = [...(l.wins ?? []), ...(r2?.wins ?? [])];
         for (const w of r2?.wins ?? []) listedV2Wins.push({ ...w, agent: l.name });
+        // its v2 purchases, from the keeper's record of which wallet bought (it reports Classic only itself)
+        for (const p of v2 && hex ? v2PurchasesOf(v2, hex).slice(0, 10) : []) listedV2Events.push({ at: p.at, agent: l.name, text: v2PurchaseText(p) });
         const status = statusOf(Date.parse(l.last_seen), t);
         return {
           id: slug(l.name),
@@ -321,7 +324,7 @@ export const createRegistry = (o: RegistryOptions) => {
       (a, b) => b.stats.won_star - a.stats.won_star || b.stats.winning_games - a.stats.winning_games || b.stats.games - a.stats.games || Number(b.house) - Number(a.house),
     );
     const shown = new Set(listed.map((a) => a.name));
-    const events = [...h.events, ...s.events.filter((e) => shown.has(e.agent))].sort((a, b) => (a.at < b.at ? 1 : -1)).slice(0, 30);
+    const events = [...h.events, ...[...s.events, ...listedV2Events].filter((e) => shown.has(e.agent))].sort((a, b) => (a.at < b.at ? 1 : -1)).slice(0, 30);
     const drawnAt = new Map(outcomes.map((d) => [d.num, d.drawn_at]));
     const drawnAtV2 = new Map((v2?.draws ?? []).map((d) => [d.num, d.drawn_at]));
     const listedWins = Object.values(s.listed)
