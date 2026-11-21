@@ -88,6 +88,8 @@ describe('the agent kit', () => {
     expect(checkLimits(state, config, 8n, 6_000_000n, NOW)).toBeUndefined();
     expect(checkLimits(state, config, 7n, 6_000_000n, NOW)).toMatch(/26 tNIGHT in draw 7, over the owner's limit of 25 tNIGHT a draw \(20 tNIGHT already/);
     expect(checkLimits(state, config, 8n, 12_000_000n, NOW)).toMatch(/32 tNIGHT in 24 hours, over the owner's limit of 30 tNIGHT a day \(20 tNIGHT spent/);
+    // the daily limit counts what Starfall (v2) spent too
+    expect(checkLimits(state, config, 8n, 6_000_000n, NOW, 5_000_000n)).toMatch(/31 tNIGHT in 24 hours, over the owner's limit of 30 tNIGHT a day \(25 tNIGHT spent/);
     // the agent loop's daily limit
     const v = view([{ id: 9n }]);
     const plan = planPurchase(v, NOW / 1000, state, { name: 'a', style: 'quickpick', dailyLimit: 21_000_000n }, [{ numbers: [1, 2, 3, 4, 5, 6, 7], moonball: 2 }]);
@@ -203,7 +205,7 @@ describe('the agent kit', () => {
     expect(Starfall.gamesOf(buyEntries(buyArgs({ system: 9 }))[0])).toBe(36);
     expect(Starfall.gamesOf(buyEntries(buyArgs({ games: 1, sweep: true }))[0])).toBe(20);
     expect(() => buyEntries(buyArgs({ games: 2, numbers: [1, 2, 3, 4, 5, 6, 7] }))).toThrow(/not both/);
-    expect(Object.keys((BUY_SCHEMA as { properties: object }).properties)).toEqual(['games', 'package', 'numbers', 'moonball', 'system', 'pick', 'sweep']);
+    expect(Object.keys((BUY_SCHEMA as { properties: object }).properties)).toEqual(['game', 'games', 'package', 'numbers', 'moonball', 'system', 'pick', 'sweep']);
   });
 
   it('speaks MCP: initialize, list and call tools, report progress, refuse what it does not know', async () => {

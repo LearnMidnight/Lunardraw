@@ -17,6 +17,8 @@ import { declareFeesAtDustTime, type DustTimeWallet } from '../dust-time.js';
 import { withFreshFees } from '../fresh-fees.js';
 import { waitForTip } from '../sync-watch.js';
 import { type KitConfig, kitPaths, limitsWhere, loadConfig, star, tNight } from './home.js';
+import { hasKitV2, kitV2StatePath, loadKitV2State, readKitV2Record, v2SpentSince } from './player-v2.js';
+import { type V2Player, v2Player } from './v2-chain.js';
 
 const { DrawStatus } = Starfall;
 const iso = (secs: bigint) => new Date(Number(secs) * 1000).toISOString();
@@ -113,14 +115,15 @@ export const readOverview = async (config: KitConfig): Promise<{ overview: Overv
 };
 
 /** Whether a purchase of `cost` for `draw` fits the owner's limits; the reason if not. */
-export const checkLimits = (state: AgentState, config: KitConfig, draw: bigint, cost: bigint, nowMs: number): string | undefined => {
+export const checkLimits = (state: AgentState, config: KitConfig, draw: bigint, cost: bigint, nowMs: number, otherToday = 0n): string | undefined => {
   const perDraw = star(config.limits.perDraw);
   const perDay = star(config.limits.perDay);
   const inDraw = spentOnDraw(state, draw);
   if (inDraw + cost > perDraw) {
     return `that would make ${tNight(inDraw + cost)} in draw ${draw}, over the owner's limit of ${tNight(perDraw)} a draw${inDraw ? ` (${tNight(inDraw)} already spent on it)` : ''}`;
   }
-  const today = spentSince(state, nowMs - 24 * 3600_000);
+  // the daily limit counts both games: `otherToday` is what Starfall (v2) spent in the same 24 hours
+  const today = spentSince(state, nowMs - 24 * 3600_000) + otherToday;
   if (today + cost > perDay) return `that would make ${tNight(today + cost)} in 24 hours, over the owner's limit of ${tNight(perDay)} a day (${tNight(today)} spent so far)`;
   return undefined;
 };
@@ -163,7 +166,20 @@ export type Player = {
   session: Session;
   address: string;
   balances(): Promise<{ night: bigint; dust: bigint }>;
+  /** Buy Starfall Classic entries. */
   buy(entries: Starfall.PlainEntry[], log?: (msg: string) => void): Promise<BuyOutcome>;
+  /** Starfall (v2): buying and syndicates, from the same wallet (set up the first time it's asked for). */
+  v2(): Promise<V2Player>;
+};
+
+/** What the agent spent on Starfall (v2) since `sinceMs` (STAR), for the daily limit across both games. */
+export const v2SpentSinceIn = (home: string | undefined, network: string, sinceMs: number): bigint => {
+  if (!hasKitV2(network)) return 0n;
+  try {
+    return v2SpentSince(loadKitV2State(kitV2StatePath(kitPaths(home, network as never).home), readKitV2Record(network).contractAddress), sinceMs);
+  } catch {
+    return 0n;
+  }
 };
 
 export type BuyOutcome = { draw: number; bought: number; of: number; games: number; cost: string; tickets: string[]; payTo: string; message?: string };
@@ -216,10 +232,27 @@ export const withPlayer = async <T>(config: KitConfig, seed: string, fn: (p: Pla
         const mine = Buffer.from((wallet as unknown as { unshieldedKeystore: { getAddress(): string } }).unshieldedKeystore.getAddress(), 'hex');
         const payTo = config.payTo ? parseUserAddress(config.payTo) : new Uint8Array(mine);
         let joined: Awaited<ReturnType<typeof joinStarfall>> | undefined;
+        let v2: Promise<V2Player> | undefined;
         const player: Player = {
           session,
           address: walletAddress(wallet),
           balances: () => walletBalances(wallet),
+          v2: () =>
+            (v2 ??= v2Player({
+              session,
+              wallet,
+              config,
+              home,
+              homeDir: kitPaths(home, config.network).home,
+              mine: new Uint8Array(mine),
+              payTo,
+              payToText: config.payTo ?? walletAddress(wallet),
+              balances: () => walletBalances(wallet),
+              classicToday: (since) => spentSince(loadAgentState(statePath, record.contractAddress), since),
+            }).catch((err: unknown) => {
+              v2 = undefined;
+              throw err;
+            })),
           async buy(entries, log) {
             const view = await readStarfallView(providers.publicDataProvider, record.contractAddress);
             const now = BigInt(Math.floor(Date.now() / 1000));
@@ -236,7 +269,7 @@ export const withPlayer = async <T>(config: KitConfig, seed: string, fn: (p: Pla
                 return config;
               }
             })();
-            const over = checkLimits(state, current, selling.id, cost, Date.now());
+            const over = checkLimits(state, current, selling.id, cost, Date.now(), v2SpentSinceIn(home, config.network, Date.now() - 24 * 3600_000));
             if (over) throw new Error(`not buying: ${over}. The owner can change the limits ${limitsWhere(current, home)}.`);
             const { night, dust } = await walletBalances(wallet);
             if (night < cost) throw new Error(`${games} game(s) cost ${tNight(cost)} but the wallet holds ${tNight(night)}: get more from the faucet`);

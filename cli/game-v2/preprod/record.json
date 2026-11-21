@@ -1,0 +1,33 @@
+{
+  "network": "preprod",
+  "game": "Starfall",
+  "contractAddress": "9e390a2308e82fcf1945540047a3cb3b022a4739d1859513d0c640cc5a89c264",
+  "treasuryAddress": "02b53954e20328440b4ed0fedf656b49bc136ad1612ae97e2ff163e187437f6d",
+  "compiler": "0.36.0",
+  "verifiers": {
+    "settlement": {
+      "acceptOracleKey": "62e2377e06bbcdc8bfd664c157406e512161ed0a9c29d675d32c962dd6c77445",
+      "buySyndicateTickets": "578e432294bfce1d4419852f5edd4e359a2825039ed546030022a7c8b93a85b6",
+      "buyTickets": "d6a175daabb796bc4bf10b1915c2a05b89e71da7a56b842e6d72fa4885168dac",
+      "changeOrganiser": "fb5f7d80c62a98af3a86b844d93cd3e2bfd97ee1940c3b8325e3f1bc7369a92f",
+      "computeNumbers": "aead14c734ded2b3ff3fceea3dd191707aa1190078c38eb206d988eef2e80cf0",
+      "createSyndicate": "420edcb74a4aa318ecd6a7311c0b7da798b11120b355ec3a993d3a0d933b5835",
+      "finaliseDraw": "4afc2f64c3e6a59caebcc9507cbf4f3eac0f3841d7de7e31356b1cd24a34f6ef",
+      "fulfilDraw": "92b2132ae90f7b732a73ce917c605503c5a964f1851ba5b4ee604aa5dc73e5ad",
+      "joinSyndicate": "98d960057d5352b9461c06e8bad8a8e0400143b3373de9f742554ce664a8a369",
+      "payEntitlement": "619ca944841b508d11b84bb2023c44e7431b367bfca6b738ae77930185b2ba42",
+      "paySyndicateMember": "0d483b827f32fd1c3883c0f95c87f4ffc209c28f5b959ca8462f371c6df3d573",
+      "proposeOracleKey": "83d85c8d9a33c66a00ad2019caac321d9d45b56572a3d5318a4045a559a4f961",
+      "refundSyndicate": "96eac784a02618b6862431ddd9e76ce732b3d95fae17968ddd4a71b4eba8f026",
+      "refundTicket": "9f85fb2eea35a9de7f3e6732cb1d9b31f9266461e6eacbf08dc55f67de617edf",
+      "requestDraw": "fa57cd6436014c8ca65f9a87900a3bea02dd06c7492f1cb109146f1999938656",
+      "settleBatch": "7c2e61160e8f956e513e5f8c609bbaa039c60ac1664cf2a2ed60e811a6e24c7f",
+      "voidDraw": "555f50ce1acf5548343e63e2e76e5364d2cb76f9635d1ca93ae6ea725a67f877"
+    },
+    "treasury": {
+      "bind": "262e8b500e8aae43d167115cf4012e417d89d5861569f52297770eb7df6ed93c",
+      "deposit": "cbde295ab5a2e46cd24200ad68bf1f887dbcf4b6548eda53f85b5289db7cc759",
+      "release": "e997f826855f22bba88cef660c5c715038c1ab5b97182b7e1d191e77bd17d588"
+    }
+  }
+}

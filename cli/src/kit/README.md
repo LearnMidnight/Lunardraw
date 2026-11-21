@@ -4,7 +4,9 @@ Let an AI agent play **Starfall**, [Lunardraw](https://lunardraw.io)'s lottery o
 
 > **Test tokens only.** Starfall runs on Midnight Preprod with tNIGHT, which has no value. Lunardraw never holds your keys: the wallet lives in a file on your machine.
 
-- **A game**: 7 numbers from 1–35 and a Moonball from 1–20, for 1.3 tNIGHT (the contract sets the price: `lunardraw-agent status` shows it). A draw closes every day at 20:00 Brisbane time (10:00 UTC) on Preprod; the numbers come from [Nightcast](https://github.com/LearnMidnight/Nightcast) verifiable randomness, and anyone can check every draw.
+- **A game**: 7 numbers in the draw's own format, for 1.3 tNIGHT. The format grows with sales, from 7 of 1–20 with no Moonball up to 7 of 1–45 with a Moonball from 1–20 (`lunardraw-agent status` shows the draw on sale's). The jackpot is fixed before a draw sells. A draw closes every day at 20:00 Brisbane time (10:00 UTC) on Preprod; the numbers come from [Nightcast](https://github.com/LearnMidnight/Nightcast) verifiable randomness, and anyone can check every draw.
+- **Syndicates**: join a group that buys many games together; any prize is shared by shares (`lunardraw-agent syndicates`, `lunardraw-agent join`).
+- **Starfall Classic** (7 of 1–35 and a Moonball of 1–20, the first game) ends with its final draw on 27 Nov 2026, whose jackpot must be won: add `--game classic` to play it.
 - **Nothing to claim.** Prizes, and refunds if a draw is cancelled, are paid to the wallet automatically.
 - **No proof server needed.** Ticket purchases are proved by Lunardraw's hosted prover (it sees the ticket being bought, never the draw), and the wallet proves its own fees on your machine.
 - **Spending limits** (25 tNIGHT a draw and 100 a day by default) are set by the owner: in the Claude extension's settings, or with `lunardraw-agent limits --per-draw 25 --per-day 100` (they're kept in `config.json`). An AI using the MCP server can read them but can't change them. A change takes effect at the next purchase, without restarting anything.
@@ -36,19 +38,21 @@ When it says **All set!**, ask your AI: *"What's on in Starfall? Buy me two Quic
 ## Play from the command line
 
 ```bash
-lunardraw-agent status                     # the draw on sale, the jackpot, recent results
+lunardraw-agent status                     # the draw on sale, its format, the jackpot, recent results
 lunardraw-agent buy --games 2              # two QuickPick games
-lunardraw-agent buy --package starter      # a QuickPick package (single, starter, mini, regular, super, mega, jumbo, maxi)
-lunardraw-agent buy --numbers "3 9 14 21 27 33 35" --moonball 8
-lunardraw-agent buy --system 9             # every 7 of 9 numbers (36 games)
-lunardraw-agent buy --games 1 --sweep      # with every Moonball (20 games)
+lunardraw-agent buy --numbers "3 7 9 12 14 17 20"           # your own 7, in the draw's range
+lunardraw-agent buy --system 8 --numbers "1 3 5 7 9 11 13 15"  # every 7 of 8 numbers (8 games)
+lunardraw-agent buy --games 1 --sweep      # with every Moonball (in a draw with one)
+lunardraw-agent syndicates                 # the syndicates taking members in the draw on sale
+lunardraw-agent join --syndicate 4 --shares 2
 lunardraw-agent tickets                    # what it bought, and how each draw went
 lunardraw-agent play --style mix           # keep playing every draw, within the limits
+lunardraw-agent buy --game classic --package starter          # Starfall Classic's final draw
 ```
 
 A purchase takes 2–3 minutes. If another purchase lands at the same moment and takes its ticket number, the kit builds it again by itself.
 
-**From your own program:** add `--json` to `status`, `wallet`, `buy` and `tickets`. Standard output is then only the JSON answer (the log goes to standard error), and the exit code is 0 when everything asked for was bought. Any language can call it, for example Python: `json.loads(subprocess.run(["lunardraw-agent", "buy", "--games", "2", "--json"], capture_output=True, text=True).stdout)`.
+**From your own program:** add `--json` to `status`, `wallet`, `buy`, `syndicates`, `join` and `tickets`. Standard output is then only the JSON answer (the log goes to standard error), and the exit code is 0 when everything asked for was bought. Any language can call it, for example Python: `json.loads(subprocess.run(["lunardraw-agent", "buy", "--games", "2", "--json"], capture_output=True, text=True).stdout)`.
 
 ## Let your AI play (MCP)
 
@@ -95,18 +99,20 @@ Keep the address private: anyone with it can ask your agent to buy, within your 
 ## Your own agent
 
 - **Command line:** every command takes `--json` (below).
-- **Local address:** while the agent runs (`lunardraw-agent serve`, or any connected app), it answers on `http://127.0.0.1:6338` with a REST API (`GET /api/draw`, `/api/tickets`, `/api/wallet`, `/api/rules`, `POST /api/buy` with `{"games": 2}`) and MCP over HTTP (`POST /mcp`). `GET /openapi.json` describes it. Send the key in `~/.lunardraw-agent/agent-token.secret` as `Authorization: Bearer <key>`. For an agent in a container, `serve --host 0.0.0.0`.
+- **Local address:** while the agent runs (`lunardraw-agent serve`, or any connected app), it answers on `http://127.0.0.1:6338` with a REST API (`GET /api/draw`, `/api/tickets`, `/api/wallet`, `/api/rules`, `/api/syndicates`, `POST /api/buy` with `{"games": 2}`, `POST /api/join` with `{"syndicate": 4, "shares": 2}`) and MCP over HTTP (`POST /mcp`). `GET /openapi.json` describes it. Send the key in `~/.lunardraw-agent/agent-token.secret` as `Authorization: Bearer <key>`. For an agent in a container, `serve --host 0.0.0.0`.
 - **A skill file:** `lunardraw-agent skill > SKILL.md` gives an agent the rules and the commands, in the SKILL.md format Claude, Codex, OpenClaw and Hermes read.
 
 The tools:
 
 | Tool | What it does |
 |---|---|
-| `lunardraw_how_to_play` | The rules, prices, prize divisions, odds and the owner's limits |
-| `lunardraw_draw_on_sale` | The draw on sale, the jackpot estimate and the latest results (no wallet needed) |
+| `lunardraw_how_to_play` | The rules, prices, prize divisions, syndicates and the owner's limits |
+| `lunardraw_draw_on_sale` | The draw on sale, its format, the jackpot, open syndicates and the latest results; Classic's final draw while it's on (no wallet needed) |
 | `lunardraw_wallet` | The wallet's address, tNIGHT and DUST |
-| `lunardraw_buy_tickets` | Buys games, a package or a chosen entry for the draw on sale, within the limits (answers within 45 seconds; the purchase takes 2–3 minutes) |
-| `lunardraw_my_tickets` | Every ticket bought, with each draw's result |
+| `lunardraw_buy_tickets` | Buys QuickPick games or a chosen entry for the draw on sale (`game: "classic"` for Classic), within the limits (answers within 45 seconds; the purchase takes 2–3 minutes) |
+| `lunardraw_my_tickets` | Every ticket and syndicate share bought, with each draw's result and prize |
+| `lunardraw_syndicates` | The syndicates still taking members in the draw on sale (no wallet needed) |
+| `lunardraw_join_syndicate` | Buys shares in a syndicate, within the limits |
 
 Then ask, for example, *"What's the Starfall jackpot? Buy me two QuickPick games."*
 
@@ -116,10 +122,10 @@ Everything lives in `~/.lunardraw-agent` (or `LUNARDRAW_AGENT_HOME`):
 
 | File | What it is |
 |---|---|
-| `config.json` | `network`, `remote` (the web and phone link on or off), `port` (the local address, 6338), `prover` (`hosted`, a prover's address, or `local:<port>` for your own proof server: that needs the contract's proving key, so run the kit from a [Lunardraw checkout](https://github.com/LearnMidnight/Lunardraw)), `limits` (`perDraw`, `perDay` in tNIGHT), optional `payTo` (where winnings go) |
+| `config.json` | `network`, `remote` (the web and phone link on or off), `port` (the local address, 6338), `prover` (`hosted`, a prover's address, or `local:<port>` for your own proof server: Starfall Classic only, and it needs the contract's proving key, so run the kit from a [Lunardraw checkout](https://github.com/LearnMidnight/Lunardraw)), `limits` (`perDraw`, `perDay` in tNIGHT), optional `payTo` (where winnings go) |
 | `wallet.secret` | The wallet seed (mode 600). **Anyone with it can spend from the wallet.** Back it up. |
 | `blockfrost-preprod.secret` | The Blockfrost project id |
-| `state.json` | What the agent bought |
+| `state.json`, `state-v2.json` | What the agent bought in Starfall Classic, and in Starfall (with its syndicate shares) |
 | `wallet-state/` | The wallet's saved sync |
 | `agent-token.secret` | The key for the agent's local address (mode 600) |
 | `relay-link.secret` | The private address's secret, for AIs on the web or a phone (mode 600) |

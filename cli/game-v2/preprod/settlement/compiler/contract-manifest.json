@@ -1,0 +1,379 @@
+{
+  "manifest-version": "1",
+  "compiler-version": "0.36.0",
+  "compiler-commit": "b5d9e4dfc532fe47011c4f6296e254f4853eb469",
+  "language-version": "0.28.0",
+  "runtime-version": "0.21.0",
+  "compiler": {
+    "type": "directory",
+    "contract-info.json": {
+      "type": "file",
+      "size": 91546,
+      "hash": "c904aa478280246441e6b5f0377dd2b9b68a94fe772e48d928c26b61486ea519"
+    }
+  },
+  "contract": {
+    "type": "directory",
+    "index.d.ts": {
+      "type": "file",
+      "size": 25923,
+      "hash": "0691c9365a823d17bae0c991c00ded4a11c6b6abb85d00a106307bb404ca045b"
+    },
+    "index.js": {
+      "type": "file",
+      "size": 1009292,
+      "hash": "70acccc1e41eea3642e703a482f7c06df307d51f04a7333b72cc1c4bab7e2f98"
+    },
+    "index.js.map": {
+      "type": "file",
+      "size": 52976,
+      "hash": "54a4444428a4f1d01f4f9d9b724a091d5c1f16ce410dd642175881ae5528d828"
+    }
+  },
+  "zkir": {
+    "type": "directory",
+    "acceptOracleKey.bzkir": {
+      "type": "file",
+      "size": 3979,
+      "hash": "a2dfbb894d6c16c10adda34af931d0dee4b3f1f5a303af7f8b166249cf426984"
+    },
+    "acceptOracleKey.zkir": {
+      "type": "file",
+      "size": 10239,
+      "hash": "6be5f8b6298754a18a6c03f4b7580692309bc23e4d41a6e3fe394be530b9c2bd"
+    },
+    "buySyndicateTickets.bzkir": {
+      "type": "file",
+      "size": 336161,
+      "hash": "7c6b693c6fb0f644c1572e3b01d9920cfbbb436f5317464c3dae4ddf0cb328b9"
+    },
+    "buySyndicateTickets.zkir": {
+      "type": "file",
+      "size": 1015151,
+      "hash": "46a878817382c463cf840e73eb4518d06625f78381eb6b363dc3bb173f69ba39"
+    },
+    "buyTickets.bzkir": {
+      "type": "file",
+      "size": 333976,
+      "hash": "7d6cf3d9f0c9532fdae2837f014e0b2fd12e609f29e372204c42609a70326a0f"
+    },
+    "buyTickets.zkir": {
+      "type": "file",
+      "size": 1008056,
+      "hash": "7734c24db91ef0a395358721f05c132dfa3273e6b70937c3efea70e78174b617"
+    },
+    "changeOrganiser.bzkir": {
+      "type": "file",
+      "size": 2428,
+      "hash": "fb93af0c5c881935655956185642329502ba89ccb8e60f2138da1e9f576083fd"
+    },
+    "changeOrganiser.zkir": {
+      "type": "file",
+      "size": 7802,
+      "hash": "c85c00dec77fac46e16eb2f6749a855aefcecf278ce3363bfbd31855d4275ff2"
+    },
+    "computeNumbers.bzkir": {
+      "type": "file",
+      "size": 181294,
+      "hash": "3f1145f966f1b2c8b46222c192c893c984633d84f020936dd379497df9646bde"
+    },
+    "computeNumbers.zkir": {
+      "type": "file",
+      "size": 599162,
+      "hash": "0ba014b7bfbd91f168527c335f6e8daa2a6836341ea29d522229d109e9a85a4b"
+    },
+    "createSyndicate.bzkir": {
+      "type": "file",
+      "size": 3099,
+      "hash": "4c14a075e46404dda6e5dab17321a25c5efe2708c40060f3e0b390d24571346d"
+    },
+    "createSyndicate.zkir": {
+      "type": "file",
+      "size": 10573,
+      "hash": "ee0f7a406a3969ab4ad8015ea8ac783da8c0b32373c714d774e6305890b14d98"
+    },
+    "finaliseDraw.bzkir": {
+      "type": "file",
+      "size": 54042,
+      "hash": "dd92a6bf0918724f995fd2fb3cbc816d9a423270e594bb0371c10987e84e1089"
+    },
+    "finaliseDraw.zkir": {
+      "type": "file",
+      "size": 164896,
+      "hash": "b518d1bd7ee6666b14172563dc3cde05ede9590c6c7ced389823a3805ac3a60f"
+    },
+    "fulfilDraw.bzkir": {
+      "type": "file",
+      "size": 3111,
+      "hash": "fc3c0e269c802a5e47f6448e628443a7d81fcd39927e062abe33daf508ab97dc"
+    },
+    "fulfilDraw.zkir": {
+      "type": "file",
+      "size": 9336,
+      "hash": "04095e6e23da3274a9e177bdab349092cb9e93bac2b2b1e036f54ba5121ddbb4"
+    },
+    "joinSyndicate.bzkir": {
+      "type": "file",
+      "size": 3737,
+      "hash": "b7ccc32ff22d00b62781d3c66b466243a4fb398f5c263468d73c155f47b949c6"
+    },
+    "joinSyndicate.zkir": {
+      "type": "file",
+      "size": 12879,
+      "hash": "94a6ccf32e1af9d0d51481eb34e224fe80bec14e1ccca6772f222e21d43fe210"
+    },
+    "payEntitlement.bzkir": {
+      "type": "file",
+      "size": 16386,
+      "hash": "19123c9c46a7bd4eb34006d5eca077b032cc079f56ff23aad35f964523c3a174"
+    },
+    "payEntitlement.zkir": {
+      "type": "file",
+      "size": 55107,
+      "hash": "e3128f5422e2650e84d9bc4eaba566e92121c5e7edbbed84bd7b03ad085730bb"
+    },
+    "paySyndicateMember.bzkir": {
+      "type": "file",
+      "size": 4059,
+      "hash": "73231695c24225fd7a1281f7eaba1eb33680c29ca286935e9072c794661d9c65"
+    },
+    "paySyndicateMember.zkir": {
+      "type": "file",
+      "size": 14177,
+      "hash": "21fa741e5c1b9a12df220152b655f75b37022be2f7f766b3f134dab13a5a99b1"
+    },
+    "proposeOracleKey.bzkir": {
+      "type": "file",
+      "size": 1847,
+      "hash": "6677ab6942d5b39b64dd285e707bdb41d558994a1d2d90a22fbde58aa0d55c91"
+    },
+    "proposeOracleKey.zkir": {
+      "type": "file",
+      "size": 5835,
+      "hash": "7af1608ae8eae0881cb34e195661fe5ead4a70b5f46e7d9b4f4e7a4a8efc60b5"
+    },
+    "refundSyndicate.bzkir": {
+      "type": "file",
+      "size": 4883,
+      "hash": "d5234db434a9316a60cea1af2cc8cb96a0bcd21515a1379b71c5c963425a00f9"
+    },
+    "refundSyndicate.zkir": {
+      "type": "file",
+      "size": 16765,
+      "hash": "ab217af0d7362073886a3059c0a462278d29bc2e20e114d603918cf0ac6e2d9a"
+    },
+    "refundTicket.bzkir": {
+      "type": "file",
+      "size": 6062,
+      "hash": "6d5aba72ec19654e200d760d64f3af34c450508d253198556d0b14297a9da46b"
+    },
+    "refundTicket.zkir": {
+      "type": "file",
+      "size": 14211,
+      "hash": "baaffd3b9094d8d593a0a9a8c186a61bf897135331ec5bb0bc40e86a87d5ac08"
+    },
+    "requestDraw.bzkir": {
+      "type": "file",
+      "size": 63118,
+      "hash": "20003df707530de61a1feadf8883b33b902a680baa4cf5c625067ecb84fa08cc"
+    },
+    "requestDraw.zkir": {
+      "type": "file",
+      "size": 199045,
+      "hash": "9ffd90ebe2aea0648318643eef27a15f227c5e0e12746d96c4394da64911c0a1"
+    },
+    "settleBatch.bzkir": {
+      "type": "file",
+      "size": 1938517,
+      "hash": "6c9d472c319a2d36f9cfe4b2be69cc4f791b9c642da6d647d17cdc3249bed6b1"
+    },
+    "settleBatch.zkir": {
+      "type": "file",
+      "size": 5388330,
+      "hash": "ee207d69c7f914a2401f00d7e933ad801d881da88e697637c3730484ccf7d736"
+    },
+    "voidDraw.bzkir": {
+      "type": "file",
+      "size": 4258,
+      "hash": "25049aa7db63b425970217ad2566c8c211730b080b38c2bdc242bd0b44be57a8"
+    },
+    "voidDraw.zkir": {
+      "type": "file",
+      "size": 12756,
+      "hash": "a557dd07733e41c314cf029f6d26688af664b075a53b1019cab1240f13349bae"
+    }
+  },
+  "keys": {
+    "type": "directory",
+    "acceptOracleKey.prover": {
+      "type": "file",
+      "size": 1055823,
+      "hash": "a65d87eb9efa30f86ec6797e1988131bec6656dc37a444284b7951f960f76e08"
+    },
+    "acceptOracleKey.verifier": {
+      "type": "file",
+      "size": 1593,
+      "hash": "62e2377e06bbcdc8bfd664c157406e512161ed0a9c29d675d32c962dd6c77445"
+    },
+    "buySyndicateTickets.prover": {
+      "type": "file",
+      "size": 98907075,
+      "hash": "de54944bcfea728cbd95c1227fce36b9b7cd850afd657d2377b5fb06e5f65502"
+    },
+    "buySyndicateTickets.verifier": {
+      "type": "file",
+      "size": 2313,
+      "hash": "578e432294bfce1d4419852f5edd4e359a2825039ed546030022a7c8b93a85b6"
+    },
+    "buyTickets.prover": {
+      "type": "file",
+      "size": 67446110,
+      "hash": "135a38150044a73d345ef2df60e82437ea408ae3f7bf36791dd715d289479a80"
+    },
+    "buyTickets.verifier": {
+      "type": "file",
+      "size": 1593,
+      "hash": "d6a175daabb796bc4bf10b1915c2a05b89e71da7a56b842e6d72fa4885168dac"
+    },
+    "changeOrganiser.prover": {
+      "type": "file",
+      "size": 11278988,
+      "hash": "fa556af8ef52cb26ddd2f88f5e2a7d55f0cc34a547421a90595043c1771e0a75"
+    },
+    "changeOrganiser.verifier": {
+      "type": "file",
+      "size": 2121,
+      "hash": "fb5f7d80c62a98af3a86b844d93cd3e2bfd97ee1940c3b8325e3f1bc7369a92f"
+    },
+    "computeNumbers.prover": {
+      "type": "file",
+      "size": 394450640,
+      "hash": "18f6e0277352c8e9648f920e03dcf9a3dc76fd8951c14186cad26e7a21ab08d8"
+    },
+    "computeNumbers.verifier": {
+      "type": "file",
+      "size": 2313,
+      "hash": "aead14c734ded2b3ff3fceea3dd191707aa1190078c38eb206d988eef2e80cf0"
+    },
+    "createSyndicate.prover": {
+      "type": "file",
+      "size": 1054943,
+      "hash": "c4cbd31f1dd7afa7ab7e0bc0955e62e7beadf738f86b7c91cfa4d505c9e2e3af"
+    },
+    "createSyndicate.verifier": {
+      "type": "file",
+      "size": 1593,
+      "hash": "420edcb74a4aa318ecd6a7311c0b7da798b11120b355ec3a993d3a0d933b5835"
+    },
+    "finaliseDraw.prover": {
+      "type": "file",
+      "size": 8445920,
+      "hash": "902f02df176a4645e827aecbd1c3800c53ab2a1e95c99d578034d67106746301"
+    },
+    "finaliseDraw.verifier": {
+      "type": "file",
+      "size": 1593,
+      "hash": "4afc2f64c3e6a59caebcc9507cbf4f3eac0f3841d7de7e31356b1cd24a34f6ef"
+    },
+    "fulfilDraw.prover": {
+      "type": "file",
+      "size": 12328647,
+      "hash": "0443fd6afc7a1165c49e09dfb3fb877f349f42c87fc571da619ea602dad1d330"
+    },
+    "fulfilDraw.verifier": {
+      "type": "file",
+      "size": 2313,
+      "hash": "92b2132ae90f7b732a73ce917c605503c5a964f1851ba5b4ee604aa5dc73e5ad"
+    },
+    "joinSyndicate.prover": {
+      "type": "file",
+      "size": 1055581,
+      "hash": "0b263d5f34425e49ea5dec210c66f9ab572cf0f5469d6bf4bd1bb86fa2aaefd2"
+    },
+    "joinSyndicate.verifier": {
+      "type": "file",
+      "size": 1593,
+      "hash": "98d960057d5352b9461c06e8bad8a8e0400143b3373de9f742554ce664a8a369"
+    },
+    "payEntitlement.prover": {
+      "type": "file",
+      "size": 33574088,
+      "hash": "93a81c54a8a8d00b0b6e844c595ed3e0a7af9b6d4cd0f81957181127749f9ec2"
+    },
+    "payEntitlement.verifier": {
+      "type": "file",
+      "size": 1593,
+      "hash": "619ca944841b508d11b84bb2023c44e7431b367bfca6b738ae77930185b2ba42"
+    },
+    "paySyndicateMember.prover": {
+      "type": "file",
+      "size": 11280619,
+      "hash": "a61e9c922e8df5e5d27cabed7eef3e0147a1c89fab2e0c368f47f1dfea634b11"
+    },
+    "paySyndicateMember.verifier": {
+      "type": "file",
+      "size": 2121,
+      "hash": "0d483b827f32fd1c3883c0f95c87f4ffc209c28f5b959ca8462f371c6df3d573"
+    },
+    "proposeOracleKey.prover": {
+      "type": "file",
+      "size": 12327383,
+      "hash": "0f9695931bfe1e85777fa5108d94719c6a923cb7279a6f19d55c8f60afa0df88"
+    },
+    "proposeOracleKey.verifier": {
+      "type": "file",
+      "size": 2313,
+      "hash": "83d85c8d9a33c66a00ad2019caac321d9d45b56572a3d5318a4045a559a4f961"
+    },
+    "refundSyndicate.prover": {
+      "type": "file",
+      "size": 1056727,
+      "hash": "a5eddfe327da9a0b0f9460b5d28a1ba0bfd1ee95eb46ab7c3ecb252b932674d4"
+    },
+    "refundSyndicate.verifier": {
+      "type": "file",
+      "size": 1593,
+      "hash": "96eac784a02618b6862431ddd9e76ce732b3d95fae17968ddd4a71b4eba8f026"
+    },
+    "refundTicket.prover": {
+      "type": "file",
+      "size": 1057906,
+      "hash": "9d39ca540d691abf79bafad7a23c9af0ddfa8d092bed93c1b280e5826ff913cc"
+    },
+    "refundTicket.verifier": {
+      "type": "file",
+      "size": 1593,
+      "hash": "9f85fb2eea35a9de7f3e6732cb1d9b31f9266461e6eacbf08dc55f67de617edf"
+    },
+    "requestDraw.prover": {
+      "type": "file",
+      "size": 98634032,
+      "hash": "849a3e23f274bd36f119133fd866891c01f0134bebf3c9d0295c66cb86f52825"
+    },
+    "requestDraw.verifier": {
+      "type": "file",
+      "size": 2313,
+      "hash": "fa57cd6436014c8ca65f9a87900a3bea02dd06c7492f1cb109146f1999938656"
+    },
+    "settleBatch.prover": {
+      "type": "file",
+      "size": 136159515,
+      "hash": "bfa2880878da7a4f87ea66900b886c6a008619ec2fb011579630fc508cd50b64"
+    },
+    "settleBatch.verifier": {
+      "type": "file",
+      "size": 1593,
+      "hash": "7c2e61160e8f956e513e5f8c609bbaa039c60ac1664cf2a2ed60e811a6e24c7f"
+    },
+    "voidDraw.prover": {
+      "type": "file",
+      "size": 531814,
+      "hash": "31550202b49244c3c23d82d2b6380b00236b766bec63cc5e87fb8cc2d0b8f823"
+    },
+    "voidDraw.verifier": {
+      "type": "file",
+      "size": 1593,
+      "hash": "555f50ce1acf5548343e63e2e76e5364d2cb76f9635d1ca93ae6ea725a67f877"
+    }
+  }
+}

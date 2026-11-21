@@ -1,6 +1,6 @@
 {
   "name": "@lunardraw/cli",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Run Lunardraw on Midnight: deploy the Starfall contract locked, activate the oracle key, run the keeper and the draw oracle, and check a deployment.",
   "license": "MIT",
   "private": true,
@@ -11,20 +11,24 @@
     "lunardraw-agent": "dist/kit-main.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "game-v2"
   ],
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json && chmod +x dist/main.js dist/monitor-main.js dist/kit-main.js dist/registry-main.js dist/relay-main.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run src/test/offline.test.ts src/test/starfall-offline.test.ts src/test/dust-wait.test.ts src/test/sync-watch.test.ts src/test/starfall-agent.test.ts src/test/silence-watchdog.test.ts src/test/wait-for-tip.test.ts src/test/fresh-fees.test.ts src/test/dust-time.test.ts src/test/tx-backfill.test.ts src/test/wallet-lock.test.ts src/test/monitor.test.ts src/test/hosted-prover.test.ts src/test/kit.test.ts src/test/registry.test.ts src/test/relay.test.ts src/test/dust-meter.test.ts",
+    "test": "vitest run src/test/offline.test.ts src/test/starfall-offline.test.ts src/test/dust-wait.test.ts src/test/sync-watch.test.ts src/test/starfall-agent.test.ts src/test/silence-watchdog.test.ts src/test/wait-for-tip.test.ts src/test/fresh-fees.test.ts src/test/dust-time.test.ts src/test/tx-backfill.test.ts src/test/wallet-lock.test.ts src/test/monitor.test.ts src/test/hosted-prover.test.ts src/test/kit.test.ts src/test/kit-v2.test.ts src/test/registry.test.ts src/test/relay.test.ts src/test/dust-meter.test.ts",
     "test:e2e": "LUNARDRAW_E2E=1 vitest run src/test/e2e.test.ts src/test/starfall-e2e.test.ts"
   },
   "dependencies": {
     "@lunardraw/contract": "0.1.0",
     "@lunardraw/keeper": "0.1.0",
+    "@midnight-ntwrk/compact-js": "3.0.2",
     "@midnight-ntwrk/compact-runtime": "0.21.0",
     "@midnight-ntwrk/midnight-js": "5.0.1",
+    "@midnight-ntwrk/midnight-js-http-client-proof-provider": "5.0.1",
     "@midnight-ntwrk/midnight-js-indexer-public-data-provider": "5.0.1",
+    "@midnight-ntwrk/midnight-js-node-zk-config-provider": "5.0.1",
     "@midnight-ntwrk/midnight-js-protocol": "5.0.1",
     "@midnight-ntwrk/midnight-js-types": "5.0.1",
     "@midnight-ntwrk/testkit-js": "5.0.1",

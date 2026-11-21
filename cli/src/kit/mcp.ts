@@ -25,7 +25,7 @@ export type Tool = {
   run(args: Record<string, unknown>, progress: (message: string) => void): Promise<ToolText>;
 };
 
-export const SERVER_INFO = { name: 'lunardraw', title: 'Lunardraw', version: '0.2.1' };
+export const SERVER_INFO = { name: 'lunardraw', title: 'Lunardraw', version: '0.3.0' };
 const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 
 export const INSTRUCTIONS =
@@ -139,21 +139,43 @@ export const serveStdio = async (
 export const BUY_SCHEMA = {
   type: 'object',
   properties: {
-    games: { type: 'integer', minimum: 1, maximum: 50, description: 'QuickPick: this many random games (12 to a ticket, one transaction).' },
-    package: { type: 'string', enum: Object.keys(Starfall.QUICK_PICK_PACKAGES), description: 'A QuickPick package instead of games.' },
-    numbers: { type: 'array', items: { type: 'integer', minimum: 1, maximum: 35 }, description: 'Your own numbers: 7 for a standard game, 8-12 with system, 5-6 with pick.' },
-    moonball: { type: 'integer', minimum: 1, maximum: 20, description: 'Your own Moonball (random if left out).' },
+    game: {
+      type: 'string',
+      enum: ['starfall', 'classic'],
+      description: "Which game: 'starfall' (the main game, the default) or 'classic' (Starfall Classic, until its final draw on 27 Nov 2026).",
+    },
+    games: { type: 'integer', minimum: 1, maximum: 50, description: 'QuickPick: this many random games in the draw\'s format (12 to a ticket).' },
+    package: { type: 'string', enum: Object.keys(Starfall.QUICK_PICK_PACKAGES), description: 'Classic only: a QuickPick package instead of games.' },
+    numbers: {
+      type: 'array',
+      items: { type: 'integer', minimum: 1, maximum: 45 },
+      description: "Your own numbers: 7 for a standard game, 8-12 for a System, 5-6 with pick. Starfall's range is the draw's own (1-20 up to 1-45: lunardraw_draw_on_sale says); Classic's is 1-35.",
+    },
+    moonball: { type: 'integer', minimum: 1, maximum: 20, description: "Your own Moonball (random if left out). Starfall: only in a draw with a Moonball, within its range." },
     system: { type: 'integer', minimum: 8, maximum: 12, description: 'A System entry: every 7 of these 8-12 numbers.' },
     pick: { type: 'integer', enum: [5, 6], description: 'A Pick entry: your 5 or 6 numbers completed every way.' },
-    sweep: { type: 'boolean', description: 'Moonball Sweep: play every Moonball (20 times the games).' },
+    sweep: { type: 'boolean', description: 'Moonball Sweep: play every Moonball (as many times the games as the draw has Moonballs).' },
   },
   additionalProperties: false,
 };
 
+/** The join tool's input: a syndicate and how many shares. */
+export const JOIN_SCHEMA = {
+  type: 'object',
+  properties: {
+    syndicate: { type: 'integer', minimum: 0, description: 'The syndicate\'s number, from lunardraw_syndicates.' },
+    shares: { type: 'integer', minimum: 1, maximum: 100, description: 'How many shares to buy (each at the syndicate\'s share price). Default 1.' },
+  },
+  required: ['syndicate'],
+  additionalProperties: false,
+};
+
+
 /** `lunardraw-agent buy`'s options as the buy tool's arguments (to ask the agent running here). */
-export const buyToolArgs = (v: { games?: string; package?: string; numbers?: string; moonball?: string; system?: string; pick?: string; sweep?: boolean }): Record<string, unknown> => {
+export const buyToolArgs = (v: { game?: string; games?: string; package?: string; numbers?: string; moonball?: string; system?: string; pick?: string; sweep?: boolean }): Record<string, unknown> => {
   const int = (x: string | undefined) => (x === undefined ? undefined : Number(x));
   const args: Record<string, unknown> = {
+    game: v.game,
     games: int(v.games),
     package: v.package,
     numbers: v.numbers === undefined ? undefined : v.numbers.split(/[\s,]+/).filter(Boolean).map(Number),
