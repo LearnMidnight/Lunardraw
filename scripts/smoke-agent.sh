@@ -18,6 +18,20 @@ lunardraw-agent init --blockfrost ciPlaceholderId123 | tee init.txt
 grep -q 'mn_addr_preprod1' init.txt
 test "$(stat -c %a "$LUNARDRAW_AGENT_HOME/wallet.secret")" = 600
 lunardraw-agent limits
+# Starfall (v2): the deployed game the kit carries loads, with the CLI's Compact runtime, and builds a valid ticket
+cli="$work/global/lib/node_modules/@lunardraw/agent/node_modules/@lunardraw/cli"
+node --input-type=module -e '
+  const cli = process.argv[1];
+  const { loadStarfallV2 } = await import(cli + "/dist/starfall-v2.js");
+  const { packV2, ticketGames } = await import(cli + "/dist/starfall-v2-agent.js");
+  const { gamesForChoice, readKitV2Record } = await import(cli + "/dist/kit/player-v2.js");
+  const v2 = await loadStarfallV2(cli + "/game-v2/preprod");
+  const f = { range: 20, moonballs: 1, pick5: 105n };
+  const t = packV2(v2.G, 2n, gamesForChoice({ games: 3 }, f), new Uint8Array(32), f).flat();
+  const games = t.reduce((a, x) => a + ticketGames(v2.G, x, f), 0);
+  if (games !== 3 || !/^9e390a23/.test(readKitV2Record("preprod").contractAddress)) { console.log("::error title=starfall v2::" + games); process.exit(1); }
+  console.log("::notice title=starfall v2::the packed game loads and builds tickets (" + games + " games)");
+' "$cli"
 test "$(lunardraw-agent address)" = "$(grep -o 'mn_addr_preprod1[0-9a-z]*' init.txt)"
 printf '%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}' \
@@ -30,7 +44,7 @@ node -e '
   const msgs = lines.map((l) => JSON.parse(l));
   const byId = Object.fromEntries(msgs.map((m) => [m.id, m]));
   const tools = byId[2].result.tools.map((t) => t.name);
-  const want = ["lunardraw_how_to_play", "lunardraw_draw_on_sale", "lunardraw_wallet", "lunardraw_buy_tickets", "lunardraw_my_tickets"];
+  const want = ["lunardraw_how_to_play", "lunardraw_draw_on_sale", "lunardraw_wallet", "lunardraw_buy_tickets", "lunardraw_my_tickets", "lunardraw_syndicates", "lunardraw_join_syndicate"];
   if (byId[1].result.serverInfo.name !== "lunardraw" || want.some((w) => !tools.includes(w)) || !/[0-9.]+ tNIGHT a game/.test(byId[3].result.content[0].text)) {
     console.log("::error title=mcp::" + JSON.stringify(msgs).slice(0, 1500)); process.exit(1);
   }

@@ -22,7 +22,7 @@
 import { createHash } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { BUY_SCHEMA, handle, type Rpc, SERVER_INFO, type Tool } from './mcp.js';
+import { BUY_SCHEMA, handle, JOIN_SCHEMA, type Rpc, SERVER_INFO, type Tool } from './mcp.js';
 
 export type { Rpc };
 
@@ -38,6 +38,8 @@ const ROUTES: { method: 'GET' | 'POST'; path: string; tool: string; summary: str
   { method: 'GET', path: '/api/wallet', tool: 'lunardraw_wallet', summary: 'The wallet\'s address, tNIGHT and DUST' },
   { method: 'GET', path: '/api/tickets', tool: 'lunardraw_my_tickets', summary: 'Every ticket bought, each draw\'s result, and a purchase on its way' },
   { method: 'POST', path: '/api/buy', tool: 'lunardraw_buy_tickets', summary: 'Buy for the draw on sale (answers within 45 s; a purchase still on its way says "buying")' },
+  { method: 'GET', path: '/api/syndicates', tool: 'lunardraw_syndicates', summary: 'The syndicates still taking members in the draw on sale' },
+  { method: 'POST', path: '/api/join', tool: 'lunardraw_join_syndicate', summary: 'Buy shares in a syndicate (answers within 45 s, like a purchase)' },
 ];
 
 export const openApi = (port: number) => ({
@@ -53,7 +55,7 @@ export const openApi = (port: number) => ({
         [r.method.toLowerCase()]: {
           operationId: r.tool.replace(/^lunardraw_/, ''),
           summary: r.summary,
-          ...(r.method === 'POST' ? { requestBody: { required: true, content: { 'application/json': { schema: BUY_SCHEMA } } } } : {}),
+          ...(r.method === 'POST' ? { requestBody: { required: true, content: { 'application/json': { schema: r.tool === 'lunardraw_join_syndicate' ? JOIN_SCHEMA : BUY_SCHEMA } } } } : {}),
           responses: { 200: { description: 'The answer (JSON)' }, 400: { description: 'Refused: { error }' }, 401: { description: 'No key, or the wrong one' } },
         },
       },

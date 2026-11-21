@@ -11,6 +11,9 @@
  *
  * Same protocol as the website's purchase engine (siteProvingProvider).
  */
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { CostModel, parseCheckResult, Transaction } from '@midnight-ntwrk/midnight-js-protocol/v9';
 import { loadLedger8Protocol } from '@midnight-ntwrk/midnight-js-protocol';
 import { proveLedger8Transaction } from '@midnight-ntwrk/midnight-js-protocol/prove';
@@ -27,6 +30,24 @@ export type HostedProverOptions = {
   fetcher?: typeof fetch;
   /** One request's time limit (ms): proving takes 15-40 s, plus a queue. Default 6 minutes. */
   timeoutMs?: number;
+  /**
+   * Folders of verifier keys (`<circuit>.verifier`) to answer the ledger's key lookup from, before
+   * asking the prover: a contract other than the prover's first game (Starfall v2) has keys of its
+   * own, and its key location names them by sha256 (`?vk=`). A file is used only when its sha256 is
+   * the one the location names (or the location names none).
+   */
+  verifierDirs?: string[];
+};
+
+/** The verifier key in `dirs` for `circuit` whose sha256 is `vk` (any, when vk is undefined). */
+export const localVerifier = (dirs: string[], circuit: string, vk: string | undefined): Uint8Array | undefined => {
+  for (const dir of dirs) {
+    const f = join(dir, `${circuit}.verifier`);
+    if (!existsSync(f)) continue;
+    const key = new Uint8Array(readFileSync(f));
+    if (vk === undefined || createHash('sha256').update(key).digest('hex') === vk.toLowerCase()) return key;
+  }
+  return undefined;
 };
 
 const baseOf = (url: string): string => {
@@ -86,6 +107,8 @@ export const hostedProvingProvider = (url: string, opts: HostedProverOptions = {
     async lookupKey(keyLocation: string) {
       const circuit = /(?:^|\/)([A-Za-z0-9_]+)(?:\?|$)/.exec(keyLocation)?.[1];
       if (!circuit) return undefined;
+      const local = opts.verifierDirs?.length ? localVerifier(opts.verifierDirs, circuit, /\?vk=([0-9a-fA-F]{64})$/.exec(keyLocation)?.[1]) : undefined;
+      if (local) return { proverKey: new Uint8Array(0), verifierKey: local, ir: new Uint8Array(0) };
       let p = verifiers.get(circuit);
       if (!p) {
         p = (async () => {

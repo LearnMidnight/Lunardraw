@@ -15,7 +15,7 @@ mkdir -p "$ext" && cd "$work"
 unzip -q "$mcpb" -d "$ext"
 node -e '
   const m = require(process.argv[1]);
-  const want = ["lunardraw_how_to_play", "lunardraw_draw_on_sale", "lunardraw_wallet", "lunardraw_buy_tickets", "lunardraw_my_tickets"];
+  const want = ["lunardraw_how_to_play", "lunardraw_draw_on_sale", "lunardraw_wallet", "lunardraw_buy_tickets", "lunardraw_my_tickets", "lunardraw_syndicates", "lunardraw_join_syndicate"];
   const tools = m.tools.map((t) => t.name);
   // Claude names the extension log file after display_name: no characters Windows forbids in file names
   if (m.name !== "lunardraw" || m.server.type !== "node" || want.some((w) => !tools.includes(w)) || !m.user_config.blockfrost.sensitive || /[<>:"/\\|?*]/.test(m.display_name) || !m.server.mcp_config.args[0].endsWith("index.mjs")

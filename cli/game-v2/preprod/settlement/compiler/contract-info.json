@@ -1,0 +1,3900 @@
+{
+  "compiler-version": "0.36.0",
+  "compiler-commit": "b5d9e4dfc532fe47011c4f6296e254f4853eb469",
+  "language-version": "0.28.0",
+  "runtime-version": "0.21.0",
+  "circuits": [
+    {
+      "name": "maxTickets",
+      "pure": true,
+      "proof": false,
+      "arguments": [
+      ],
+      "result-type": {
+        "type-name": "Uint",
+        "maxval": 255
+      }
+    },
+    {
+      "name": "batchSize",
+      "pure": true,
+      "proof": false,
+      "arguments": [
+      ],
+      "result-type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "maxNumbers",
+      "pure": true,
+      "proof": false,
+      "arguments": [
+      ],
+      "result-type": {
+        "type-name": "Uint",
+        "maxval": 255
+      }
+    },
+    {
+      "name": "maxLines",
+      "pure": true,
+      "proof": false,
+      "arguments": [
+      ],
+      "result-type": {
+        "type-name": "Uint",
+        "maxval": 255
+      }
+    },
+    {
+      "name": "ticketGames",
+      "pure": true,
+      "proof": false,
+      "arguments": [
+        {
+          "name": "t",
+          "type": {
+            "type-name": "Struct",
+            "name": "TicketPreimage",
+            "elements": [
+              {
+                "name": "drawId",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 4294967295
+                }
+              },
+              {
+                "name": "entry",
+                "type": {
+                  "type-name": "Struct",
+                  "name": "Entry",
+                  "elements": [
+                    {
+                      "name": "kind",
+                      "type": {
+                        "type-name": "Uint",
+                        "maxval": 255
+                      }
+                    },
+                    {
+                      "name": "count",
+                      "type": {
+                        "type-name": "Uint",
+                        "maxval": 255
+                      }
+                    },
+                    {
+                      "name": "numbers",
+                      "type": {
+                        "type-name": "Vector",
+                        "length": 12,
+                        "type": {
+                          "type-name": "Uint",
+                          "maxval": 255
+                        }
+                      }
+                    },
+                    {
+                      "name": "moonball",
+                      "type": {
+                        "type-name": "Uint",
+                        "maxval": 255
+                      }
+                    },
+                    {
+                      "name": "sweep",
+                      "type": {
+                        "type-name": "Boolean"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "name": "lines",
+                "type": {
+                  "type-name": "Vector",
+                  "length": 11,
+                  "type": {
+                    "type-name": "Struct",
+                    "name": "Line",
+                    "elements": [
+                      {
+                        "name": "numbers",
+                        "type": {
+                          "type-name": "Vector",
+                          "length": 7,
+                          "type": {
+                            "type-name": "Uint",
+                            "maxval": 255
+                          }
+                        }
+                      },
+                      {
+                        "name": "moonball",
+                        "type": {
+                          "type-name": "Uint",
+                          "maxval": 255
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "name": "payees",
+                "type": {
+                  "type-name": "Vector",
+                  "length": 3,
+                  "type": {
+                    "type-name": "Struct",
+                    "name": "Payee",
+                    "elements": [
+                      {
+                        "name": "lo",
+                        "type": {
+                          "type-name": "Uint",
+                          "maxval": 340282366920938463463374607431768211455
+                        }
+                      },
+                      {
+                        "name": "hi",
+                        "type": {
+                          "type-name": "Uint",
+                          "maxval": 340282366920938463463374607431768211455
+                        }
+                      },
+                      {
+                        "name": "share",
+                        "type": {
+                          "type-name": "Uint",
+                          "maxval": 65535
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "name": "salt",
+                "type": {
+                  "type-name": "Field"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "f",
+          "type": {
+            "type-name": "Struct",
+            "name": "Format",
+            "elements": [
+              {
+                "name": "range",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 255
+                }
+              },
+              {
+                "name": "moonballs",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 255
+                }
+              },
+              {
+                "name": "pick5",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 65535
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Uint",
+        "maxval": 4294967295
+      }
+    },
+    {
+      "name": "ticketDivisions",
+      "pure": true,
+      "proof": false,
+      "arguments": [
+        {
+          "name": "t",
+          "type": {
+            "type-name": "Struct",
+            "name": "TicketPreimage",
+            "elements": [
+              {
+                "name": "drawId",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 4294967295
+                }
+              },
+              {
+                "name": "entry",
+                "type": {
+                  "type-name": "Struct",
+                  "name": "Entry",
+                  "elements": [
+                    {
+                      "name": "kind",
+                      "type": {
+                        "type-name": "Uint",
+                        "maxval": 255
+                      }
+                    },
+                    {
+                      "name": "count",
+                      "type": {
+                        "type-name": "Uint",
+                        "maxval": 255
+                      }
+                    },
+                    {
+                      "name": "numbers",
+                      "type": {
+                        "type-name": "Vector",
+                        "length": 12,
+                        "type": {
+                          "type-name": "Uint",
+                          "maxval": 255
+                        }
+                      }
+                    },
+                    {
+                      "name": "moonball",
+                      "type": {
+                        "type-name": "Uint",
+                        "maxval": 255
+                      }
+                    },
+                    {
+                      "name": "sweep",
+                      "type": {
+                        "type-name": "Boolean"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "name": "lines",
+                "type": {
+                  "type-name": "Vector",
+                  "length": 11,
+                  "type": {
+                    "type-name": "Struct",
+                    "name": "Line",
+                    "elements": [
+                      {
+                        "name": "numbers",
+                        "type": {
+                          "type-name": "Vector",
+                          "length": 7,
+                          "type": {
+                            "type-name": "Uint",
+                            "maxval": 255
+                          }
+                        }
+                      },
+                      {
+                        "name": "moonball",
+                        "type": {
+                          "type-name": "Uint",
+                          "maxval": 255
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "name": "payees",
+                "type": {
+                  "type-name": "Vector",
+                  "length": 3,
+                  "type": {
+                    "type-name": "Struct",
+                    "name": "Payee",
+                    "elements": [
+                      {
+                        "name": "lo",
+                        "type": {
+                          "type-name": "Uint",
+                          "maxval": 340282366920938463463374607431768211455
+                        }
+                      },
+                      {
+                        "name": "hi",
+                        "type": {
+                          "type-name": "Uint",
+                          "maxval": 340282366920938463463374607431768211455
+                        }
+                      },
+                      {
+                        "name": "share",
+                        "type": {
+                          "type-name": "Uint",
+                          "maxval": 65535
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "name": "salt",
+                "type": {
+                  "type-name": "Field"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "numbers",
+          "type": {
+            "type-name": "Vector",
+            "length": 7,
+            "type": {
+              "type-name": "Uint",
+              "maxval": 255
+            }
+          }
+        },
+        {
+          "name": "moonball",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 255
+          }
+        },
+        {
+          "name": "f",
+          "type": {
+            "type-name": "Struct",
+            "name": "Format",
+            "elements": [
+              {
+                "name": "range",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 255
+                }
+              },
+              {
+                "name": "moonballs",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 255
+                }
+              },
+              {
+                "name": "pick5",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 65535
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Vector",
+        "length": 9,
+        "type": {
+          "type-name": "Uint",
+          "maxval": 4294967295
+        }
+      }
+    },
+    {
+      "name": "organiserCommitmentOf",
+      "pure": true,
+      "proof": false,
+      "arguments": [
+        {
+          "name": "secret",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "syndicateCommitmentOf",
+      "pure": true,
+      "proof": false,
+      "arguments": [
+        {
+          "name": "secret",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "syndicateMark",
+      "pure": true,
+      "proof": false,
+      "arguments": [
+      ],
+      "result-type": {
+        "type-name": "Uint",
+        "maxval": 340282366920938463463374607431768211455
+      }
+    },
+    {
+      "name": "syndicatePayees",
+      "pure": true,
+      "proof": false,
+      "arguments": [
+        {
+          "name": "id",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 4294967295
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Vector",
+        "length": 3,
+        "type": {
+          "type-name": "Struct",
+          "name": "Payee",
+          "elements": [
+            {
+              "name": "lo",
+              "type": {
+                "type-name": "Uint",
+                "maxval": 340282366920938463463374607431768211455
+              }
+            },
+            {
+              "name": "hi",
+              "type": {
+                "type-name": "Uint",
+                "maxval": 340282366920938463463374607431768211455
+              }
+            },
+            {
+              "name": "share",
+              "type": {
+                "type-name": "Uint",
+                "maxval": 65535
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "memberKey",
+      "pure": true,
+      "proof": false,
+      "arguments": [
+        {
+          "name": "syndicate",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 4294967295
+          }
+        },
+        {
+          "name": "index",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 4294967295
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "memberPaymentId",
+      "pure": true,
+      "proof": false,
+      "arguments": [
+        {
+          "name": "entitlement",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        },
+        {
+          "name": "payee",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 255
+          }
+        },
+        {
+          "name": "member",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 4294967295
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "ticketCommitment",
+      "pure": true,
+      "proof": false,
+      "arguments": [
+        {
+          "name": "deployment",
+          "type": {
+            "type-name": "Struct",
+            "name": "ContractAddress",
+            "elements": [
+              {
+                "name": "bytes",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "t",
+          "type": {
+            "type-name": "Struct",
+            "name": "TicketPreimage",
+            "elements": [
+              {
+                "name": "drawId",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 4294967295
+                }
+              },
+              {
+                "name": "entry",
+                "type": {
+                  "type-name": "Struct",
+                  "name": "Entry",
+                  "elements": [
+                    {
+                      "name": "kind",
+                      "type": {
+                        "type-name": "Uint",
+                        "maxval": 255
+                      }
+                    },
+                    {
+                      "name": "count",
+                      "type": {
+                        "type-name": "Uint",
+                        "maxval": 255
+                      }
+                    },
+                    {
+                      "name": "numbers",
+                      "type": {
+                        "type-name": "Vector",
+                        "length": 12,
+                        "type": {
+                          "type-name": "Uint",
+                          "maxval": 255
+                        }
+                      }
+                    },
+                    {
+                      "name": "moonball",
+                      "type": {
+                        "type-name": "Uint",
+                        "maxval": 255
+                      }
+                    },
+                    {
+                      "name": "sweep",
+                      "type": {
+                        "type-name": "Boolean"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "name": "lines",
+                "type": {
+                  "type-name": "Vector",
+                  "length": 11,
+                  "type": {
+                    "type-name": "Struct",
+                    "name": "Line",
+                    "elements": [
+                      {
+                        "name": "numbers",
+                        "type": {
+                          "type-name": "Vector",
+                          "length": 7,
+                          "type": {
+                            "type-name": "Uint",
+                            "maxval": 255
+                          }
+                        }
+                      },
+                      {
+                        "name": "moonball",
+                        "type": {
+                          "type-name": "Uint",
+                          "maxval": 255
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "name": "payees",
+                "type": {
+                  "type-name": "Vector",
+                  "length": 3,
+                  "type": {
+                    "type-name": "Struct",
+                    "name": "Payee",
+                    "elements": [
+                      {
+                        "name": "lo",
+                        "type": {
+                          "type-name": "Uint",
+                          "maxval": 340282366920938463463374607431768211455
+                        }
+                      },
+                      {
+                        "name": "hi",
+                        "type": {
+                          "type-name": "Uint",
+                          "maxval": 340282366920938463463374607431768211455
+                        }
+                      },
+                      {
+                        "name": "share",
+                        "type": {
+                          "type-name": "Uint",
+                          "maxval": 65535
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "name": "salt",
+                "type": {
+                  "type-name": "Field"
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "entitlementId",
+      "pure": true,
+      "proof": false,
+      "arguments": [
+        {
+          "name": "commitment",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        },
+        {
+          "name": "salt",
+          "type": {
+            "type-name": "Field"
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "drawAlpha",
+      "pure": true,
+      "proof": false,
+      "arguments": [
+        {
+          "name": "deployment",
+          "type": {
+            "type-name": "Struct",
+            "name": "ContractAddress",
+            "elements": [
+              {
+                "name": "bytes",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "drawId",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 4294967295
+          }
+        },
+        {
+          "name": "seed",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "ticketKey",
+      "pure": true,
+      "proof": false,
+      "arguments": [
+        {
+          "name": "drawId",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 4294967295
+          }
+        },
+        {
+          "name": "index",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 18446744073709551615
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "gamesIn",
+      "pure": true,
+      "proof": false,
+      "arguments": [
+        {
+          "name": "e",
+          "type": {
+            "type-name": "Struct",
+            "name": "Entry",
+            "elements": [
+              {
+                "name": "kind",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 255
+                }
+              },
+              {
+                "name": "count",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 255
+                }
+              },
+              {
+                "name": "numbers",
+                "type": {
+                  "type-name": "Vector",
+                  "length": 12,
+                  "type": {
+                    "type-name": "Uint",
+                    "maxval": 255
+                  }
+                }
+              },
+              {
+                "name": "moonball",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 255
+                }
+              },
+              {
+                "name": "sweep",
+                "type": {
+                  "type-name": "Boolean"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "f",
+          "type": {
+            "type-name": "Struct",
+            "name": "Format",
+            "elements": [
+              {
+                "name": "range",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 255
+                }
+              },
+              {
+                "name": "moonballs",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 255
+                }
+              },
+              {
+                "name": "pick5",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 65535
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Uint",
+        "maxval": 4294967295
+      }
+    },
+    {
+      "name": "validTicket",
+      "pure": true,
+      "proof": false,
+      "arguments": [
+        {
+          "name": "t",
+          "type": {
+            "type-name": "Struct",
+            "name": "TicketPreimage",
+            "elements": [
+              {
+                "name": "drawId",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 4294967295
+                }
+              },
+              {
+                "name": "entry",
+                "type": {
+                  "type-name": "Struct",
+                  "name": "Entry",
+                  "elements": [
+                    {
+                      "name": "kind",
+                      "type": {
+                        "type-name": "Uint",
+                        "maxval": 255
+                      }
+                    },
+                    {
+                      "name": "count",
+                      "type": {
+                        "type-name": "Uint",
+                        "maxval": 255
+                      }
+                    },
+                    {
+                      "name": "numbers",
+                      "type": {
+                        "type-name": "Vector",
+                        "length": 12,
+                        "type": {
+                          "type-name": "Uint",
+                          "maxval": 255
+                        }
+                      }
+                    },
+                    {
+                      "name": "moonball",
+                      "type": {
+                        "type-name": "Uint",
+                        "maxval": 255
+                      }
+                    },
+                    {
+                      "name": "sweep",
+                      "type": {
+                        "type-name": "Boolean"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "name": "lines",
+                "type": {
+                  "type-name": "Vector",
+                  "length": 11,
+                  "type": {
+                    "type-name": "Struct",
+                    "name": "Line",
+                    "elements": [
+                      {
+                        "name": "numbers",
+                        "type": {
+                          "type-name": "Vector",
+                          "length": 7,
+                          "type": {
+                            "type-name": "Uint",
+                            "maxval": 255
+                          }
+                        }
+                      },
+                      {
+                        "name": "moonball",
+                        "type": {
+                          "type-name": "Uint",
+                          "maxval": 255
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "name": "payees",
+                "type": {
+                  "type-name": "Vector",
+                  "length": 3,
+                  "type": {
+                    "type-name": "Struct",
+                    "name": "Payee",
+                    "elements": [
+                      {
+                        "name": "lo",
+                        "type": {
+                          "type-name": "Uint",
+                          "maxval": 340282366920938463463374607431768211455
+                        }
+                      },
+                      {
+                        "name": "hi",
+                        "type": {
+                          "type-name": "Uint",
+                          "maxval": 340282366920938463463374607431768211455
+                        }
+                      },
+                      {
+                        "name": "share",
+                        "type": {
+                          "type-name": "Uint",
+                          "maxval": 65535
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "name": "salt",
+                "type": {
+                  "type-name": "Field"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "f",
+          "type": {
+            "type-name": "Struct",
+            "name": "Format",
+            "elements": [
+              {
+                "name": "range",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 255
+                }
+              },
+              {
+                "name": "moonballs",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 255
+                }
+              },
+              {
+                "name": "pick5",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 65535
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Boolean"
+      }
+    },
+    {
+      "name": "gamesByDivision",
+      "pure": true,
+      "proof": false,
+      "arguments": [
+        {
+          "name": "e",
+          "type": {
+            "type-name": "Struct",
+            "name": "Entry",
+            "elements": [
+              {
+                "name": "kind",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 255
+                }
+              },
+              {
+                "name": "count",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 255
+                }
+              },
+              {
+                "name": "numbers",
+                "type": {
+                  "type-name": "Vector",
+                  "length": 12,
+                  "type": {
+                    "type-name": "Uint",
+                    "maxval": 255
+                  }
+                }
+              },
+              {
+                "name": "moonball",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 255
+                }
+              },
+              {
+                "name": "sweep",
+                "type": {
+                  "type-name": "Boolean"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "numbers",
+          "type": {
+            "type-name": "Vector",
+            "length": 7,
+            "type": {
+              "type-name": "Uint",
+              "maxval": 255
+            }
+          }
+        },
+        {
+          "name": "moonball",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 255
+          }
+        },
+        {
+          "name": "f",
+          "type": {
+            "type-name": "Struct",
+            "name": "Format",
+            "elements": [
+              {
+                "name": "range",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 255
+                }
+              },
+              {
+                "name": "moonballs",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 255
+                }
+              },
+              {
+                "name": "pick5",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 65535
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Vector",
+        "length": 9,
+        "type": {
+          "type-name": "Uint",
+          "maxval": 4294967295
+        }
+      }
+    },
+    {
+      "name": "addressOf",
+      "pure": true,
+      "proof": false,
+      "arguments": [
+        {
+          "name": "p",
+          "type": {
+            "type-name": "Struct",
+            "name": "Payee",
+            "elements": [
+              {
+                "name": "lo",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 340282366920938463463374607431768211455
+                }
+              },
+              {
+                "name": "hi",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 340282366920938463463374607431768211455
+                }
+              },
+              {
+                "name": "share",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 65535
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Struct",
+        "name": "UserAddress",
+        "elements": [
+          {
+            "name": "bytes",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "sealTicket",
+      "pure": true,
+      "proof": false,
+      "arguments": [
+        {
+          "name": "key",
+          "type": {
+            "type-name": "JubjubPoint"
+          }
+        },
+        {
+          "name": "r",
+          "type": {
+            "type-name": "Field"
+          }
+        },
+        {
+          "name": "t",
+          "type": {
+            "type-name": "Struct",
+            "name": "TicketPreimage",
+            "elements": [
+              {
+                "name": "drawId",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 4294967295
+                }
+              },
+              {
+                "name": "entry",
+                "type": {
+                  "type-name": "Struct",
+                  "name": "Entry",
+                  "elements": [
+                    {
+                      "name": "kind",
+                      "type": {
+                        "type-name": "Uint",
+                        "maxval": 255
+                      }
+                    },
+                    {
+                      "name": "count",
+                      "type": {
+                        "type-name": "Uint",
+                        "maxval": 255
+                      }
+                    },
+                    {
+                      "name": "numbers",
+                      "type": {
+                        "type-name": "Vector",
+                        "length": 12,
+                        "type": {
+                          "type-name": "Uint",
+                          "maxval": 255
+                        }
+                      }
+                    },
+                    {
+                      "name": "moonball",
+                      "type": {
+                        "type-name": "Uint",
+                        "maxval": 255
+                      }
+                    },
+                    {
+                      "name": "sweep",
+                      "type": {
+                        "type-name": "Boolean"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "name": "lines",
+                "type": {
+                  "type-name": "Vector",
+                  "length": 11,
+                  "type": {
+                    "type-name": "Struct",
+                    "name": "Line",
+                    "elements": [
+                      {
+                        "name": "numbers",
+                        "type": {
+                          "type-name": "Vector",
+                          "length": 7,
+                          "type": {
+                            "type-name": "Uint",
+                            "maxval": 255
+                          }
+                        }
+                      },
+                      {
+                        "name": "moonball",
+                        "type": {
+                          "type-name": "Uint",
+                          "maxval": 255
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "name": "payees",
+                "type": {
+                  "type-name": "Vector",
+                  "length": 3,
+                  "type": {
+                    "type-name": "Struct",
+                    "name": "Payee",
+                    "elements": [
+                      {
+                        "name": "lo",
+                        "type": {
+                          "type-name": "Uint",
+                          "maxval": 340282366920938463463374607431768211455
+                        }
+                      },
+                      {
+                        "name": "hi",
+                        "type": {
+                          "type-name": "Uint",
+                          "maxval": 340282366920938463463374607431768211455
+                        }
+                      },
+                      {
+                        "name": "share",
+                        "type": {
+                          "type-name": "Uint",
+                          "maxval": 65535
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "name": "salt",
+                "type": {
+                  "type-name": "Field"
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Struct",
+        "name": "SealedTicket",
+        "elements": [
+          {
+            "name": "ephemeral",
+            "type": {
+              "type-name": "JubjubPoint"
+            }
+          },
+          {
+            "name": "body",
+            "type": {
+              "type-name": "Vector",
+              "length": 12,
+              "type": {
+                "type-name": "Field"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "openTicket",
+      "pure": true,
+      "proof": false,
+      "arguments": [
+        {
+          "name": "secret",
+          "type": {
+            "type-name": "Field"
+          }
+        },
+        {
+          "name": "drawId",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 4294967295
+          }
+        },
+        {
+          "name": "s",
+          "type": {
+            "type-name": "Struct",
+            "name": "SealedTicket",
+            "elements": [
+              {
+                "name": "ephemeral",
+                "type": {
+                  "type-name": "JubjubPoint"
+                }
+              },
+              {
+                "name": "body",
+                "type": {
+                  "type-name": "Vector",
+                  "length": 12,
+                  "type": {
+                    "type-name": "Field"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Struct",
+        "name": "TicketPreimage",
+        "elements": [
+          {
+            "name": "drawId",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 4294967295
+            }
+          },
+          {
+            "name": "entry",
+            "type": {
+              "type-name": "Struct",
+              "name": "Entry",
+              "elements": [
+                {
+                  "name": "kind",
+                  "type": {
+                    "type-name": "Uint",
+                    "maxval": 255
+                  }
+                },
+                {
+                  "name": "count",
+                  "type": {
+                    "type-name": "Uint",
+                    "maxval": 255
+                  }
+                },
+                {
+                  "name": "numbers",
+                  "type": {
+                    "type-name": "Vector",
+                    "length": 12,
+                    "type": {
+                      "type-name": "Uint",
+                      "maxval": 255
+                    }
+                  }
+                },
+                {
+                  "name": "moonball",
+                  "type": {
+                    "type-name": "Uint",
+                    "maxval": 255
+                  }
+                },
+                {
+                  "name": "sweep",
+                  "type": {
+                    "type-name": "Boolean"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "lines",
+            "type": {
+              "type-name": "Vector",
+              "length": 11,
+              "type": {
+                "type-name": "Struct",
+                "name": "Line",
+                "elements": [
+                  {
+                    "name": "numbers",
+                    "type": {
+                      "type-name": "Vector",
+                      "length": 7,
+                      "type": {
+                        "type-name": "Uint",
+                        "maxval": 255
+                      }
+                    }
+                  },
+                  {
+                    "name": "moonball",
+                    "type": {
+                      "type-name": "Uint",
+                      "maxval": 255
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "name": "payees",
+            "type": {
+              "type-name": "Vector",
+              "length": 3,
+              "type": {
+                "type-name": "Struct",
+                "name": "Payee",
+                "elements": [
+                  {
+                    "name": "lo",
+                    "type": {
+                      "type-name": "Uint",
+                      "maxval": 340282366920938463463374607431768211455
+                    }
+                  },
+                  {
+                    "name": "hi",
+                    "type": {
+                      "type-name": "Uint",
+                      "maxval": 340282366920938463463374607431768211455
+                    }
+                  },
+                  {
+                    "name": "share",
+                    "type": {
+                      "type-name": "Uint",
+                      "maxval": 65535
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "name": "salt",
+            "type": {
+              "type-name": "Field"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "settlementPublicKey",
+      "pure": true,
+      "proof": false,
+      "arguments": [
+        {
+          "name": "secret",
+          "type": {
+            "type-name": "Field"
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "JubjubPoint"
+      }
+    },
+    {
+      "name": "acceptOracleKey",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "proposeOracleKey",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "key",
+          "type": {
+            "type-name": "JubjubPoint"
+          }
+        },
+        {
+          "name": "now",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 18446744073709551615
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "changeOrganiser",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "commitment",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "buyTickets",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "count",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 255
+          }
+        },
+        {
+          "name": "refundTo",
+          "type": {
+            "type-name": "Struct",
+            "name": "UserAddress",
+            "elements": [
+              {
+                "name": "bytes",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "requestDraw",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "n",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 4294967295
+          }
+        },
+        {
+          "name": "seed",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        },
+        {
+          "name": "next",
+          "type": {
+            "type-name": "Struct",
+            "name": "Maybe",
+            "elements": [
+              {
+                "name": "is_some",
+                "type": {
+                  "type-name": "Boolean"
+                }
+              },
+              {
+                "name": "value",
+                "type": {
+                  "type-name": "Struct",
+                  "name": "NextDraw",
+                  "elements": [
+                    {
+                      "name": "salesClose",
+                      "type": {
+                        "type-name": "Uint",
+                        "maxval": 18446744073709551615
+                      }
+                    },
+                    {
+                      "name": "seedCommitment",
+                      "type": {
+                        "type-name": "Bytes",
+                        "length": 32
+                      }
+                    },
+                    {
+                      "name": "final",
+                      "type": {
+                        "type-name": "Boolean"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "fulfilDraw",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "n",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 4294967295
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "computeNumbers",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "n",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 4294967295
+          }
+        },
+        {
+          "name": "now",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 18446744073709551615
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Struct",
+        "name": "Numbers",
+        "elements": [
+          {
+            "name": "main",
+            "type": {
+              "type-name": "Vector",
+              "length": 7,
+              "type": {
+                "type-name": "Uint",
+                "maxval": 255
+              }
+            }
+          },
+          {
+            "name": "moonball",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 255
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "settleBatch",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "n",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 4294967295
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "finaliseDraw",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "n",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 4294967295
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "payEntitlement",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "id",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "createSyndicate",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "drawId",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 4294967295
+          }
+        },
+        {
+          "name": "creatorCommitment",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        },
+        {
+          "name": "sharePrice",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 340282366920938463463374607431768211455
+          }
+        },
+        {
+          "name": "totalShares",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 4294967295
+          }
+        },
+        {
+          "name": "games",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 4294967295
+          }
+        },
+        {
+          "name": "joinDeadline",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 18446744073709551615
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Uint",
+        "maxval": 4294967295
+      }
+    },
+    {
+      "name": "joinSyndicate",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "syndicate",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 4294967295
+          }
+        },
+        {
+          "name": "shares",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 4294967295
+          }
+        },
+        {
+          "name": "payTo",
+          "type": {
+            "type-name": "Struct",
+            "name": "UserAddress",
+            "elements": [
+              {
+                "name": "bytes",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Uint",
+        "maxval": 4294967295
+      }
+    },
+    {
+      "name": "buySyndicateTickets",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "syndicate",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 4294967295
+          }
+        },
+        {
+          "name": "count",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 255
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "paySyndicateMember",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "entitlement",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        },
+        {
+          "name": "payee",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 255
+          }
+        },
+        {
+          "name": "member",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 4294967295
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Uint",
+        "maxval": 340282366920938463463374607431768211455
+      }
+    },
+    {
+      "name": "refundSyndicate",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "syndicate",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 4294967295
+          }
+        },
+        {
+          "name": "member",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 4294967295
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Uint",
+        "maxval": 340282366920938463463374607431768211455
+      }
+    },
+    {
+      "name": "voidDraw",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "n",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 4294967295
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "refundTicket",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "n",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 4294967295
+          }
+        },
+        {
+          "name": "index",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 18446744073709551615
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    }
+  ],
+  "witnesses": [
+    {
+      "name": "splitByte",
+      "arguments": [
+        {
+          "name": "x",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 255
+          }
+        }
+      ],
+      "result type": {
+        "type-name": "Tuple",
+        "types": [
+          {
+            "type-name": "Uint",
+            "maxval": 255
+          },
+          {
+            "type-name": "Uint",
+            "maxval": 255
+          }
+        ]
+      }
+    },
+    {
+      "name": "divMod16",
+      "arguments": [
+        {
+          "name": "v",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 65535
+          }
+        },
+        {
+          "name": "m",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 65535
+          }
+        }
+      ],
+      "result type": {
+        "type-name": "Tuple",
+        "types": [
+          {
+            "type-name": "Uint",
+            "maxval": 65535
+          },
+          {
+            "type-name": "Uint",
+            "maxval": 65535
+          }
+        ]
+      }
+    },
+    {
+      "name": "sortSeven",
+      "arguments": [
+        {
+          "name": "v",
+          "type": {
+            "type-name": "Vector",
+            "length": 7,
+            "type": {
+              "type-name": "Uint",
+              "maxval": 255
+            }
+          }
+        }
+      ],
+      "result type": {
+        "type-name": "Vector",
+        "length": 7,
+        "type": {
+          "type-name": "Uint",
+          "maxval": 255
+        }
+      }
+    },
+    {
+      "name": "newTickets",
+      "arguments": [
+      ],
+      "result type": {
+        "type-name": "Vector",
+        "length": 10,
+        "type": {
+          "type-name": "Struct",
+          "name": "TicketPreimage",
+          "elements": [
+            {
+              "name": "drawId",
+              "type": {
+                "type-name": "Uint",
+                "maxval": 4294967295
+              }
+            },
+            {
+              "name": "entry",
+              "type": {
+                "type-name": "Struct",
+                "name": "Entry",
+                "elements": [
+                  {
+                    "name": "kind",
+                    "type": {
+                      "type-name": "Uint",
+                      "maxval": 255
+                    }
+                  },
+                  {
+                    "name": "count",
+                    "type": {
+                      "type-name": "Uint",
+                      "maxval": 255
+                    }
+                  },
+                  {
+                    "name": "numbers",
+                    "type": {
+                      "type-name": "Vector",
+                      "length": 12,
+                      "type": {
+                        "type-name": "Uint",
+                        "maxval": 255
+                      }
+                    }
+                  },
+                  {
+                    "name": "moonball",
+                    "type": {
+                      "type-name": "Uint",
+                      "maxval": 255
+                    }
+                  },
+                  {
+                    "name": "sweep",
+                    "type": {
+                      "type-name": "Boolean"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "name": "lines",
+              "type": {
+                "type-name": "Vector",
+                "length": 11,
+                "type": {
+                  "type-name": "Struct",
+                  "name": "Line",
+                  "elements": [
+                    {
+                      "name": "numbers",
+                      "type": {
+                        "type-name": "Vector",
+                        "length": 7,
+                        "type": {
+                          "type-name": "Uint",
+                          "maxval": 255
+                        }
+                      }
+                    },
+                    {
+                      "name": "moonball",
+                      "type": {
+                        "type-name": "Uint",
+                        "maxval": 255
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "name": "payees",
+              "type": {
+                "type-name": "Vector",
+                "length": 3,
+                "type": {
+                  "type-name": "Struct",
+                  "name": "Payee",
+                  "elements": [
+                    {
+                      "name": "lo",
+                      "type": {
+                        "type-name": "Uint",
+                        "maxval": 340282366920938463463374607431768211455
+                      }
+                    },
+                    {
+                      "name": "hi",
+                      "type": {
+                        "type-name": "Uint",
+                        "maxval": 340282366920938463463374607431768211455
+                      }
+                    },
+                    {
+                      "name": "share",
+                      "type": {
+                        "type-name": "Uint",
+                        "maxval": 65535
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "name": "salt",
+              "type": {
+                "type-name": "Field"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "sealingRandomnessFor",
+      "arguments": [
+      ],
+      "result type": {
+        "type-name": "Vector",
+        "length": 10,
+        "type": {
+          "type-name": "Field"
+        }
+      }
+    },
+    {
+      "name": "settlementBatch",
+      "arguments": [
+        {
+          "name": "drawId",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 4294967295
+          }
+        },
+        {
+          "name": "first",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 18446744073709551615
+          }
+        }
+      ],
+      "result type": {
+        "type-name": "Vector",
+        "length": 20,
+        "type": {
+          "type-name": "Struct",
+          "name": "TicketPreimage",
+          "elements": [
+            {
+              "name": "drawId",
+              "type": {
+                "type-name": "Uint",
+                "maxval": 4294967295
+              }
+            },
+            {
+              "name": "entry",
+              "type": {
+                "type-name": "Struct",
+                "name": "Entry",
+                "elements": [
+                  {
+                    "name": "kind",
+                    "type": {
+                      "type-name": "Uint",
+                      "maxval": 255
+                    }
+                  },
+                  {
+                    "name": "count",
+                    "type": {
+                      "type-name": "Uint",
+                      "maxval": 255
+                    }
+                  },
+                  {
+                    "name": "numbers",
+                    "type": {
+                      "type-name": "Vector",
+                      "length": 12,
+                      "type": {
+                        "type-name": "Uint",
+                        "maxval": 255
+                      }
+                    }
+                  },
+                  {
+                    "name": "moonball",
+                    "type": {
+                      "type-name": "Uint",
+                      "maxval": 255
+                    }
+                  },
+                  {
+                    "name": "sweep",
+                    "type": {
+                      "type-name": "Boolean"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "name": "lines",
+              "type": {
+                "type-name": "Vector",
+                "length": 11,
+                "type": {
+                  "type-name": "Struct",
+                  "name": "Line",
+                  "elements": [
+                    {
+                      "name": "numbers",
+                      "type": {
+                        "type-name": "Vector",
+                        "length": 7,
+                        "type": {
+                          "type-name": "Uint",
+                          "maxval": 255
+                        }
+                      }
+                    },
+                    {
+                      "name": "moonball",
+                      "type": {
+                        "type-name": "Uint",
+                        "maxval": 255
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "name": "payees",
+              "type": {
+                "type-name": "Vector",
+                "length": 3,
+                "type": {
+                  "type-name": "Struct",
+                  "name": "Payee",
+                  "elements": [
+                    {
+                      "name": "lo",
+                      "type": {
+                        "type-name": "Uint",
+                        "maxval": 340282366920938463463374607431768211455
+                      }
+                    },
+                    {
+                      "name": "hi",
+                      "type": {
+                        "type-name": "Uint",
+                        "maxval": 340282366920938463463374607431768211455
+                      }
+                    },
+                    {
+                      "name": "share",
+                      "type": {
+                        "type-name": "Uint",
+                        "maxval": 65535
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "name": "salt",
+              "type": {
+                "type-name": "Field"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "oracleSecretKey",
+      "arguments": [
+      ],
+      "result type": {
+        "type-name": "Field"
+      }
+    },
+    {
+      "name": "organiserSecret",
+      "arguments": [
+      ],
+      "result type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "divModWide",
+      "arguments": [
+        {
+          "name": "n",
+          "type": {
+            "type-name": "Field"
+          }
+        },
+        {
+          "name": "d",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 340282366920938463463374607431768211455
+          }
+        }
+      ],
+      "result type": {
+        "type-name": "Tuple",
+        "types": [
+          {
+            "type-name": "Uint",
+            "maxval": 340282366920938463463374607431768211455
+          },
+          {
+            "type-name": "Uint",
+            "maxval": 340282366920938463463374607431768211455
+          }
+        ]
+      }
+    },
+    {
+      "name": "syndicateSecret",
+      "arguments": [
+      ],
+      "result type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    }
+  ],
+  "contracts": [
+    {
+      "name": "Treasury",
+      "circuits": [
+        {
+          "name": "release",
+          "argument-types": [
+            {
+              "type-name": "Uint",
+              "maxval": 4294967295
+            },
+            {
+              "type-name": "Uint",
+              "maxval": 340282366920938463463374607431768211455
+            },
+            {
+              "type-name": "Uint",
+              "maxval": 340282366920938463463374607431768211455
+            },
+            {
+              "type-name": "Uint",
+              "maxval": 340282366920938463463374607431768211455
+            },
+            {
+              "type-name": "Uint",
+              "maxval": 340282366920938463463374607431768211455
+            },
+            {
+              "type-name": "Boolean"
+            }
+          ],
+          "result-type": {
+            "type-name": "Uint",
+            "maxval": 340282366920938463463374607431768211455
+          }
+        }
+      ]
+    }
+  ],
+  "ledger": [
+    {
+      "name": "draws",
+      "index": [
+        0,
+        0
+      ],
+      "exported": true,
+      "storage": "Map",
+      "key": {
+        "type-name": "Uint",
+        "maxval": 4294967295
+      },
+      "value": {
+        "type-name": "Struct",
+        "name": "Draw",
+        "elements": [
+          {
+            "name": "status",
+            "type": {
+              "type-name": "Enum",
+              "name": "DrawStatus",
+              "elements": [
+                "open",
+                "requested",
+                "fulfilled",
+                "drawn",
+                "settled",
+                "voided"
+              ]
+            }
+          },
+          {
+            "name": "salesClose",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 18446744073709551615
+            }
+          },
+          {
+            "name": "revealDeadline",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 18446744073709551615
+            }
+          },
+          {
+            "name": "drawDeadline",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 18446744073709551615
+            }
+          },
+          {
+            "name": "settleDeadline",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 18446744073709551615
+            }
+          },
+          {
+            "name": "seedCommitment",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          },
+          {
+            "name": "seed",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          },
+          {
+            "name": "point",
+            "type": {
+              "type-name": "JubjubPoint"
+            }
+          },
+          {
+            "name": "oracleKey",
+            "type": {
+              "type-name": "JubjubPoint"
+            }
+          },
+          {
+            "name": "output",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          },
+          {
+            "name": "numbers",
+            "type": {
+              "type-name": "Vector",
+              "length": 7,
+              "type": {
+                "type-name": "Uint",
+                "maxval": 255
+              }
+            }
+          },
+          {
+            "name": "moonball",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 255
+            }
+          },
+          {
+            "name": "rung",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 255
+            }
+          },
+          {
+            "name": "format",
+            "type": {
+              "type-name": "Struct",
+              "name": "Format",
+              "elements": [
+                {
+                  "name": "range",
+                  "type": {
+                    "type-name": "Uint",
+                    "maxval": 255
+                  }
+                },
+                {
+                  "name": "moonballs",
+                  "type": {
+                    "type-name": "Uint",
+                    "maxval": 255
+                  }
+                },
+                {
+                  "name": "pick5",
+                  "type": {
+                    "type-name": "Uint",
+                    "maxval": 65535
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "carried",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 340282366920938463463374607431768211455
+            }
+          },
+          {
+            "name": "fee",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 340282366920938463463374607431768211455
+            }
+          },
+          {
+            "name": "treasuryFee",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 340282366920938463463374607431768211455
+            }
+          },
+          {
+            "name": "overflow",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 340282366920938463463374607431768211455
+            }
+          },
+          {
+            "name": "refill",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 340282366920938463463374607431768211455
+            }
+          },
+          {
+            "name": "prizes",
+            "type": {
+              "type-name": "Vector",
+              "length": 9,
+              "type": {
+                "type-name": "Uint",
+                "maxval": 340282366920938463463374607431768211455
+              }
+            }
+          },
+          {
+            "name": "final",
+            "type": {
+              "type-name": "Boolean"
+            }
+          },
+          {
+            "name": "mustBeWon",
+            "type": {
+              "type-name": "Boolean"
+            }
+          },
+          {
+            "name": "finalShare",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 340282366920938463463374607431768211455
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "lastDraw",
+      "index": [
+        0,
+        1
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 4294967295
+      }
+    },
+    {
+      "name": "ticketCount",
+      "index": [
+        0,
+        2
+      ],
+      "exported": true,
+      "storage": "Map",
+      "key": {
+        "type-name": "Uint",
+        "maxval": 4294967295
+      },
+      "value": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "gamesSold",
+      "index": [
+        0,
+        3
+      ],
+      "exported": true,
+      "storage": "Map",
+      "key": {
+        "type-name": "Uint",
+        "maxval": 4294967295
+      },
+      "value": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "tickets",
+      "index": [
+        0,
+        4
+      ],
+      "exported": true,
+      "storage": "Map",
+      "key": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      },
+      "value": {
+        "type-name": "Struct",
+        "name": "TicketRecord",
+        "elements": [
+          {
+            "name": "commitment",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          },
+          {
+            "name": "games",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 4294967295
+            }
+          },
+          {
+            "name": "refundTo",
+            "type": {
+              "type-name": "Struct",
+              "name": "UserAddress",
+              "elements": [
+                {
+                  "name": "bytes",
+                  "type": {
+                    "type-name": "Bytes",
+                    "length": 32
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "cipher",
+            "type": {
+              "type-name": "Struct",
+              "name": "SealedTicket",
+              "elements": [
+                {
+                  "name": "ephemeral",
+                  "type": {
+                    "type-name": "JubjubPoint"
+                  }
+                },
+                {
+                  "name": "body",
+                  "type": {
+                    "type-name": "Vector",
+                    "length": 12,
+                    "type": {
+                      "type-name": "Field"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "refunded",
+            "type": {
+              "type-name": "Boolean"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "ticketCommitments",
+      "index": [
+        0,
+        5
+      ],
+      "exported": true,
+      "storage": "Set",
+      "type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "progress",
+      "index": [
+        0,
+        6
+      ],
+      "exported": true,
+      "storage": "Map",
+      "key": {
+        "type-name": "Uint",
+        "maxval": 4294967295
+      },
+      "value": {
+        "type-name": "Struct",
+        "name": "Progress",
+        "elements": [
+          {
+            "name": "next",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 18446744073709551615
+            }
+          },
+          {
+            "name": "winners",
+            "type": {
+              "type-name": "Vector",
+              "length": 9,
+              "type": {
+                "type-name": "Uint",
+                "maxval": 18446744073709551615
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "entitlements",
+      "index": [
+        1,
+        0
+      ],
+      "exported": true,
+      "storage": "Map",
+      "key": {
+        "type-name": "Bytes",
+        "length": 32
+      },
+      "value": {
+        "type-name": "Struct",
+        "name": "Entitlement",
+        "elements": [
+          {
+            "name": "drawId",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 4294967295
+            }
+          },
+          {
+            "name": "games",
+            "type": {
+              "type-name": "Vector",
+              "length": 9,
+              "type": {
+                "type-name": "Uint",
+                "maxval": 4294967295
+              }
+            }
+          },
+          {
+            "name": "payees",
+            "type": {
+              "type-name": "Vector",
+              "length": 3,
+              "type": {
+                "type-name": "Struct",
+                "name": "Payee",
+                "elements": [
+                  {
+                    "name": "lo",
+                    "type": {
+                      "type-name": "Uint",
+                      "maxval": 340282366920938463463374607431768211455
+                    }
+                  },
+                  {
+                    "name": "hi",
+                    "type": {
+                      "type-name": "Uint",
+                      "maxval": 340282366920938463463374607431768211455
+                    }
+                  },
+                  {
+                    "name": "share",
+                    "type": {
+                      "type-name": "Uint",
+                      "maxval": 65535
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "name": "paid",
+            "type": {
+              "type-name": "Boolean"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "usedCommitments",
+      "index": [
+        1,
+        1
+      ],
+      "exported": true,
+      "storage": "Set",
+      "type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "carry",
+      "index": [
+        1,
+        2
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 340282366920938463463374607431768211455
+      }
+    },
+    {
+      "name": "ended",
+      "index": [
+        1,
+        3
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Boolean"
+      }
+    },
+    {
+      "name": "syndicates",
+      "index": [
+        1,
+        4
+      ],
+      "exported": true,
+      "storage": "Map",
+      "key": {
+        "type-name": "Uint",
+        "maxval": 4294967295
+      },
+      "value": {
+        "type-name": "Struct",
+        "name": "Syndicate",
+        "elements": [
+          {
+            "name": "drawId",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 4294967295
+            }
+          },
+          {
+            "name": "status",
+            "type": {
+              "type-name": "Enum",
+              "name": "SyndicateStatus",
+              "elements": [
+                "filling",
+                "funded"
+              ]
+            }
+          },
+          {
+            "name": "creator",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          },
+          {
+            "name": "sharePrice",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 340282366920938463463374607431768211455
+            }
+          },
+          {
+            "name": "totalShares",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 4294967295
+            }
+          },
+          {
+            "name": "sold",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 4294967295
+            }
+          },
+          {
+            "name": "games",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 4294967295
+            }
+          },
+          {
+            "name": "bought",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 4294967295
+            }
+          },
+          {
+            "name": "joinDeadline",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 18446744073709551615
+            }
+          },
+          {
+            "name": "members",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 4294967295
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "lastSyndicate",
+      "index": [
+        1,
+        5
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 4294967295
+      }
+    },
+    {
+      "name": "members",
+      "index": [
+        1,
+        6
+      ],
+      "exported": true,
+      "storage": "Map",
+      "key": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      },
+      "value": {
+        "type-name": "Struct",
+        "name": "Member",
+        "elements": [
+          {
+            "name": "payTo",
+            "type": {
+              "type-name": "Struct",
+              "name": "UserAddress",
+              "elements": [
+                {
+                  "name": "bytes",
+                  "type": {
+                    "type-name": "Bytes",
+                    "length": 32
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "shares",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 4294967295
+            }
+          },
+          {
+            "name": "refunded",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 340282366920938463463374607431768211455
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "syndicatePots",
+      "index": [
+        1,
+        7
+      ],
+      "exported": true,
+      "storage": "Map",
+      "key": {
+        "type-name": "Bytes",
+        "length": 32
+      },
+      "value": {
+        "type-name": "Vector",
+        "length": 3,
+        "type": {
+          "type-name": "Uint",
+          "maxval": 340282366920938463463374607431768211455
+        }
+      }
+    },
+    {
+      "name": "memberPayments",
+      "index": [
+        1,
+        8
+      ],
+      "exported": true,
+      "storage": "Set",
+      "type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "ladder",
+      "index": [
+        1,
+        9
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Vector",
+        "length": 12,
+        "type": {
+          "type-name": "Struct",
+          "name": "Rung",
+          "elements": [
+            {
+              "name": "numbers",
+              "type": {
+                "type-name": "Uint",
+                "maxval": 255
+              }
+            },
+            {
+              "name": "moonball",
+              "type": {
+                "type-name": "Uint",
+                "maxval": 255
+              }
+            },
+            {
+              "name": "q",
+              "type": {
+                "type-name": "Uint",
+                "maxval": 4294967295
+              }
+            },
+            {
+              "name": "qm",
+              "type": {
+                "type-name": "Uint",
+                "maxval": 4294967295
+              }
+            },
+            {
+              "name": "odds",
+              "type": {
+                "type-name": "Uint",
+                "maxval": 18446744073709551615
+              }
+            },
+            {
+              "name": "pick5",
+              "type": {
+                "type-name": "Uint",
+                "maxval": 65535
+              }
+            },
+            {
+              "name": "shares",
+              "type": {
+                "type-name": "Vector",
+                "length": 9,
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 65535
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "rungCount",
+      "index": [
+        1,
+        10
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 255
+      }
+    },
+    {
+      "name": "rung",
+      "index": [
+        1,
+        11
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 255
+      }
+    },
+    {
+      "name": "aim",
+      "index": [
+        1,
+        12
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 255
+      }
+    },
+    {
+      "name": "targetDraws",
+      "index": [
+        1,
+        13
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 4294967295
+      }
+    },
+    {
+      "name": "retargetEvery",
+      "index": [
+        1,
+        14
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 4294967295
+      }
+    },
+    {
+      "name": "windowDraws",
+      "index": [
+        2,
+        0
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 4294967295
+      }
+    },
+    {
+      "name": "windowGames",
+      "index": [
+        2,
+        1
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "floor",
+      "index": [
+        2,
+        2
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 340282366920938463463374607431768211455
+      }
+    },
+    {
+      "name": "floorPerGame",
+      "index": [
+        2,
+        3
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 340282366920938463463374607431768211455
+      }
+    },
+    {
+      "name": "ceilingPerCombination",
+      "index": [
+        2,
+        4
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 340282366920938463463374607431768211455
+      }
+    },
+    {
+      "name": "treasury",
+      "index": [
+        2,
+        5
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Contract",
+        "name": "Treasury",
+        "circuits": [
+          {
+            "name": "release",
+            "argument-types": [
+              {
+                "type-name": "Uint",
+                "maxval": 4294967295
+              },
+              {
+                "type-name": "Uint",
+                "maxval": 340282366920938463463374607431768211455
+              },
+              {
+                "type-name": "Uint",
+                "maxval": 340282366920938463463374607431768211455
+              },
+              {
+                "type-name": "Uint",
+                "maxval": 340282366920938463463374607431768211455
+              },
+              {
+                "type-name": "Uint",
+                "maxval": 340282366920938463463374607431768211455
+              },
+              {
+                "type-name": "Boolean"
+              }
+            ],
+            "result-type": {
+              "type-name": "Uint",
+              "maxval": 340282366920938463463374607431768211455
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "treasuryAddress",
+      "index": [
+        2,
+        6
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Struct",
+        "name": "ContractAddress",
+        "elements": [
+          {
+            "name": "bytes",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "treasuryPerGame",
+      "index": [
+        2,
+        7
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 340282366920938463463374607431768211455
+      }
+    },
+    {
+      "name": "rollovers",
+      "index": [
+        2,
+        8
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 4294967295
+      }
+    },
+    {
+      "name": "oracleKey",
+      "index": [
+        2,
+        9
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "JubjubPoint"
+      }
+    },
+    {
+      "name": "oracleKeyReady",
+      "index": [
+        2,
+        10
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Boolean"
+      }
+    },
+    {
+      "name": "proposedOracleKey",
+      "index": [
+        2,
+        11
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Struct",
+        "name": "Maybe",
+        "elements": [
+          {
+            "name": "is_some",
+            "type": {
+              "type-name": "Boolean"
+            }
+          },
+          {
+            "name": "value",
+            "type": {
+              "type-name": "JubjubPoint"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "oracleKeyChangeAt",
+      "index": [
+        2,
+        12
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "oracleKeyApproved",
+      "index": [
+        2,
+        13
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Boolean"
+      }
+    },
+    {
+      "name": "oracleKeyDelay",
+      "index": [
+        2,
+        14
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "organiser",
+      "index": [
+        3,
+        0
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "proposedOrganiser",
+      "index": [
+        3,
+        1
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Struct",
+        "name": "Maybe",
+        "elements": [
+          {
+            "name": "is_some",
+            "type": {
+              "type-name": "Boolean"
+            }
+          },
+          {
+            "name": "value",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "backupOrganiser",
+      "index": [
+        3,
+        2
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "settlementKey",
+      "index": [
+        3,
+        3
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "JubjubPoint"
+      }
+    },
+    {
+      "name": "operator",
+      "index": [
+        3,
+        4
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Struct",
+        "name": "UserAddress",
+        "elements": [
+          {
+            "name": "bytes",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "feePerGame",
+      "index": [
+        3,
+        5
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 340282366920938463463374607431768211455
+      }
+    },
+    {
+      "name": "ticketPrice",
+      "index": [
+        3,
+        6
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 340282366920938463463374607431768211455
+      }
+    },
+    {
+      "name": "minSales",
+      "index": [
+        3,
+        7
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "maxSales",
+      "index": [
+        3,
+        8
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "revealWindow",
+      "index": [
+        3,
+        9
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "drawWindow",
+      "index": [
+        3,
+        10
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "settleWindow",
+      "index": [
+        3,
+        11
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "maxTicketsPerDraw",
+      "index": [
+        3,
+        12
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "finalSales",
+      "index": [
+        3,
+        13
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "mustBeWonAfter",
+      "index": [
+        3,
+        14
+      ],
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 4294967295
+      }
+    }
+  ]
+}

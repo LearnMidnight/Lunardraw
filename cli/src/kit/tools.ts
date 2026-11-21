@@ -7,6 +7,8 @@ import { loadAgentState } from '../starfall-agent.js';
 import { buyEntries } from '../starfall-commands.js';
 import { ensureWallet, hasBlockfrost, kitHome, kitPaths, limitsWhere, loadConfig, tNight, useHome } from './home.js';
 import { readStarfallRecord } from '../starfall.js';
+import { gameOf, hasKitV2, kitV2StatePath, ledgerFormat, loadKitV2State, openSyndicatesOf, readKitV2Record, ticketsReportV2, v2ChoiceOf } from './player-v2.js';
+import { readOverviewV2, readV2 } from './v2-chain.js';
 import { deploymentWatch, outdatedText } from './freshness.js';
 import { buyArgs, type Tool } from './mcp.js';
 import { toolDef } from './tool-defs.js';
@@ -47,6 +49,9 @@ export const mcpTools = (o: { answerMs?: number } = {}): Tool[] => {
     }
     return 'about 1 tNIGHT a game (lunardraw_draw_on_sale gives the exact price)';
   };
+  /** Starfall (v2): the price of a game and its split, from the chain once read (the kit's record has no price). */
+  const priceTextV2 = (): string => '1.3 tNIGHT a game (1 tNIGHT to the prize pool, 0.2 operator fee, 0.1 to the Treasury that tops up jackpots); lunardraw_draw_on_sale gives the exact price';
+  const hasV2 = hasKitV2(config.network);
   const ready = () => {
     if (!hasBlockfrost(kitHome(), config.network)) {
       throw new Error(
@@ -166,18 +171,74 @@ export const mcpTools = (o: { answerMs?: number } = {}): Tool[] => {
     }
   };
 
+  /** A slow call (a purchase, joining a syndicate): answers within ANSWER_MS, or "on its way" and finishes by itself. */
+  const slow = async (games: number, progress: (m: string) => void, run: (tell: (m: string) => void) => Promise<{ bought?: number; of?: number } & object>) => {
+    if (purchase?.state === 'buying') {
+      return {
+        text: JSON.stringify({ status: 'a purchase is already on its way', started: purchase.started, games: purchase.games, next: "Don't buy again yet: call lunardraw_my_tickets in a minute or two to see it land." }, null, 2),
+      };
+    }
+    const mine: Purchase = { started: new Date().toISOString(), games, state: 'buying' };
+    purchase = mine;
+    let answered = false;
+    const tell = (m: string) => {
+      if (!answered) progress(m);
+    };
+    const work = run(tell);
+    const ok = (o: { bought?: number }) => o.bought === undefined || o.bought > 0;
+    work.then(
+      (outcome) => {
+        Object.assign(mine, { state: ok(outcome) ? 'done' : 'failed', outcome });
+        if (ok(outcome)) void listingTick();
+      },
+      (err: unknown) => Object.assign(mine, { state: 'failed', error: err instanceof Error ? err.message : String(err) }),
+    );
+    const late = Symbol('late');
+    const first = await Promise.race([work, lateAfter(late)]);
+    answered = true;
+    if (first === late) {
+      return {
+        text: JSON.stringify(
+          {
+            status: 'buying',
+            games,
+            note: "The purchase is on its way and finishes by itself (2-3 minutes in all). Don't buy again: call lunardraw_my_tickets in about 3 minutes to see the numbers.",
+          },
+          null,
+          2,
+        ),
+      };
+    }
+    return { text: JSON.stringify(first, null, 2), isError: first.bought !== undefined && first.of !== undefined && first.bought < first.of };
+  };
+  /** Not ready to buy: the answer to give instead (or undefined: go ahead). */
+  const notReadyAnswer = () => (farFromReady() ? { text: JSON.stringify({ status: 'not ready to buy yet: nothing was bought', ...notReady() }, null, 2), isError: true } : undefined);
+  const v2Player = (tell: (m: string) => void) => ticking(tell, 'opening the wallet', openPlayer(tell)).then((p) => p.v2());
+  /** Classic, while it still has a draw to sell or results to give: its overview, or undefined once it has ended. */
+  const classicOverview = async () => {
+    const { overview } = await readOverview(config);
+    return overview.ended ? undefined : overview;
+  };
+
   return [
     {
       ...toolDef('lunardraw_how_to_play'),
       run: async () => ({
         text: [
-          'Starfall: a lottery on the Midnight Preprod test network (tNIGHT test tokens, no real value).',
-          `A game: 7 numbers from 1-35 and a Moonball from 1-20. ${priceText()}.`,
-          'lunardraw_draw_on_sale says when the draw on sale closes. Numbers come from Nightcast verifiable randomness; anyone can check every draw.',
-          `Prize divisions: ${DIVISIONS.map((d, i) => `${i + 1}: ${d}`).join('; ')}. Division 1 odds are about 1 in 134 million.`,
-          'Entries: QuickPick games or packages (' + Object.entries(Starfall.QUICK_PICK_PACKAGES).map(([k, v]) => `${k} ${v}`).join(', ') + '), your own numbers, a System (8-12 numbers, every 7 of them), a Pick (5 or 6 numbers completed every way), and Moonball Sweep (every Moonball, 20 times the games).',
+          "Starfall: Lunardraw's lottery on the Midnight Preprod test network (tNIGHT test tokens, no real value). A draw every day at 20:00 Brisbane time (10:00 UTC).",
+          ...(hasV2
+            ? [
+                'A game: 7 numbers in the draw\'s format, which grows with sales: from 7 of 1-20 with no Moonball up to 7 of 1-45 with a Moonball from 1-20. lunardraw_draw_on_sale gives the draw on sale\'s format.',
+                `${priceTextV2()}. The jackpot is fixed before a draw sells (Division 1 pays what was carried in); each draw's sales build the next jackpot.`,
+                'Prize divisions: 1: 7 (+ Moonball); 2: 7; 3: 6 + Moonball; 4: 6; 5: 5 + Moonball; 6: 4 + Moonball; 7: 5; 8: 3 + Moonball; 9: 2 + Moonball. In a draw with no Moonball, 7, 6, 5 and 4 right win Divisions 1, 3, 5 and 6.',
+                'Entries: QuickPick games, your own 7 numbers, a System (8-12 numbers, every 7 of them), a Pick (5 or 6 numbers completed every way), and Moonball Sweep (every Moonball, in a draw that has one).',
+                'Syndicates: groups that buy many games together; each member gets a share of any prize by their shares. lunardraw_syndicates lists the open ones, lunardraw_join_syndicate buys shares. One that isn\'t filled by its deadline refunds its members.',
+                'Starfall Classic (7 of 1-35 + a Moonball of 1-20) ends with its final draw on 27 Nov 2026, whose jackpot must be won: buy in it with game "classic".',
+              ]
+            : [`A game: 7 numbers from 1-35 and a Moonball from 1-20. ${priceText()}.`, 'Entries: QuickPick games or packages, your own numbers, a System (8-12 numbers), a Pick (5 or 6 numbers), and Moonball Sweep.']),
+          'Numbers come from Nightcast verifiable randomness; anyone can check every draw.',
           'Prizes and refunds (if a draw is cancelled) are paid to the wallet automatically. Nothing to claim.',
-          `Spending limits set by the owner: ${current().limits.perDraw} tNIGHT a draw, ${current().limits.perDay} tNIGHT in any 24 hours. They can't be changed from here; the owner sets them ${limitsWhere(current())}.`,
+          `Spending limits set by the owner, across both games: ${current().limits.perDraw} tNIGHT a draw, ${current().limits.perDay} tNIGHT in any 24 hours. They can't be changed from here; the owner sets them ${limitsWhere(current())}.`,
         ].join('\n'),
       }),
     },
@@ -185,9 +246,16 @@ export const mcpTools = (o: { answerMs?: number } = {}): Tool[] => {
       ...toolDef('lunardraw_draw_on_sale'),
       run: async () => {
         ready();
-        const [{ overview }, f] = await Promise.all([readOverview(config), fresh()]);
-        const notice = f.state === 'outdated' ? { notice: outdatedText(f) } : {};
-        return { text: JSON.stringify({ game: "Starfall, Lunardraw's lottery on the Midnight Preprod test network", ...notice, ...overview }, null, 2) };
+        const [v2, classic, f] = await Promise.all([
+          hasV2 ? readOverviewV2(config).then((r) => r.overview) : Promise.resolve(undefined),
+          classicOverview().catch(() => undefined),
+          fresh(),
+        ]);
+        const notice = f.state === 'outdated' ? { classicNotice: outdatedText(f) } : {};
+        const body = v2
+          ? { ...v2, game: "Starfall, Lunardraw's lottery on the Midnight Preprod test network", ...(classic ? { classic: { note: 'Starfall Classic: its final draw (buy with game "classic")', ...notice, ...classic } } : {}) }
+          : { game: "Starfall, Lunardraw's lottery on the Midnight Preprod test network", ...notice, ...(classic ?? (await readOverview(config)).overview) };
+        return { text: JSON.stringify(body, null, 2) };
       },
     },
     {
@@ -206,55 +274,27 @@ export const mcpTools = (o: { answerMs?: number } = {}): Tool[] => {
     {
       ...toolDef('lunardraw_buy_tickets'),
       run: async (args, progress) => {
+        const game = gameOf(args, hasV2);
+        if (game === 'starfall') {
+          const choice = v2ChoiceOf(args);
+          ready();
+          const wait = notReadyAnswer();
+          if (wait) return wait;
+          return slow(choice.numbers ? 1 : (choice.games ?? 1), progress, (tell) => v2Player(tell).then((v) => ticking(tell, 'buying', v.buy(choice, tell))));
+        }
         const entries = buyEntries(buyArgs(args));
         ready();
         const f = await fresh();
         if (f.state === 'outdated') {
-          return { text: JSON.stringify({ status: 'not bought: this agent plays an old Starfall contract', note: outdatedText(f) }, null, 2), isError: true };
+          return { text: JSON.stringify({ status: 'not bought: this agent plays an old Starfall Classic contract', note: outdatedText(f) }, null, 2), isError: true };
         }
-        if (farFromReady()) {
-          return { text: JSON.stringify({ status: 'not ready to buy yet: nothing was bought', ...notReady() }, null, 2), isError: true };
-        }
-        if (purchase?.state === 'buying') {
-          return {
-            text: JSON.stringify({ status: 'a purchase is already on its way', started: purchase.started, games: purchase.games, next: "Don't buy again yet: call lunardraw_my_tickets in a minute or two to see it land." }, null, 2),
-          };
-        }
+        const wait = notReadyAnswer();
+        if (wait) return wait;
         const games = entries.reduce((n, e) => n + Starfall.gamesOf(e), 0);
-        const mine: Purchase = { started: new Date().toISOString(), games, state: 'buying' };
-        purchase = mine;
-        let answered = false;
-        const tell = (m: string) => {
-          if (!answered) progress(m);
-        };
-        const work = (async () => {
+        return slow(games, progress, async (tell) => {
           const p = await ticking(tell, 'opening the wallet', openPlayer(tell));
           return ticking(tell, 'buying', p.buy(entries, tell));
-        })();
-        work.then(
-          (outcome) => {
-            Object.assign(mine, { state: outcome.bought ? 'done' : 'failed', outcome });
-            if (outcome.bought) void listingTick();
-          },
-          (err: unknown) => Object.assign(mine, { state: 'failed', error: err instanceof Error ? err.message : String(err) }),
-        );
-        const late = Symbol('late');
-        const first = await Promise.race([work, lateAfter(late)]);
-        answered = true;
-        if (first === late) {
-          return {
-            text: JSON.stringify(
-              {
-                status: 'buying',
-                games,
-                note: "The purchase is on its way and finishes by itself (2-3 minutes in all). Don't buy again: call lunardraw_my_tickets in about 3 minutes to see the numbers.",
-              },
-              null,
-              2,
-            ),
-          };
-        }
-        return { text: JSON.stringify(first, null, 2), isError: first.bought < first.of };
+        });
       },
     },
     {
@@ -263,7 +303,21 @@ export const mcpTools = (o: { answerMs?: number } = {}): Tool[] => {
         ready();
         const state = loadAgentState(kitPaths(kitHome(), config.network).state);
         const view = state.purchases.length ? (await readOverview(config)).view : undefined;
-        const report = ticketsReport(state, view, Date.now());
+        const classic = ticketsReport(state, view, Date.now());
+        let starfall: unknown;
+        if (hasV2) {
+          const record = readKitV2Record(config.network);
+          const s = loadKitV2State(kitV2StatePath(kitHome()), record.contractAddress);
+          const r = s.purchases.length || s.syndicates.length ? await readV2(config.network) : undefined;
+          starfall = ticketsReportV2(
+            r?.k.v2.G,
+            s,
+            r?.view,
+            (d) => ledgerFormat(r?.l, d),
+            (id) => (r?.l.syndicates.member(id) ? r.l.syndicates.lookup(id) : undefined),
+            Date.now(),
+          );
+        }
         // a purchase still on its way (or how the last one ended), so nobody buys twice
         const latest = purchase && {
           purchase: {
@@ -275,7 +329,47 @@ export const mcpTools = (o: { answerMs?: number } = {}): Tool[] => {
             ...(purchase.state === 'buying' ? { note: 'still on its way: check again in a minute' } : {}),
           },
         };
-        return { text: JSON.stringify({ ...latest, ...report }, null, 2) };
+        const body = starfall ? { ...latest, starfall, classic } : { ...latest, ...classic };
+        return { text: JSON.stringify(body, null, 2) };
+      },
+    },
+    {
+      ...toolDef('lunardraw_syndicates'),
+      run: async () => {
+        ready();
+        if (!hasV2) return { text: JSON.stringify({ syndicates: [], note: 'This kit carries only Starfall Classic, which has no syndicates: update it to play Starfall.' }, null, 2) };
+        const { overview, l } = await readOverviewV2(config);
+        const draw = overview.onSale ? BigInt(overview.onSale.draw) : undefined;
+        const syndicates = openSyndicatesOf(l, draw, Date.now() / 1000);
+        return {
+          text: JSON.stringify(
+            {
+              draw: overview.onSale?.draw ?? null,
+              syndicates,
+              note: syndicates.length
+                ? 'Join one with lunardraw_join_syndicate (its number and how many shares). Prizes are shared by shares and paid to each member automatically.'
+                : overview.onSale
+                  ? 'No syndicate is taking members in this draw right now (lunardraw.io lists them too).'
+                  : 'No draw is on sale right now.',
+            },
+            null,
+            2,
+          ),
+        };
+      },
+    },
+    {
+      ...toolDef('lunardraw_join_syndicate'),
+      run: async (args, progress) => {
+        if (!hasV2) return { text: 'This kit carries only Starfall Classic, which has no syndicates: update it (npm install -g @lunardraw/agent) to play Starfall.', isError: true };
+        const syndicate = Number(args.syndicate);
+        const shares = args.shares === undefined ? 1 : Number(args.shares);
+        if (!Number.isInteger(syndicate) || syndicate < 0) throw new Error('syndicate: its number, from lunardraw_syndicates');
+        if (!Number.isInteger(shares) || shares < 1) throw new Error('shares: 1 or more');
+        ready();
+        const wait = notReadyAnswer();
+        if (wait) return wait;
+        return slow(0, progress, (tell) => v2Player(tell).then((v) => ticking(tell, 'joining', v.join(syndicate, shares, tell))));
       },
     },
   ];

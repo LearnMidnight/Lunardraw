@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_PROVER, hostedProofProvider, hostedProvingProvider, proverHealth } from '../hosted-prover.js';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DEFAULT_PROVER, hostedProofProvider, hostedProvingProvider, localVerifier, proverHealth } from '../hosted-prover.js';
 
 type Call = { url: string; body?: Uint8Array };
 
@@ -74,6 +78,24 @@ describe("proving purchases with Lunardraw's player prover", () => {
     expect(calls[0].url).toBe('https://prover.example/keys/buyTickets.verifier');
     await p.lookupKey('buyTickets'); // cached
     expect(calls.length).toBe(1);
+  });
+
+  it('answers a key lookup from a local verifier key whose sha256 the location names, and asks the prover otherwise', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vk-'));
+    const key = new Uint8Array([1, 2, 3]);
+    writeFileSync(join(dir, 'joinSyndicate.verifier'), key);
+    const sha = createHash('sha256').update(key).digest('hex');
+    const { fetcher, calls } = fakeFetch([() => new Response(new Uint8Array([4, 2]))]);
+    const p = hostedProvingProvider('https://prover.example', { fetcher, verifierDirs: [join(dir, 'missing'), dir] });
+    const mine = await p.lookupKey(`contract:${'ab'.repeat(32)}/joinSyndicate?vk=${sha}`);
+    expect(Array.from(mine!.verifierKey)).toEqual([1, 2, 3]);
+    expect(calls.length).toBe(0);
+    // another contract's key (a different sha256): the prover's
+    const theirs = await p.lookupKey(`contract:${'ab'.repeat(32)}/joinSyndicate?vk=${'ee'.repeat(32)}`);
+    expect(Array.from(theirs!.verifierKey)).toEqual([4, 2]);
+    expect(calls.map((c) => c.url)).toEqual(['https://prover.example/keys/joinSyndicate.verifier']);
+    expect(localVerifier([dir], 'joinSyndicate', undefined)).toEqual(key);
+    expect(localVerifier([dir], 'buyTickets', undefined)).toBeUndefined();
   });
 
   it("reads the prover's health", async () => {

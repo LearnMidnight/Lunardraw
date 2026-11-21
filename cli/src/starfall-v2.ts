@@ -32,6 +32,7 @@ import {
 } from '@lunardraw/keeper';
 import { type Session, TX_TTL_SECONDS } from '@nightcast/deploy';
 import { deploymentsDir } from './deployment.js';
+import { hostedProofProvider, type HostedProverOptions } from './hosted-prover.js';
 import { MidnightStarfallChain, type PrivateStateStore, type StarfallCalls } from './starfall.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- the generated v2 modules are loaded at run time */
@@ -227,6 +228,30 @@ export const starfallV2Providers = async (session: Session, wallet: MidnightWall
 };
 
 export type StarfallV2Providers = Awaited<ReturnType<typeof starfallV2Providers>>;
+
+/**
+ * The game's providers for a player that proves through Lunardraw's player prover (hosted-prover.ts):
+ * buying tickets and joining or running a syndicate need no proof server or proving keys here, only
+ * the generated code and the verifier keys (the agent kit packs those, cli/game-v2/).
+ */
+export const starfallV2HostedProviders = (
+  session: Session,
+  wallet: MidnightWalletProvider,
+  v2: StarfallV2,
+  treasuryAddress: string,
+  prover: string,
+  opts: HostedProverOptions = {},
+): StarfallV2Providers =>
+  ({
+    privateStateProvider: inMemoryPrivateStateProvider(),
+    publicDataProvider: indexerPublicDataProvider(session.config.indexer, session.config.indexerWS),
+    zkConfigProvider: new NodeZkConfigProvider(join(v2.out, V2_GAME), { verify: 'require-if-present' }),
+    proofProvider: hostedProofProvider(prover, { ...opts, verifierDirs: [join(v2.out, V2_GAME, 'keys'), join(v2.out, V2_TREASURY, 'keys'), ...(opts.verifierDirs ?? [])] }),
+    walletProvider: wallet,
+    midnightProvider: wallet,
+    config: { networkId: session.config.networkId, ttlSeconds: TX_TTL_SECONDS },
+    contractModuleProvider: { resolve: (a: unknown) => (String(a) === treasuryAddress ? () => v2.T : undefined) },
+  }) as unknown as StarfallV2Providers;
 
 /** Join the deployed game with a private state (organiser secret, oracle key, or nothing). */
 export const joinStarfallV2 = (providers: StarfallV2Providers, v2: StarfallV2, contractAddress: string, privateState: Record<string, unknown>) =>

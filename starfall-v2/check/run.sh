@@ -12,6 +12,20 @@ read -r -a C <<< "${COMPACTC:-compactc}"
 rm -rf out out-treasury
 "${C[@]}" --skip-zk ../src/settlement.compact out
 "${C[@]}" ../src/treasury.compact out-treasury
+# The deployed game the agent kit carries (cli/game-v2/preprod) must be this source's build: the same
+# generated code (the kit reads the ledger and builds tickets with it).
+K=../../cli/game-v2/preprod
+for part in "out settlement" "out-treasury treasury"; do
+  set -- $part
+  cmp -s "$1/contract/index.js" "$K/$2/contract/index.js" || {
+    echo "cli/game-v2/preprod/$2 is not this source's build: put the deployed build there (or this source has changed since it was deployed)" >&2
+    exit 1
+  }
+done
+for v in out-treasury/keys/*.verifier; do
+  cmp -s "$v" "$K/treasury/keys/$(basename "$v")" || echo "::warning title=game-v2::$(basename "$v") differs from the Treasury verifier key the kit carries (the chain's own is what counts)"
+done
+echo "cli/game-v2/preprod is this source's build"
 [ -d node_modules ] || npm install --no-audit --no-fund
 node pure.mjs
 node game.mjs

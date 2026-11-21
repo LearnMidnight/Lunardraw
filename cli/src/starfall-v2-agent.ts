@@ -188,7 +188,51 @@ export const packV2 = (G: Module, drawId: bigint, games: V2Game[], payTo: Uint8A
 
 // ------------------------------------------------------------------ what to buy
 
-export type V2Purchase = { draw: string; at: string; games: number; cost: string; txs: number; numbers: number[][] };
+/**
+ * A ticket as kept in an agent's state (its numbers, never its salt or payees), so its result can be
+ * worked out once the draw's numbers are out: kind 0 a standard game or a System, 1 a Pick; Moonball
+ * 0 with `sweep`. `lines`: the ticket's other standard games.
+ */
+export type SavedV2Ticket = { kind: number; numbers: number[]; moonball: number; sweep: boolean; lines: { numbers: number[]; moonball: number }[] };
+
+/** What a ticket's preimage holds, as kept in the state. */
+export const savedTicketOf = (t: unknown): SavedV2Ticket => {
+  const x = t as { entry: { kind: bigint; count: bigint; numbers: bigint[]; moonball: bigint; sweep: boolean }; lines: { numbers: bigint[]; moonball: bigint }[] };
+  return {
+    kind: Number(x.entry.kind),
+    numbers: x.entry.numbers.slice(0, Number(x.entry.count)).map(Number),
+    moonball: Number(x.entry.moonball),
+    sweep: !!x.entry.sweep,
+    lines: x.lines.filter((l) => l.moonball !== 0n).map((l) => ({ numbers: l.numbers.map(Number), moonball: Number(l.moonball) })),
+  };
+};
+
+/** A kept ticket as a preimage again (no payees, no salt): enough for the contract's pure circuits. */
+export const preimageOfSaved = (G: Module, drawId: bigint, s: SavedV2Ticket) => {
+  const maxLines = Number(G.pureCircuits.maxLines());
+  return {
+    drawId,
+    entry: { kind: BigInt(s.kind), count: BigInt(s.numbers.length), numbers: [...s.numbers.map(BigInt), ...Array(12 - s.numbers.length).fill(0n)], moonball: BigInt(s.moonball), sweep: s.sweep },
+    lines: [...s.lines.map((l) => ({ numbers: l.numbers.map(BigInt), moonball: BigInt(l.moonball) })), ...Array(maxLines - s.lines.length).fill(NO_LINE)],
+    payees: [NO_PAYEE, NO_PAYEE, NO_PAYEE],
+    salt: 0n,
+  };
+};
+
+/** A kept ticket's winning games in each of the 9 divisions, for a draw's numbers, Moonball and format. */
+export const savedTicketWins = (G: Module, drawId: bigint, s: SavedV2Ticket, numbers: number[], moonball: number, f: V2Format): number[] =>
+  [...(G.pureCircuits.ticketDivisions(preimageOfSaved(G, drawId, s), numbers.map(BigInt), BigInt(moonball), circuitFormat(f)) as bigint[])].map(Number);
+
+/** A kept ticket in words: "3 7 11 14 15 18 20 + 5", "System 8: ...", "Pick 6: ...", "... Moonball Sweep". */
+export const describeSavedTicket = (s: SavedV2Ticket, f?: { moonballs: number }): string => {
+  const mb = (m: number) => (f && f.moonballs <= 1 ? '' : ` + ${m}`);
+  const kind = s.kind === 1 ? `Pick ${s.numbers.length}: ` : s.numbers.length > 7 ? `System ${s.numbers.length}: ` : '';
+  const entry = `${kind}${s.numbers.join(' ')}${s.sweep ? ' with Moonball Sweep' : mb(s.moonball)}`;
+  return [entry, ...s.lines.map((l) => `${l.numbers.join(' ')}${mb(l.moonball)}`)].join('; ');
+};
+
+/** `tickets`: the tickets bought (savedTicketOf), for working out their results; older states have only `numbers`. */
+export type V2Purchase = { draw: string; at: string; games: number; cost: string; txs: number; numbers: number[][]; tickets?: SavedV2Ticket[] };
 export type V2AgentState = { contract: string; purchases: V2Purchase[]; reported: string[] };
 
 export const loadV2AgentState = (path: string, contract: string): V2AgentState => {
@@ -196,7 +240,8 @@ export const loadV2AgentState = (path: string, contract: string): V2AgentState =
   if (!existsSync(path)) return fresh;
   try {
     const s = JSON.parse(readFileSync(path, 'utf8')) as V2AgentState;
-    if (s.contract?.toLowerCase() === contract.toLowerCase()) return { contract, purchases: s.purchases ?? [], reported: s.reported ?? [] };
+    // (anything else in the file is kept: the agent kit keeps its syndicate shares there too)
+    if (s.contract?.toLowerCase() === contract.toLowerCase()) return { ...s, contract, purchases: s.purchases ?? [], reported: s.reported ?? [] };
     renameSync(path, `${path}.${(s.contract ?? 'earlier').slice(0, 16)}.json`);
   } catch {
     // unreadable: start again

@@ -65,11 +65,13 @@ await import('@lunardraw/cli/dist/kit-main.js');
 chmodSync(join(ext, 'server', 'index.mjs'), 0o755);
 
 const tools = [
-  ['lunardraw_how_to_play', 'How Starfall works: rules, prices, prize divisions, odds and your spending limits'],
-  ['lunardraw_draw_on_sale', 'The draw on sale, the jackpot estimate and the latest results'],
+  ['lunardraw_how_to_play', 'How Starfall works: rules, prices, prize divisions, syndicates and your spending limits'],
+  ['lunardraw_draw_on_sale', 'The draw on sale, its format, the jackpot, open syndicates and the latest results'],
   ['lunardraw_wallet', "Your agent's wallet: address, tNIGHT and DUST, and how far it is from ready"],
-  ['lunardraw_buy_tickets', 'Buy games, a package or chosen numbers for the draw on sale, within your limits'],
-  ['lunardraw_my_tickets', 'Every ticket bought, with each draw\'s result'],
+  ['lunardraw_buy_tickets', 'Buy QuickPick games or chosen numbers for the draw on sale, within your limits'],
+  ['lunardraw_my_tickets', 'Every ticket and syndicate share bought, with each draw\'s result'],
+  ['lunardraw_syndicates', 'The syndicates taking members in the draw on sale'],
+  ['lunardraw_join_syndicate', 'Buy shares in a syndicate, within your limits'],
 ];
 const manifest = {
   manifest_version: '0.3',

@@ -258,6 +258,29 @@ for (const [p] of pkgs) {
 }
 notice('install scripts', scripted.join('; ') || 'none');
 
+// Starfall (v2): the deployed game the kit carries (cli/game-v2), and one Compact runtime for it and
+// the CLI. Its generated code finds the runtime from where it sits, the CLI from its own folder: two
+// copies would fail the ledger's decoding ("expected instance of ChargedState", 21 Nov 2026).
+const cliDir = join(stage, 'node_modules', '@lunardraw', 'cli');
+const gameV2 = join(cliDir, 'game-v2', 'preprod');
+for (const f of ['record.json', join('settlement', 'contract', 'index.js'), join('settlement', 'keys', 'buyTickets.verifier'), join('settlement', 'keys', 'joinSyndicate.verifier'), join('treasury', 'contract', 'index.js')]) {
+  if (!existsSync(join(gameV2, f))) fail(`the package has no Starfall v2 game: ${join('game-v2', 'preprod', f)} is missing (cli/package.json "files")`);
+}
+const runtimeFrom = (dir) => {
+  for (let d = dir; d.startsWith(stage); d = dirname(d)) {
+    const c = join(d, 'node_modules', '@midnight-ntwrk', 'compact-runtime', 'package.json');
+    if (existsSync(c)) return c;
+  }
+  return undefined;
+};
+const forGame = runtimeFrom(join(gameV2, 'settlement', 'contract'));
+const forCli = runtimeFrom(join(cliDir, 'dist'));
+if (!forGame || forGame !== forCli) fail(`the Starfall v2 game and the CLI would load different Compact runtimes (${forGame ?? 'none'}, ${forCli ?? 'none'})`);
+const wanted = JSON.parse(readFileSync(join(gameV2, 'settlement', 'compiler', 'contract-info.json'), 'utf8'))['runtime-version'];
+const have = JSON.parse(readFileSync(forGame, 'utf8')).version;
+if (wanted !== have) fail(`the Starfall v2 game was compiled for Compact runtime ${wanted}, the package has ${have}`);
+notice('agent package', `Starfall v2 game packed (Compact runtime ${have}, one copy for the game and the CLI)`);
+
 // 5. pack: the bundled dependencies are named by version (the file: paths only served the install)
 const versionsOf = Object.fromEntries(packed.map((p) => [p.name, p.version]));
 const final = { ...pkg, dependencies: Object.fromEntries(Object.keys(local).map((n) => [n, versionsOf[n]])) };

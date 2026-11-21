@@ -37,7 +37,8 @@ import { dustWait } from './dust-wait.js';
 import { statusWriter } from './status-file.js';
 import { freshFees, openServiceWallet, parseUserAddress, settlementFrom } from './starfall-commands.js';
 import { describeStep, loadPlayerState, nextStep, savePlayerState, stepDone, ticketsFor } from './starfall-v2-player.js';
-import { loadV2AgentState, MAX_ROUNDS, parseV2Lines, planV2, saveV2AgentState, ticketGames, type V2AgentOptions, type V2Draw, type V2Style, V2_STYLES } from './starfall-v2-agent.js';
+import { loadV2AgentState, MAX_ROUNDS, parseV2Lines, planV2, savedTicketOf, type SavedV2Ticket, saveV2AgentState, ticketGames, type V2AgentOptions, type V2Draw, type V2Style, V2_STYLES } from './starfall-v2-agent.js';
+import { proverArg } from './buyer.js';
 import { fromHex } from './common.js';
 import { walletBalances } from '@nightcast/deploy';
 import {
@@ -49,6 +50,7 @@ import {
   type StarfallV2,
   type StarfallV2Record,
   starfallV2Out,
+  starfallV2HostedProviders,
   starfallV2Providers,
   starfallV2ViewOf,
   v2LedgerOf,
@@ -73,11 +75,12 @@ export const STARFALL_V2_USAGE = `usage: ./lunardraw starfall-v2 <command>
       with --members, a syndicate of one share per member (paid to that address) and its games.
   agent   --network <network> --wallet <file> --name <name> [--style quickpick|lucky|moonhit|system|mix]
           [--games 2] [--lines "3,11,17,23,26,30,34+7;..."] [--rounds <n>] [--budget <tNIGHT>] [--max-draws <n>]
-          [--record <file>] [--proof-server-port <port>]
+          [--record <file>] [--proof-server-port <port> | --prover hosted|<url>] [--state <file>]
       A house agent on v2: buys once a draw in its style, in the draw's own format (lucky sets that
       don't fit its range are folded into it), --rounds purchases' worth in one go, at most --budget
       (default 60) a draw; prizes and refunds come to its wallet by themselves. State in
-      ~/lunardraw-agents/<name>.v2-agent.json.
+      ~/lunardraw-agents/<name>.v2-agent.json (or --state). --prover proves its purchases with
+      Lunardraw's player prover (or another), so it needs no proof server or proving keys.
   accept-key  --network <network> --oracle <file> [--wallet <file>] [--record <file>] [--proof-server-port <port>]
       The oracle accepts the key the deployment proposed (once, before the first draw): needs the oracle's secret.
   status  --network <network> [--record <file>]
@@ -183,6 +186,8 @@ export const starfallV2 = async (argv: string[]): Promise<number> => {
       budget: { type: 'string' },
       rounds: { type: 'string' },
       'max-draws': { type: 'string' },
+      prover: { type: 'string' },
+      state: { type: 'string' },
     },
   });
 
@@ -483,14 +488,20 @@ export const starfallV2 = async (argv: string[]): Promise<number> => {
       if (style === 'lucky' && !opts.lines?.length) throw new Error('--style lucky needs --lines "3,11,17,23,26,30,34+7;..."');
       if (opts.lines && style !== 'lucky') throw new Error('--lines goes with --style lucky');
       const { record, v2 } = await deployment(network, values.record, false);
-      const statePath = join(homedir(), 'lunardraw-agents', `${name}.v2-agent.json`);
+      const statePath = values.state ?? join(homedir(), 'lunardraw-agents', `${name}.v2-agent.json`);
+      // --prover: prove through Lunardraw's player prover (`hosted`) or another, with no proof server or proving keys here
+      const prover = proverArg(values.prover);
       const dustMinutes = dustWait(values['dust-wait']);
       return withSession(network, async (session) => {
         const wallet = await openServiceWallet(session, walletSeed(values.wallet), dustMinutes);
         if (!wallet) return RESTART;
         try {
           const meter = new DustMeter(undefined);
-          const raw = await starfallV2Providers(session, wallet, v2, record.treasuryAddress);
+          const raw = prover
+            ? starfallV2HostedProviders(session, wallet, v2, record.treasuryAddress, prover, {
+                onWait: (status, secs) => session.logger.info(`[${name}] the prover is ${status === 429 ? 'limiting this address' : 'busy'}; trying again in ${secs} s`),
+              })
+            : await starfallV2Providers(session, wallet, v2, record.treasuryAddress);
           const { providers } = freshFees(raw, wallet, session.logger, meter);
           const joined = await joinStarfallV2(providers, v2, record.contractAddress, {});
           const store = (providers.privateStateProvider as never as { forContract(a: string): { set(id: string, s: unknown): Promise<void> } }).forContract(record.contractAddress);
@@ -547,6 +558,7 @@ export const starfallV2 = async (argv: string[]): Promise<number> => {
                   let done = 0;
                   let games = 0;
                   const numbers: number[][] = [];
+                  const saved: SavedV2Ticket[] = [];
                   for (const tickets of plan.txs) {
                     if (Date.now() / 1000 > Number(plan.salesClose) - 120) { log('sales close too soon for the rest'); break; }
                     await store.set('starfall-v2', { pendingTickets: tickets });
@@ -565,11 +577,12 @@ export const starfallV2 = async (argv: string[]): Promise<number> => {
                       games += ticketGames(v2.G, t, f);
                       const tt = t as { entry: { numbers: bigint[]; count: bigint } };
                       numbers.push(tt.entry.numbers.slice(0, Number(tt.entry.count)).map(Number));
+                      saved.push(savedTicketOf(t));
                     }
                     if (plan.txs.length > 1) log(`transaction ${done} of ${plan.txs.length} landed`);
                   }
                   if (done > 0) {
-                    state.purchases.push({ draw: plan.draw.toString(), at: new Date().toISOString(), games, cost: (view.ticketPrice * BigInt(games)).toString(), txs: done, numbers });
+                    state.purchases.push({ draw: plan.draw.toString(), at: new Date().toISOString(), games, cost: (view.ticketPrice * BigInt(games)).toString(), txs: done, numbers, tickets: saved });
                     saveV2AgentState(statePath, state);
                     log(`in draw ${plan.draw} with ${games} game(s) in ${done} transaction(s)`);
                   }
@@ -596,7 +609,7 @@ export const starfallV2 = async (argv: string[]): Promise<number> => {
         } finally {
           await wallet.stop().catch(() => undefined);
         }
-      }, proofServerPort(values['proof-server-port']), undefined, { service: true });
+      }, prover ? undefined : proofServerPort(values['proof-server-port']), prover, { service: true });
     }
 
     case 'accept-key': {
