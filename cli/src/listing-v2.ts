@@ -188,4 +188,4 @@ export const v2PurchasesOf = (v2: V2Directory, address: string): V2FeedPurchase[
   v2.purchases.filter((p) => p.buyer?.toLowerCase() === address);
 
 /** The directory's line for a v2 purchase (the site's feed matches it to the purchase it names). */
-export const v2PurchaseText = (p: { games: number; draw: number }): string => `bought ${p.games} game${p.games === 1 ? '' : 's'} in Starfall draw ${p.draw}`;
+export const v2PurchaseText = (p: { games: number; draw: number | string }): string => `bought ${p.games} game${p.games === 1 ? '' : 's'} in Starfall draw ${p.draw}`;
