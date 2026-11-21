@@ -130,7 +130,7 @@ export const v2Player = async (d: Deps): Promise<V2Player> => {
       return d.config.limits;
     }
   };
-  const where = () => limitsWhere(d.config, d.home);
+  const where = () => limitsWhere();
   /** Refuse what's over the limits, or more than the wallet holds. */
   const afford = async (draw: bigint, cost: bigint) => {
     const s = loadKitV2State(statePath, record.contractAddress);

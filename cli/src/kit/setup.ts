@@ -11,7 +11,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { progressOf } from '../sync-watch.js';
-import { DEFAULT_CONFIG, ensureWallet, hasBlockfrost, type KitConfig, kitHome, kitPaths, loadConfig, saveBlockfrost, saveConfig, useHome } from './home.js';
+import { DEFAULT_CONFIG, ensureWallet, MAX_LIMIT, hasBlockfrost, type KitConfig, kitHome, kitPaths, loadConfig, saveBlockfrost, saveConfig, useHome } from './home.js';
 
 const BLOCKFROST_SIGNUP = 'https://blockfrost.io/';
 const BLOCKFROST_INDEXER: Record<string, string> = { preprod: 'https://midnight-preprod.blockfrost.io/api/v0' };
@@ -117,7 +117,7 @@ export const withLunardraw = (configText: string | undefined, entry: McpEntry): 
 
 // ------------------------------------------------------------------ the wizard
 
-const openUrl = (url: string): void => {
+export const openUrl = (url: string): void => {
   try {
     const [cmd, args] =
       process.platform === 'darwin' ? ['open', [url]] : process.platform === 'win32' ? ['cmd', ['/c', 'start', '""', url]] : ['xdg-open', [url]];
@@ -262,6 +262,27 @@ export const setup = async (): Promise<number> => {
       }
     }
 
+    // spending limits: asked now, so few owners need to change them later
+    {
+      const ask = async (q: string, was: number): Promise<number> => {
+        for (;;) {
+          const t = (await rl.question(`${q} [${was}]: `)).trim().replace(/,/g, '');
+          if (!t) return was;
+          const n = Number(t);
+          if (/^\d+(\.\d+)?$/.test(t) && n <= MAX_LIMIT) return n;
+          say(`A number of tNIGHT from 0 to ${MAX_LIMIT.toLocaleString('en')}, please (a game costs about 1.3).`);
+        }
+      };
+      say('\nSpending limits: the most your AI may spend. It can read them but never change them.');
+      const perDraw = await ask('Most tNIGHT a draw', config.limits.perDraw);
+      const perDay = await ask('Most tNIGHT in any 24 hours', config.limits.perDay);
+      if (perDraw !== config.limits.perDraw || perDay !== config.limits.perDay) {
+        config = { ...config, limits: { perDraw, perDay } };
+        saveConfig(config, home);
+      }
+      say(`✓ ${perDraw} tNIGHT a draw, ${perDay} a day.`);
+    }
+
     // 4. sync
     step(4, 'sync the wallet');
     say('The wallet now reads the Preprod chain. The first time takes hours; leave this window open.');
@@ -317,7 +338,8 @@ export const setup = async (): Promise<number> => {
     }
     say('\nThen try: "Buy me two QuickPick games." or "Did any of my tickets win?"');
     say('Something not working? Run `lunardraw-agent doctor`.');
-    say(`Spending limits: ${config.limits.perDraw} tNIGHT a draw, ${config.limits.perDay} a day (change them with \`lunardraw-agent limits --per-draw <tNIGHT> --per-day <tNIGHT>\`, kept in ${paths.config}).`);
+    say(`Spending limits: ${config.limits.perDraw} tNIGHT a draw, ${config.limits.perDay} a day.`);
+    say('Change anything later (limits, the name on lunardraw.io) with `lunardraw-agent settings`, or ask your AI: "Open my Lunardraw settings."');
     return 0;
   } finally {
     rl.close();

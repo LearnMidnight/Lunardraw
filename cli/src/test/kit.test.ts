@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { Starfall } from '@lunardraw/contract';
 import type { StarfallView } from '@lunardraw/keeper';
 import { buyWithRetry, isCollision, isNotSent, timedMethod } from '../buyer.js';
-import { DEFAULT_CONFIG, ensureWallet, findDeployments, limitsWhere, loadConfig, parseConfig, saveBlockfrost, saveConfig, settingsLimits } from '../kit/home.js';
+import { adoptSettingsLimits, DEFAULT_CONFIG, ensureWallet, findDeployments, limitsWhere, loadConfig, parseConfig, readConfigText, saveBlockfrost, saveConfig, settingsLimits } from '../kit/home.js';
 import { checkDeployment, deploymentWatch, outdatedText, recordUrl } from '../kit/freshness.js';
 import { BUY_SCHEMA, buyArgs, handle, type Tool } from '../kit/mcp.js';
 import { checkLimits, overviewOf, requireLocalProvingKey, ticketsReport } from '../kit/player.js';
@@ -492,22 +492,46 @@ describe('the guided setup', () => {
 });
 
 describe('spending limits from the app\'s settings', () => {
-  it('win over config.json while set, are never written into it, and are ignored when empty or not a number', () => {
+  it('are copied into config.json when they change, so the latest change wins wherever it was made', () => {
     const home = mkdtempSync(join(tmpdir(), 'kit-limits-'));
     saveConfig({ ...DEFAULT_CONFIG, limits: { perDraw: 30, perDay: 600 } }, home);
-    expect(loadConfig(home, {}).limits).toEqual({ perDraw: 30, perDay: 600 });
-    expect(loadConfig(home, {}).fileLimits).toBeUndefined();
+    expect(adoptSettingsLimits(home, {})).toBeUndefined();
+    expect(loadConfig(home).limits).toEqual({ perDraw: 30, perDay: 600 });
     // Claude's extension passes its settings; an unset one may arrive empty or as its placeholder
     const env = { LUNARDRAW_LIMIT_PER_DAY: ' 520 ', LUNARDRAW_LIMIT_PER_DRAW: '${user_config.per_draw}' };
-    const c = loadConfig(home, env);
-    expect(c.limits).toEqual({ perDraw: 30, perDay: 520 });
-    expect(c.fileLimits).toEqual({ perDraw: 30, perDay: 600 });
-    expect(limitsWhere(c, home)).toMatch(/extension's settings/);
-    expect(limitsWhere(loadConfig(home, {}), home)).toMatch(/lunardraw-agent limits/);
-    saveConfig({ ...c, remote: true }, home);
-    expect(JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')).limits).toEqual({ perDraw: 30, perDay: 600 });
+    expect(adoptSettingsLimits(home, env)).toEqual({ perDraw: 30, perDay: 520 });
+    expect(loadConfig(home).limits).toEqual({ perDraw: 30, perDay: 520 });
+    // the owner then changes them elsewhere (the settings page, the command line): the extension's old value doesn't undo it
+    saveConfig({ ...loadConfig(home), limits: { perDraw: 2000, perDay: 5000 } }, home);
+    expect(adoptSettingsLimits(home, env)).toBeUndefined();
+    expect(loadConfig(home).limits).toEqual({ perDraw: 2000, perDay: 5000 });
+    // a new value in the extension's settings is taken up
+    expect(adoptSettingsLimits(home, { ...env, LUNARDRAW_LIMIT_PER_DAY: '700' })).toEqual({ perDraw: 2000, perDay: 700 });
+    expect(limitsWhere()).toMatch(/settings page/);
     expect(settingsLimits({ LUNARDRAW_LIMIT_PER_DRAW: '', LUNARDRAW_LIMIT_PER_DAY: '-5' })).toEqual({});
     expect(settingsLimits({ LUNARDRAW_LIMIT_PER_DRAW: '0', LUNARDRAW_LIMIT_PER_DAY: '12.5' })).toEqual({ perDraw: 0, perDay: 12.5 });
+  });
+
+  it('reads config.json however it was saved, and says what is wrong when it can\'t', () => {
+    const home = mkdtempSync(join(tmpdir(), 'kit-read-'));
+    const json = JSON.stringify({ network: 'preprod', prover: 'hosted', limits: { perDraw: 2000, perDay: 5000 } }, null, 4);
+    const path = join(home, 'config.json');
+    const forms: Buffer[] = [
+      Buffer.from(json, 'utf8'),
+      Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(json, 'utf8')]), // Notepad's "UTF-8 with BOM"
+      Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(json, 'utf16le')]), // Windows PowerShell 5.1's Out-File / Set-Content -Encoding Unicode
+      Buffer.from(json, 'utf16le'), // UTF-16 with no mark
+      (() => { const b = Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(json, 'utf16le')]); b.subarray(2).swap16(); return b; })(), // big-endian
+    ];
+    for (const bytes of forms) {
+      writeFileSync(path, bytes);
+      expect(readConfigText(bytes)).toBe(json);
+      expect(loadConfig(home).limits).toEqual({ perDraw: 2000, perDay: 5000 });
+    }
+    writeFileSync(path, '{\n  "network": "preprod",\n  "limits": { "perDraw": 2000 "perDay": 5000 }\n}\n');
+    expect(() => loadConfig(home)).toThrow(/isn't valid JSON \(around line 3\)/);
+    writeFileSync(path, JSON.stringify({ limits: { perDraw: 5e9, perDay: 5 } }));
+    expect(() => loadConfig(home)).toThrow(/limits.perDraw must be a number of tNIGHT from 0 to 1,000,000/);
   });
 });
 

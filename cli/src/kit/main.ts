@@ -6,6 +6,7 @@
 import { existsSync, openSync, readFileSync, renameSync, statSync, writeSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import {
+  adoptSettingsLimits,
   agentPort,
   DEFAULT_CONFIG,
   DEFAULT_RELAY,
@@ -16,6 +17,7 @@ import {
   kitHome,
   kitPaths,
   loadConfig,
+  MAX_LIMIT,
   saveBlockfrost,
   saveConfig,
   useHome,
@@ -43,6 +45,8 @@ export const KIT_USAGE = `lunardraw-agent: play Starfall, Lunardraw's lottery on
   lunardraw-agent tickets                            what this agent bought and how each draw went
   lunardraw-agent play [--style mix|quickpick|lucky|moonhit|system] [--games <n>] [--numbers ... --moonball <n>]
                        [--game classic]              keep playing every draw, within the limits
+  lunardraw-agent settings                           your agent's settings page, in your browser: its name on
+                                                     lunardraw.io, spending limits, Blockfrost key, wallet and sync
   lunardraw-agent limits [--per-draw <tNIGHT>] [--per-day <tNIGHT>]
                                                      the owner's spending limits, or set them
   lunardraw-agent list --name <name> [--style "<few words>"] [--via claude|chatgpt|gemini|openclaw|hermes|mcp|cli|...]
@@ -98,6 +102,12 @@ const firstRun = (home: string): KitConfig => {
     saveConfig(config, home);
   }
   ensureWallet(home);
+  // limits the owner changed in the Claude extension's settings since last time
+  const adopted = adoptSettingsLimits(home);
+  if (adopted) {
+    config = loadConfig(home);
+    process.stderr.write(`lunardraw: spending limits from the extension's settings: ${adopted.perDraw} tNIGHT a draw, ${adopted.perDay} a day\n`);
+  }
   const key = process.env.LUNARDRAW_BLOCKFROST?.trim();
   if (key) {
     const file = kitPaths(home, config.network).blockfrost;
@@ -275,7 +285,7 @@ export const kit = async (argv: string[]): Promise<number> => {
           fix.push('Run `lunardraw-agent setup`: it asks for the key.');
         }
         line(true, config.listing ? `in the agent directory as ${config.listing.name}` : 'not in the agent directory (optional: `lunardraw-agent list --name <name>`)');
-        line(true, `spending limits: ${config.limits.perDraw} tNIGHT a draw, ${config.limits.perDay} a day${config.fileLimits ? " (from the extension's settings)" : ''}`);
+        line(true, `spending limits: ${config.limits.perDraw} tNIGHT a draw, ${config.limits.perDay} a day (change them with \`lunardraw-agent settings\`)`);
         // still the current Starfall contract? (freshness.ts)
         try {
           const { checkDeployment, outdatedText } = await import('./freshness.js');
@@ -332,27 +342,53 @@ export const kit = async (argv: string[]): Promise<number> => {
       let config = loadConfig();
       const amount = (v: string | undefined, what: string): number | undefined => {
         if (v === undefined) return undefined;
-        const n = Number(v.trim());
-        if (!/^\d+(\.\d+)?$/.test(v.trim()) || !Number.isFinite(n)) throw new Error(`--${what} takes a number of tNIGHT, 0 or more (not ${v})`);
+        const t = v.trim().replace(/,/g, '');
+        const n = Number(t);
+        if (!/^\d+(\.\d+)?$/.test(t) || !(n <= MAX_LIMIT)) throw new Error(`--${what} takes a number of tNIGHT from 0 to ${MAX_LIMIT.toLocaleString('en')} (not ${v})`);
         return n;
       };
       const perDraw = amount(values['per-draw'], 'per-draw');
       const perDay = amount(values['per-day'], 'per-day');
       if (perDraw !== undefined || perDay !== undefined) {
-        const file = config.fileLimits ?? config.limits;
-        saveConfig({ ...config, fileLimits: undefined, limits: { perDraw: perDraw ?? file.perDraw, perDay: perDay ?? file.perDay } });
+        saveConfig({ ...config, limits: { perDraw: perDraw ?? config.limits.perDraw, perDay: perDay ?? config.limits.perDay } });
         config = loadConfig();
-        say(`Saved in ${kitPaths().config}. A running agent uses them from its next purchase.`);
+        say(`Saved. The agent uses them from its next purchase: no restart needed.`);
       }
       say(`${config.limits.perDraw} tNIGHT a draw, ${config.limits.perDay} tNIGHT in any 24 hours.`);
-      if (config.fileLimits) {
-        say(
-          `These come from the Lunardraw extension's settings in Claude, which win over config.json's (${config.fileLimits.perDraw} a draw, ${config.fileLimits.perDay} a day): ` +
-            'change them there (Settings, Extensions, Lunardraw (Starfall), Configure).',
-        );
-      } else {
-        say(`Change them with \`lunardraw-agent limits --per-draw <tNIGHT> --per-day <tNIGHT>\` (kept in ${kitPaths().config}). An AI using the MCP server can't change them.`);
+      if (perDraw === undefined && perDay === undefined) {
+        say('Change them with `lunardraw-agent settings` (a page in your browser), or `lunardraw-agent limits --per-draw 50 --per-day 500`. An AI using the agent can\'t change them.');
       }
+      return 0;
+    }
+
+    case 'settings': {
+      const home = kitHome();
+      const config = firstRun(home);
+      const { openUrl } = await import('./setup.js');
+      // the agent running on this computer serves the page (it knows how the wallet's sync is going)
+      const agent = await runningAgent(config);
+      if (agent) {
+        const { link } = (await agent.post('/api/settings-link', {})) as { link: string };
+        say('Your agent\'s settings page (it opens in your browser; the link works for the next 2 hours, on this computer only):\n');
+        say(`  ${link}\n`);
+        openUrl(link);
+        return 0;
+      }
+      // no agent running: serve the page from here until it's closed
+      const { serveSettingsOnly } = await import('./settings.js');
+      const { link, close } = await serveSettingsOnly({ home });
+      say('Your agent\'s settings page (it opens in your browser):\n');
+      say(`  ${link}\n`);
+      say('Leave this window open while you use it; press Ctrl+C when you\'re done (it stops by itself after 2 hours).');
+      openUrl(link);
+      await new Promise<void>((resolve) => {
+        const t = setTimeout(resolve, 2 * 3_600_000);
+        process.once('SIGINT', () => {
+          clearTimeout(t);
+          resolve();
+        });
+      });
+      await close();
       return 0;
     }
 

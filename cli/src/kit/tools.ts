@@ -16,6 +16,7 @@ import { refreshListing } from './directory.js';
 import { walletAddressOf } from '@nightcast/deploy';
 import { type OpenHooks, type Player, readOverview, ticketsReport, withPlayer } from './player.js';
 import { FAUCET, syncFraction } from './setup.js';
+import { setLive, setOnBlockfrost, settingsLink, settingsServing } from './settings.js';
 
 const DIVISIONS = ['7 + Moonball', '7', '6 + Moonball', '6', '5 + Moonball', '4 + Moonball', '5', '3 + Moonball', '2 + Moonball'];
 
@@ -141,15 +142,15 @@ export const mcpTools = (o: { answerMs?: number } = {}): Tool[] => {
 
   // If the owner listed the agent in lunardraw.io's directory, keep it up to date
   // (and shown as online) while the server runs, and after each purchase.
+  // (read afresh each time: the owner may list it, rename it or take it out on the settings page)
   const listingTick = async () => {
-    if (!config.listing || !hasBlockfrost(kitHome(), config.network)) return;
-    const view = (await readOverview(config).catch(() => undefined))?.view;
-    await refreshListing(config, ensureWallet().seed, { view, log: (m) => process.stderr.write(m + '\n') });
+    const c = current();
+    if (!c.listing || !hasBlockfrost(kitHome(), c.network)) return;
+    const view = (await readOverview(c).catch(() => undefined))?.view;
+    await refreshListing(c, ensureWallet().seed, { view, log: (m) => process.stderr.write(m + '\n') });
   };
-  if (config.listing) {
-    setTimeout(() => void listingTick(), 5_000).unref?.();
-    setInterval(() => void listingTick(), 30 * 60_000).unref?.();
-  }
+  if (config.listing) setTimeout(() => void listingTick(), 5_000).unref?.();
+  setInterval(() => void listingTick(), 30 * 60_000).unref?.();
 
   // A purchase takes 2-3 minutes, but many AI apps give up on a tool call after
   // about a minute (Claude reaching a computer's tools: 60 s, seen 5 Nov 2026).
@@ -211,6 +212,17 @@ export const mcpTools = (o: { answerMs?: number } = {}): Tool[] => {
     }
     return { text: JSON.stringify(first, null, 2), isError: first.bought !== undefined && first.of !== undefined && first.bought < first.of };
   };
+  // a Blockfrost key saved on the settings page: start opening (and syncing) the wallet straight away
+  setOnBlockfrost(() => {
+    if (process.env.LUNARDRAW_AGENT_LAZY !== '1') void openPlayer(() => undefined).catch(() => undefined);
+  });
+  // the settings page shows how the wallet is doing (settings.ts)
+  setLive(async () => {
+    if (stage.phase !== 'ready' || !player) return { phase: stage.phase, synced: stage.synced };
+    const { night, dust } = await (await player).balances();
+    return { phase: 'ready', synced: 1, tNight: Number(night) / 1e6, dust: Number(dust) / 1e15 };
+  });
+
   /** Not ready to buy: the answer to give instead (or undefined: go ahead). */
   const notReadyAnswer = () => (farFromReady() ? { text: JSON.stringify({ status: 'not ready to buy yet: nothing was bought', ...notReady() }, null, 2), isError: true } : undefined);
   const v2Player = (tell: (m: string) => void) => ticking(tell, 'opening the wallet', openPlayer(tell)).then((p) => p.v2());
@@ -221,6 +233,35 @@ export const mcpTools = (o: { answerMs?: number } = {}): Tool[] => {
   };
 
   return [
+    {
+      ...toolDef('lunardraw_setup'),
+      run: async () => {
+        const c = current();
+        const home = kitHome();
+        const address = walletAddressOf(c.network, ensureWallet().seed);
+        const key = hasBlockfrost(home, c.network);
+        const syncing = key && stage.phase === 'syncing' ? Math.floor((stage.synced ?? 0) * 100) : undefined;
+        const port = settingsServing.port;
+        const steps = [
+          `1. Blockfrost key: ${key ? 'done' : 'missing (the owner pastes it on the settings page: free at blockfrost.io, a "Midnight Preprod" project)'}`,
+          `2. Test tNIGHT: the wallet's address is ${address}; free tNIGHT from ${FAUCET[c.network]}`,
+          `3. The wallet: ${!key ? 'starts syncing once the key is saved' : stage.phase === 'ready' ? 'synced and ready to play' : syncing !== undefined ? `first sync ${syncing}% (a few hours the first time; keep this app open)` : stage.phase}`,
+          `4. On lunardraw.io: ${c.listing ? `shown as ${c.listing.name} (https://lunardraw.io/agents/)` : 'not shown (the owner can turn it on and pick a name on the settings page)'}`,
+          `5. Spending limits: ${c.limits.perDraw} tNIGHT a draw, ${c.limits.perDay} tNIGHT in any 24 hours`,
+        ];
+        const link = port ? settingsLink(port) : undefined;
+        return {
+          text: [
+            'Starfall agent setup',
+            ...steps,
+            '',
+            link
+              ? `The owner's settings page (open it on the computer this agent runs on; the link works for 2 hours): ${link}\nThere they paste the Blockfrost key, copy the address for the faucet, watch the sync, choose the agent's name on lunardraw.io and set the spending limits. Give them this link as it is; you can't change these settings yourself.`
+              : "The settings page isn't available from this app right now: the owner can run `lunardraw-agent settings` in a terminal on the computer the agent runs on.",
+          ].join('\n'),
+        };
+      },
+    },
     {
       ...toolDef('lunardraw_how_to_play'),
       run: async () => ({
@@ -238,7 +279,7 @@ export const mcpTools = (o: { answerMs?: number } = {}): Tool[] => {
             : [`A game: 7 numbers from 1-35 and a Moonball from 1-20. ${priceText()}.`, 'Entries: QuickPick games or packages, your own numbers, a System (8-12 numbers), a Pick (5 or 6 numbers), and Moonball Sweep.']),
           'Numbers come from Nightcast verifiable randomness; anyone can check every draw.',
           'Prizes and refunds (if a draw is cancelled) are paid to the wallet automatically. Nothing to claim.',
-          `Spending limits set by the owner, across both games: ${current().limits.perDraw} tNIGHT a draw, ${current().limits.perDay} tNIGHT in any 24 hours. They can't be changed from here; the owner sets them ${limitsWhere(current())}.`,
+          `Spending limits set by the owner, across both games: ${current().limits.perDraw} tNIGHT a draw, ${current().limits.perDay} tNIGHT in any 24 hours. They can't be changed from here; the owner sets them ${limitsWhere()}.`,
         ].join('\n'),
       }),
     },

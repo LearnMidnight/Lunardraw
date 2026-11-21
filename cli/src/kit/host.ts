@@ -133,9 +133,19 @@ export const serveHost = (o: {
         return send(res, 200, health);
       }
       if (req.method === 'GET' && url.pathname === '/openapi.json') return send(res, 200, openApi(o.port));
+      // the owner's settings page: its own key, from the link the setup tool or `lunardraw-agent settings` gives (settings.ts)
+      // (only on this computer's own address: not for an agent serving its network, in a container say)
+      if (local && (url.pathname === '/settings' || url.pathname.startsWith('/settings/'))) {
+        const { handleSettings } = await import('./settings.js');
+        if (await handleSettings(req, res, url, { home: o.home })) return;
+      }
       if (req.headers.authorization !== `Bearer ${o.token}`) {
         res.setHeader('www-authenticate', 'Bearer');
         return send(res, 401, { error: 'the key is missing or wrong: send the one in agent-token.secret as "Authorization: Bearer <key>"' });
+      }
+      if (url.pathname === '/api/settings-link' && req.method === 'POST') {
+        const { settingsLink } = await import('./settings.js');
+        return send(res, 200, { link: settingsLink(o.port) });
       }
       if (url.pathname === '/mcp') {
         if (req.method === 'POST') {
@@ -185,6 +195,7 @@ export const serveHost = (o: {
     server.once('error', reject);
     server.listen(o.port, o.host ?? '127.0.0.1', () => {
       server.off('error', reject);
+      void import('./settings.js').then((m) => (m.settingsServing.port = o.port));
       resolve(server);
     });
   });

@@ -65,6 +65,7 @@ await import('@lunardraw/cli/dist/kit-main.js');
 chmodSync(join(ext, 'server', 'index.mjs'), 0o755);
 
 const tools = [
+  ['lunardraw_setup', "Set up your agent: a checklist and a link to its settings page (Blockfrost key, faucet, its name on lunardraw.io, spending limits)"],
   ['lunardraw_how_to_play', 'How Starfall works: rules, prices, prize divisions, syndicates and your spending limits'],
   ['lunardraw_draw_on_sale', 'The draw on sale, its format, the jackpot, open syndicates and the latest results'],
   ['lunardraw_wallet', "Your agent's wallet: address, tNIGHT and DUST, and how far it is from ready"],
@@ -83,11 +84,11 @@ const manifest = {
     "Claude gets tools to see what's on in **Starfall** and to buy games for you from your agent's own wallet, which stays on this computer. Starfall runs on Midnight's Preprod **test** network with tNIGHT, a free test token with no value.",
     '',
     '**Getting started**',
-    '1. Get a free Blockfrost key at blockfrost.io: Add project, network **Midnight Preprod**, copy the Project ID, and paste it into this extension\'s settings.',
-    '2. Ask Claude: *"Set me up for Starfall."* It shows your wallet\'s address and the faucet that sends free tNIGHT.',
-    "3. The first sync of a new wallet takes a few hours; Claude tells you how far along it is. Then ask: *\"What's on in Starfall? Buy me two QuickPick games.\"*",
+    '1. Ask Claude: *"Set me up for Starfall."* It gives you a link to your agent\'s settings page, on your own computer.',
+    "2. On that page: paste a free Blockfrost key (blockfrost.io: Add project, network **Midnight Preprod**), copy your wallet's address into the faucet for free tNIGHT, choose the name your agent shows on lunardraw.io, and set your spending limits.",
+    "3. The first sync of a new wallet takes a few hours; the page and Claude tell you how far along it is. Then ask: *\"What's on in Starfall? Buy me two QuickPick games.\"*",
     '',
-    "Your AI can spend at most 25 tNIGHT a draw and 100 a day unless you change the limits in this extension's settings; it can read them but never change them. Prizes are paid to the wallet automatically.",
+    'Your AI can spend at most 25 tNIGHT a draw and 100 a day unless you change the limits (ask Claude to *"open my Lunardraw settings"*); it can read them but never change them. Prizes are paid to the wallet automatically.',
     '',
     'Also on ChatGPT, Gemini, Cursor, VS Code and more, and on the web or your phone: see lunardraw.io/play-with-ai.',
   ].join('\n'),
@@ -120,7 +121,7 @@ const manifest = {
     blockfrost: {
       type: 'string',
       title: 'Blockfrost project ID (Midnight Preprod)',
-      description: 'Free at blockfrost.io: Add project, choose the network "Midnight Preprod", and copy the Project ID. Leave it empty if you already set up the Lunardraw kit in a terminal.',
+      description: 'Optional: you can paste it on the settings page instead (ask Claude to "set me up for Starfall"). Free at blockfrost.io: Add project, choose the network "Midnight Preprod", and copy the Project ID.',
       sensitive: true,
       required: false,
     },
@@ -128,14 +129,14 @@ const manifest = {
     per_draw: {
       type: 'number',
       title: 'Spending limit: tNIGHT a draw',
-      description: 'The most the agent may spend on one draw. Leave it empty to keep the limit in .lunardraw-agent/config.json (25 unless you changed it).',
+      description: 'Optional: the settings page (ask Claude to "open my Lunardraw settings") is the easier place. A value here is taken up when Claude restarts the extension; the latest change wins, wherever it was made.',
       required: false,
       min: 0,
     },
     per_day: {
       type: 'number',
       title: 'Spending limit: tNIGHT a day',
-      description: 'The most the agent may spend in any 24 hours. Leave it empty to keep the limit in .lunardraw-agent/config.json (100 unless you changed it).',
+      description: 'Optional, like the one above: the settings page is the easier place. A value here is taken up when Claude restarts the extension.',
       required: false,
       min: 0,
     },

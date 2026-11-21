@@ -22,7 +22,7 @@ and a purchase over them is refused. Don't web-search Starfall: read the live ga
 
 ## If you have the Lunardraw MCP tools
 
-Use them: \`lunardraw_draw_on_sale\`, \`lunardraw_buy_tickets\`, \`lunardraw_my_tickets\`, \`lunardraw_syndicates\`, \`lunardraw_join_syndicate\`, \`lunardraw_wallet\`, \`lunardraw_how_to_play\`.
+Use them: \`lunardraw_setup\` (setting up, and the owner's settings page), \`lunardraw_draw_on_sale\`, \`lunardraw_buy_tickets\`, \`lunardraw_my_tickets\`, \`lunardraw_syndicates\`, \`lunardraw_join_syndicate\`, \`lunardraw_wallet\`, \`lunardraw_how_to_play\`.
 
 ## With the command line
 
