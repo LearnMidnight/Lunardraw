@@ -81,6 +81,11 @@ export type StarfallDrawView = {
    */
   unrefunded: bigint[];
   refundedGames: bigint;
+  /**
+   * Who bought: games per refund address (the buyer's wallet, 32 bytes in hex), as the tickets
+   * record it publicly. In the order first seen.
+   */
+  buyers?: { address: string; games: bigint }[];
   /** Starfall v2: the draw's format (numbers 1..range, Moonball 1..moonballs; 1 is none). */
   format?: { range: number; moonballs: number };
   /** Starfall v2: the draw's rung of the ladder (its prize table is that rung's shares). */
@@ -109,8 +114,48 @@ export type SyndicateView = {
 /** Starfall v2: a member's part of a prize kept for a syndicate, not paid yet (with its amount, which may be 0). */
 export type MemberPaymentView = { draw: bigint; id: Uint8Array; payee: number; member: bigint; amount: bigint };
 
-/** A winning ticket's prize: its winning games per division (division 1 first). */
-export type EntitlementView = { id: Uint8Array; drawId: bigint; games: bigint[]; paid: boolean };
+/**
+ * A winning ticket's prize: its winning games per division (division 1 first), and who it's paid
+ * to: up to 3 payees with their shares (basis points; a share of 0 is an empty slot). A payee's
+ * address is its 32 bytes (lo then hi, little-endian); a syndicate's is SYNDICATE_PAYEE_HI with
+ * the syndicate's number in lo.
+ */
+export type EntitlementView = { id: Uint8Array; drawId: bigint; games: bigint[]; paid: boolean; payees?: { lo: bigint; hi: bigint; share: bigint }[] };
+
+/** A Starfall v2 syndicate payee's hi half (its lo is the syndicate's number). */
+export const SYNDICATE_PAYEE_HI = (1n << 128n) - 1n;
+
+const le16 = (v: bigint): Buffer => {
+  const b = Buffer.alloc(16);
+  for (let i = 0; i < 16; i++) b[i] = Number((v >> BigInt(8 * i)) & 0xffn);
+  return b;
+};
+
+/** A payee's address: 32 bytes in hex, or "syndicate:<n>" for a Starfall v2 syndicate. */
+export const payeeAddress = (p: { lo: bigint; hi: bigint }): string =>
+  p.hi === SYNDICATE_PAYEE_HI ? `syndicate:${p.lo}` : Buffer.concat([le16(p.lo), le16(p.hi)]).toString('hex');
+
+/** Who bought in a draw, by refund address, kept while its ticket count stays the same (tickets never change once bought). */
+const buyersSeen = new Map<string, { address: string; games: bigint }[]>();
+const buyersOf = (l: Starfall.Ledger, id: bigint, tickets: bigint): { address: string; games: bigint }[] => {
+  if (tickets === 0n) return [];
+  const first = l.tickets.member(ticketKeyOf(id, 0n)) ? Buffer.from(l.tickets.lookup(ticketKeyOf(id, 0n)).commitment).toString('hex') : '';
+  const key = `${id}:${tickets}:${first}`;
+  const kept = buyersSeen.get(key);
+  if (kept) return kept;
+  const by = new Map<string, bigint>();
+  for (let i = 0n; i < tickets; i++) {
+    const k = ticketKeyOf(id, i);
+    if (!l.tickets.member(k)) continue;
+    const rec = l.tickets.lookup(k);
+    const a = Buffer.from((rec.refundTo as { bytes: Uint8Array }).bytes).toString('hex');
+    by.set(a, (by.get(a) ?? 0n) + rec.games);
+  }
+  const out = [...by].map(([address, games]) => ({ address, games }));
+  for (const k of buyersSeen.keys()) if (k.startsWith(`${id}:`)) buyersSeen.delete(k);
+  buyersSeen.set(key, out);
+  return out;
+};
 
 export type StarfallView = {
   lastDraw: bigint;
@@ -225,9 +270,16 @@ export const starfallViewOf = (l: Starfall.Ledger): StarfallView => ({
       finalShare: d.finalShare,
       unrefunded,
       refundedGames,
+      buyers: buyersOf(l, id, tickets),
     };
   }).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)),
-  entitlements: Array.from(l.entitlements, ([id, e]) => ({ id, drawId: e.drawId, games: [...e.games], paid: e.paid })),
+  entitlements: Array.from(l.entitlements, ([id, e]) => ({
+    id,
+    drawId: e.drawId,
+    games: [...e.games],
+    paid: e.paid,
+    payees: [...e.payees].map((p) => ({ lo: p.lo, hi: p.hi, share: p.share })),
+  })),
 });
 
 /** A ticket as stored: its commitment and its encryption to the settlement key. */

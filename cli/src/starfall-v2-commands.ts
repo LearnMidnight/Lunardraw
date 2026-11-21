@@ -508,6 +508,7 @@ export const starfallV2 = async (argv: string[]): Promise<number> => {
           const me = fromHex(wallet.unshieldedKeystore.getAddress());
           const game = { bytes: fromHex(record.contractAddress) };
           const state = loadV2AgentState(statePath, record.contractAddress);
+          state.address = wallet.unshieldedKeystore.getAddress().toLowerCase();
           saveV2AgentState(statePath, state);
           const log = (m: string) => session.logger.info(`[${name}] ${m}`);
           log(`playing Starfall v2 at ${record.contractAddress} in the ${style} style${opts.rounds ? `, ${opts.rounds} rounds a purchase` : ''}; ${new Set(state.purchases.map((p) => p.draw)).size} draw(s) played so far; state in ${statePath}`);

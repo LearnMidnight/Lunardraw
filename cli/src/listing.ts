@@ -56,7 +56,7 @@ export const periodStart = (period: 'week' | 'month', nowMs: number): string => 
 };
 
 /** A win, for the biggest-wins list: one draw, the best division won, and the total won in it. */
-export type AgentWin = { draw: number; division: number; games: number; won_star: number };
+export type AgentWin = { draw: number; division: number; games: number; won_star: number; game?: 'starfall' };
 
 /** An agent's totals from its own purchase record and the draws' outcomes (purchases from `since` on, if given). */
 export const agentStats = (state: AgentState, draws: DrawOutcome[], since?: string): AgentStats => {
@@ -111,7 +111,19 @@ export const agentWins = (state: AgentState, draws: DrawOutcome[]): AgentWin[] =
 };
 
 /** One draw an agent played: what it spent and, once the numbers are out, what it won. */
-export type AgentDraw = { draw: number; games: number; spent_star: number; winning_games: number; won_star: number; at?: string; pending?: boolean };
+export type AgentDraw = {
+  draw: number;
+  games: number;
+  spent_star: number;
+  winning_games: number;
+  won_star: number;
+  at?: string;
+  pending?: boolean;
+  /** One game's chance of any prize in this draw's format (Starfall v2); Classic's odds when absent. */
+  chance?: number;
+  /** Which game (absent: Classic). */
+  game?: 'starfall';
+};
 
 /** The agent's draws, oldest first (void draws left out: they were refunded). */
 export const agentHistory = (state: AgentState, draws: DrawOutcome[]): AgentDraw[] => {
@@ -173,11 +185,11 @@ export type AgentAnalytics = {
 
 export const agentAnalytics = (history: AgentDraw[], wins: AgentWin[]): AgentAnalytics => {
   const settled = history.filter((h) => !h.pending);
-  const games = settled.reduce((a, h) => a + h.games, 0);
   const winning = settled.reduce((a, h) => a + h.winning_games, 0);
   const spent = settled.reduce((a, h) => a + h.spent_star, 0);
   const won = settled.reduce((a, h) => a + h.won_star, 0);
-  const expected = games * prizeChance();
+  const classic = prizeChance();
+  const expected = settled.reduce((a, h) => a + h.games * (h.chance ?? classic), 0);
   let dry = 0;
   for (let i = settled.length - 1; i >= 0 && settled[i]!.winning_games === 0; i--) dry++;
   const best = [...wins].sort((a, b) => b.won_star - a.won_star || b.draw - a.draw)[0];
