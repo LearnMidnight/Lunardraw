@@ -102,15 +102,17 @@ describe('choosing games in a draw\'s format', () => {
     expect(v2ChoiceOf({ games: 3 })).toEqual({ games: 3 });
     expect(v2ChoiceOf({ numbers: '1 2,3 4 5 6 7', moonball: 4 })).toEqual({ numbers: [1, 2, 3, 4, 5, 6, 7], moonball: 4 });
     expect(v2ChoiceOf({ numbers: [1, 2, 3, 4, 5], pick: 5 })).toEqual({ numbers: [1, 2, 3, 4, 5], pick: true });
-    expect(() => v2ChoiceOf({ package: 'lucky-dip' })).toThrow(/Classic/);
+    expect(() => v2ChoiceOf({ package: 'lucky-dip' })).toThrow(/no QuickPick packages/);
     expect(() => v2ChoiceOf({})).toThrow(/give games/);
     expect(() => v2ChoiceOf({ games: 2, numbers: [1, 2, 3, 4, 5, 6, 7] })).toThrow(/not both/);
     expect(() => v2ChoiceOf({ system: 9, numbers: [1, 2, 3, 4, 5, 6, 7, 8] })).toThrow(/System 9 takes 9/);
     expect(gameOf({}, true)).toBe('starfall');
-    expect(gameOf({ game: 'classic' }, true)).toBe('classic');
-    expect(gameOf({ game: 'classic' }, false)).toBe('classic');
-    expect(() => gameOf({}, false)).toThrow(/only Starfall Classic/);
-    expect(() => gameOf({ game: 'lotto' }, true)).toThrow(/'starfall' or 'classic'/);
+    expect(gameOf({ game: 'Starfall' }, true)).toBe('starfall');
+    // Classic ended with its final draw (27 Nov 2026): asked for by name, it's refused in plain words
+    expect(() => gameOf({ game: 'classic' }, true)).toThrow(/Starfall Classic ended.*nothing was bought/);
+    expect(() => gameOf({ game: 'Classic' }, false)).toThrow(/Starfall Classic ended/);
+    expect(() => gameOf({}, false)).toThrow(/carries no Starfall game/);
+    expect(() => gameOf({ game: 'lotto' }, true)).toThrow(/must be 'starfall'/);
     expect(formatText(f20)).toBe('7 numbers from 1-20, no Moonball');
     expect(formatText(f35)).toBe('7 numbers from 1-35 and a Moonball from 1-20');
   });

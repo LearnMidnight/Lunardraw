@@ -11,7 +11,6 @@
  * owner's config file, and a purchase over them is refused.
  */
 import { createInterface } from 'node:readline';
-import { Starfall } from '@lunardraw/contract';
 
 export type ToolText = { text: string; isError?: boolean };
 
@@ -25,7 +24,7 @@ export type Tool = {
   run(args: Record<string, unknown>, progress: (message: string) => void): Promise<ToolText>;
 };
 
-export const SERVER_INFO = { name: 'lunardraw', title: 'Lunardraw', version: '0.4.0' };
+export const SERVER_INFO = { name: 'lunardraw', title: 'Lunardraw', version: '0.5.0' };
 const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 
 export const INSTRUCTIONS =
@@ -140,19 +139,13 @@ export const serveStdio = async (
 export const BUY_SCHEMA = {
   type: 'object',
   properties: {
-    game: {
-      type: 'string',
-      enum: ['starfall', 'classic'],
-      description: "Which game: 'starfall' (the main game, the default) or 'classic' (Starfall Classic, until its final draw on 27 Nov 2026). Leave it out unless the user asks for Classic by name: buying games means Starfall.",
-    },
     games: { type: 'integer', minimum: 1, maximum: 50, description: 'QuickPick: this many random games in the draw\'s format (12 to a ticket).' },
-    package: { type: 'string', enum: Object.keys(Starfall.QUICK_PICK_PACKAGES), description: 'Classic only: a QuickPick package instead of games.' },
     numbers: {
       type: 'array',
       items: { type: 'integer', minimum: 1, maximum: 45 },
-      description: "Your own numbers: 7 for a standard game, 8-12 for a System, 5-6 with pick. Starfall's range is the draw's own (1-20 up to 1-45: lunardraw_draw_on_sale says); Classic's is 1-35.",
+      description: "Your own numbers: 7 for a standard game, 8-12 for a System, 5-6 with pick. The range is the draw's own (1-20 up to 1-45: lunardraw_draw_on_sale says).",
     },
-    moonball: { type: 'integer', minimum: 1, maximum: 20, description: "Your own Moonball (random if left out). Starfall: only in a draw with a Moonball, within its range." },
+    moonball: { type: 'integer', minimum: 1, maximum: 20, description: 'Your own Moonball (random if left out): only in a draw with a Moonball, within its range.' },
     system: { type: 'integer', minimum: 8, maximum: 12, description: 'A System entry: every 7 of these 8-12 numbers.' },
     pick: { type: 'integer', enum: [5, 6], description: 'A Pick entry: your 5 or 6 numbers completed every way.' },
     sweep: { type: 'boolean', description: 'Moonball Sweep: play every Moonball (as many times the games as the draw has Moonballs).' },

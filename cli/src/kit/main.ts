@@ -36,15 +36,13 @@ export const KIT_USAGE = `lunardraw-agent: play Starfall, Lunardraw's lottery on
   lunardraw-agent wallet                             tNIGHT and DUST (opens the wallet: see below)
   lunardraw-agent buy [--games <n> | --numbers "<7 numbers>" [--moonball <n>]
                       | --system <8-12> [--numbers ...] | --pick <5|6> [--numbers ...]] [--sweep] [--yes]
-                      [--game classic [--package <name>]]
-                                                     Starfall, in the draw's own format; --game classic for
-                                                     Starfall Classic's final draw (27 Nov 2026)
+                                                     buy Starfall games, in the draw's own format
   lunardraw-agent syndicates                         the syndicates taking members in the draw on sale
   lunardraw-agent join --syndicate <n> [--shares <n>]
                                                      buy shares in one: prizes are shared by shares
   lunardraw-agent tickets                            what this agent bought and how each draw went
   lunardraw-agent play [--style mix|quickpick|lucky|moonhit|system] [--games <n>] [--numbers ... --moonball <n>]
-                       [--game classic]              keep playing every draw, within the limits
+                                                     keep playing every draw, within the limits
   lunardraw-agent settings                           your agent's settings page, in your browser: its name on
                                                      lunardraw.io, spending limits, Blockfrost key, wallet and sync
   lunardraw-agent limits [--per-draw <tNIGHT>] [--per-day <tNIGHT>]
@@ -291,7 +289,8 @@ export const kit = async (argv: string[]): Promise<number> => {
           const { checkDeployment, outdatedText } = await import('./freshness.js');
           const { readStarfallRecord } = await import('../starfall.js');
           useHome(config);
-          const f = await checkDeployment(readStarfallRecord(config.network).contractAddress, config.network);
+          const { hasKitV2, readKitV2Record } = await import('./player-v2.js');
+          const f = await checkDeployment((hasKitV2(config.network) ? readKitV2Record(config.network) : readStarfallRecord(config.network)).contractAddress, config.network);
           if (f.state === 'outdated') {
             line(false, 'this kit plays an old Starfall contract');
             fix.push(outdatedText(f).replace(/^.*?so nothing was bought\. /, ''));
@@ -417,7 +416,7 @@ export const kit = async (argv: string[]): Promise<number> => {
       if (overview && !(v2 && overview.ended)) {
         const s = overview.onSale;
         const left = s ? (s.minutesLeft < 1 ? 'closing now' : `in ${s.minutesLeft} min`) : '';
-        if (v2) say('\nStarfall Classic (buy with --game classic):');
+        if (v2) say('\nStarfall Classic (no longer sold):');
         say(
           s
             ? `Draw ${s.draw} is on sale: closes at ${clock(s.salesClose)} (${left}), ${s.tickets} ticket(s) so far, jackpot about ${whole(s.jackpotEstimate)}.`
@@ -457,16 +456,15 @@ export const kit = async (argv: string[]): Promise<number> => {
       const { config, seed } = setup();
       const { buyToolArgs } = await import('./mcp.js');
       const { gameOf, hasKitV2, v2ChoiceOf } = await import('./player-v2.js');
-      const game = gameOf({ game: values.game }, hasKitV2(config.network));
-      const args = buyToolArgs({ ...values, game });
+      gameOf({ game: values.game }, hasKitV2(config.network)); // Starfall; --game classic is refused by name (it ended on 27 Nov 2026)
+      const args = buyToolArgs({ ...values, game: undefined });
       // check the choice before anything slow
-      const entries = game === 'classic' ? (await import('../starfall-commands.js')).buyEntries(values) : undefined;
-      const choice = game === 'starfall' ? v2ChoiceOf(args) : undefined;
+      const choice = v2ChoiceOf(args);
       type Done = { draw: number; bought: number; of: number; games: number; cost: string; tickets: string[]; payTo: string; message?: string; format?: string };
       const report = (done: Done) => {
         if (values.json) return json(done), done.bought === done.of ? 0 : 1;
         if (done.bought) {
-          say(`Bought ${done.bought} ticket(s), ${done.games} game(s), for ${game === 'classic' ? 'Starfall Classic ' : 'Starfall '}draw ${done.draw}${done.format ? ` (${done.format})` : ''} for ${done.cost}. Winnings are paid automatically to ${done.payTo}.`);
+          say(`Bought ${done.bought} ticket(s), ${done.games} game(s), for Starfall draw ${done.draw}${done.format ? ` (${done.format})` : ''} for ${done.cost}. Winnings are paid automatically to ${done.payTo}.`);
           done.tickets.forEach((t, i) => say(`  ticket ${i + 1}: ${t}`));
         }
         if (done.message) say(`Stopped after ${done.bought} of ${done.of} ticket(s): ${done.message}`);
@@ -488,10 +486,16 @@ export const kit = async (argv: string[]): Promise<number> => {
         return report(answer as Done);
       }
       const { readOverview, withPlayer } = await import('./player.js');
-      if (game === 'classic' && !(await readOverview(config)).overview.onSale) throw new Error('no Starfall Classic draw is on sale right now');
+      {
+        // still the current Starfall contract? (freshness.ts) An old kit finds nothing on sale and would only confuse.
+        const { checkDeployment, outdatedText } = await import('./freshness.js');
+        const { readKitV2Record } = await import('./player-v2.js');
+        const f = await checkDeployment(readKitV2Record(config.network).contractAddress, config.network);
+        if (f.state === 'outdated') throw new Error(outdatedText(f));
+      }
       return withPlayer(config, seed, async (p) => {
         const log = (m: string) => p.session.logger.info(m);
-        const outcome: Done = game === 'classic' ? await p.buy(entries!, log) : await (await p.v2()).buy(choice!, log);
+        const outcome: Done = await (await p.v2()).buy(choice, log);
         if (outcome.bought && config.listing) {
           const { refreshListing } = await import('./directory.js');
           await refreshListing(config, seed, { view: (await readOverview(config).catch(() => undefined))?.view, log: (m) => process.stderr.write(m + '\n') });
@@ -503,7 +507,7 @@ export const kit = async (argv: string[]): Promise<number> => {
     case 'syndicates': {
       const { config } = setup();
       const { hasKitV2, openSyndicatesOf } = await import('./player-v2.js');
-      if (!hasKitV2(config.network)) throw new Error('this kit carries only Starfall Classic, which has no syndicates: update it to play Starfall');
+      if (!hasKitV2(config.network)) throw new Error('this kit carries no Starfall game for this network: update it (npm install -g @lunardraw/agent)');
       const { readOverviewV2 } = await import('./v2-chain.js');
       const { overview, l } = await readOverviewV2(config);
       const list = openSyndicatesOf(l, overview.onSale ? BigInt(overview.onSale.draw) : undefined, Date.now() / 1000);
@@ -599,55 +603,28 @@ export const kit = async (argv: string[]): Promise<number> => {
       }
       const p = kitPaths(kitHome(), config.network);
       const v2mod = await import('./player-v2.js');
-      if (v2mod.gameOf({ game: values.game }, v2mod.hasKitV2(config.network)) === 'starfall') {
-        // Starfall (v2): the house agents' player, in the draw's own format, proved by Lunardraw's prover
-        const { v2Prover } = await import('./v2-chain.js');
-        const { starfallV2 } = await import('../starfall-v2-commands.js');
-        const prover = v2Prover(config.prover);
-        process.env.LUNARDRAW_STARFALL_V2_OUT = v2mod.kitV2Dir(config.network);
-        const lucky = values.numbers !== undefined;
-        const style = lucky ? 'lucky' : (values.style ?? 'mix');
-        if (style === 'lucky' && !lucky) throw new Error('--style lucky needs --numbers "<7 numbers>" [--moonball <n>]');
-        const v2args = [
-          'agent',
-          '--network', config.network,
-          '--wallet', p.wallet,
-          '--name', 'agent',
-          '--state', v2mod.kitV2StatePath(p.home),
-          '--record', v2mod.kitV2RecordPath(config.network),
-          '--style', style,
-          // one draw a day: the tighter of the two limits is the most a draw may take
-          '--budget', String(Math.min(config.limits.perDraw, config.limits.perDay)),
-          '--prover', prover,
-          ...(values.games ? ['--games', values.games] : []),
-          ...(lucky ? ['--lines', `${values.numbers!.split(/[\s,]+/).filter(Boolean).join(',')}+${values.moonball ?? 1}`] : []),
-        ];
-        if (config.listing) {
-          const { refreshListing } = await import('./directory.js');
-          const { readOverview } = await import('./player.js');
-          const seed = ensureWallet().seed;
-          const tick = async () => refreshListing(config, seed, { view: (await readOverview(config).catch(() => undefined))?.view });
-          void tick();
-          setInterval(() => void tick(), 30 * 60_000).unref();
-        }
-        return starfallV2(v2args);
-      }
-      const { starfall } = await import('../starfall-commands.js');
-      const local = /^local:(\d+)$/.exec(config.prover);
-      if (local) (await import('./player.js')).requireLocalProvingKey();
-      const args = [
+      v2mod.gameOf({ game: values.game }, v2mod.hasKitV2(config.network)); // Starfall; --game classic is refused by name (it ended on 27 Nov 2026)
+      // Starfall (v2): the house agents' player, in the draw's own format, proved by Lunardraw's prover
+      const { v2Prover } = await import('./v2-chain.js');
+      const { starfallV2 } = await import('../starfall-v2-commands.js');
+      const prover = v2Prover(config.prover);
+      process.env.LUNARDRAW_STARFALL_V2_OUT = v2mod.kitV2Dir(config.network);
+      const lucky = values.numbers !== undefined;
+      const style = lucky ? 'lucky' : (values.style ?? 'mix');
+      if (style === 'lucky' && !lucky) throw new Error('--style lucky needs --numbers "<7 numbers>" [--moonball <n>]');
+      const v2args = [
         'agent',
         '--network', config.network,
         '--wallet', p.wallet,
         '--name', 'agent',
-        '--state', p.state,
-        '--style', values.style ?? 'mix',
-        '--budget', String(config.limits.perDraw),
-        '--daily-limit', String(config.limits.perDay),
-        ...(local ? ['--proof-server-port', local[1]] : ['--prover', config.prover]),
+        '--state', v2mod.kitV2StatePath(p.home),
+        '--record', v2mod.kitV2RecordPath(config.network),
+        '--style', style,
+        // one draw a day: the tighter of the two limits is the most a draw may take
+        '--budget', String(Math.min(config.limits.perDraw, config.limits.perDay)),
+        '--prover', prover,
         ...(values.games ? ['--games', values.games] : []),
-        ...(values.numbers ? ['--numbers', values.numbers] : []),
-        ...(values.moonball ? ['--moonball', values.moonball] : []),
+        ...(lucky ? ['--lines', `${values.numbers!.split(/[\s,]+/).filter(Boolean).join(',')}+${values.moonball ?? 1}`] : []),
       ];
       if (config.listing) {
         const { refreshListing } = await import('./directory.js');
@@ -657,7 +634,7 @@ export const kit = async (argv: string[]): Promise<number> => {
         void tick();
         setInterval(() => void tick(), 30 * 60_000).unref();
       }
-      return starfall(args);
+      return starfallV2(v2args);
     }
 
     case 'list': {
