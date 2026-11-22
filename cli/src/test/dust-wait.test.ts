@@ -111,14 +111,41 @@ describe('quietWatch', () => {
       void w.quiet.then(() => (resolved = true));
       for (let i = 0; i < 40; i++) {
         await vi.advanceTimersByTimeAsync(30_000);
-        w.session.logger.info('Syncing: dust 99.9%');
+        w.session.logger.info(`Syncing: dust 99.9% (${2046000 + i}/2046121)`);
       }
       expect(fired).toEqual([]);
-      expect(lines[0]).toBe('> Syncing: dust 99.9%');
+      expect(lines[0]).toBe('> Syncing: dust 99.9% (2046000/2046121)');
       expect(w.session.hello()).toBe('session');
       await vi.advanceTimersByTimeAsync(15 * 60_000);
       expect(fired).toEqual([15]);
       expect(resolved).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('fires when the wallet keeps logging the same sync line (its sync stopped moving)', async () => {
+    vi.useFakeTimers();
+    try {
+      const { s, lines } = session();
+      const fired: number[] = [];
+      const w = quietWatch(s, 15, (m) => fired.push(m));
+      w.session.logger.info('Syncing: shielded done, unshielded done, dust 99.9% (2046066/2046121)');
+      // orbit, 22 Nov: the same line every 10 minutes, with other news between that isn't the sync
+      for (let i = 0; i < 2; i++) {
+        await vi.advanceTimersByTimeAsync(10 * 60_000);
+        w.session.logger.info('Syncing: shielded done, unshielded done, dust 99.9% (2046066/2046121)');
+      }
+      expect(fired).toEqual([15]);
+      expect(lines).toHaveLength(3);
+      // a line that moves counts again
+      const v = quietWatch(s, 15, (m) => fired.push(m));
+      v.session.logger.info('Syncing: dust 99.9% (1/2)');
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      v.session.logger.info('Syncing: dust 100.0% (2/2)');
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(fired).toEqual([15]);
+      v.cancel();
     } finally {
       vi.useRealTimers();
     }
