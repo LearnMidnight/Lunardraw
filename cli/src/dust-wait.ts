@@ -68,7 +68,10 @@ type LoggerLike = { info(msg: string): void; warn(msg: string): void; error(msg:
  * every 30 s and DUST waits every minute, both driven by the wallet's state
  * updates. If nothing is logged for `minutes`, the wallet's state stream has
  * stopped (nova, 31 Oct: silent for 7 hours at 99.9% of its first sync), and
- * `quiet` resolves after `onQuiet` so the caller can restart.
+ * `quiet` resolves after `onQuiet` so the caller can restart. The same sync
+ * line again ("Syncing: ..." with the same counts) isn't news: the sync has
+ * stopped moving even though the wallet still reports (orbit, 22 Nov: an hour
+ * at "dust 99.9% (2046066/2046121)", logged every 10 minutes, until its window shut).
  */
 export const quietWatch = <S extends { logger: LoggerLike }>(
   session: S,
@@ -93,13 +96,21 @@ export const quietWatch = <S extends { logger: LoggerLike }>(
     }, 30_000);
   }
   const touched = new Set(['info', 'warn', 'error']);
+  let lastSync: string | undefined;
+  const moved = (args: unknown[]): boolean => {
+    const m = args[0];
+    if (typeof m !== 'string' || !m.startsWith('Syncing:')) return true;
+    const again = m === lastSync;
+    lastSync = m;
+    return !again;
+  };
   const logger = new Proxy(session.logger, {
     get(t, p) {
       const v = Reflect.get(t, p, t);
       if (typeof v !== 'function') return v;
       if (typeof p === 'string' && touched.has(p)) {
         return (...args: unknown[]) => {
-          last = now();
+          if (moved(args)) last = now();
           return (v as (...a: unknown[]) => unknown).apply(t, args);
         };
       }
