@@ -6,7 +6,7 @@ Let an AI agent play **Starfall**, [Lunardraw](https://lunardraw.io)'s lottery o
 
 - **A game**: 7 numbers in the draw's own format, for 1.3 tNIGHT. The format grows with sales, from 7 of 1–20 with no Moonball up to 7 of 1–45 with a Moonball from 1–20 (`lunardraw-agent status` shows the draw on sale's). The jackpot is fixed before a draw sells. A draw closes every day at 20:00 Brisbane time (10:00 UTC) on Preprod; the numbers come from [Nightcast](https://github.com/LearnMidnight/Nightcast) verifiable randomness, and anyone can check every draw.
 - **Syndicates**: join a group that buys many games together; any prize is shared by shares (`lunardraw-agent syndicates`, `lunardraw-agent join`).
-- **Starfall Classic** (7 of 1–35 and a Moonball of 1–20, the first game) ends with its final draw on 27 Nov 2026, whose jackpot must be won: add `--game classic` to play it.
+- **Starfall Classic** (7 of 1–35 and a Moonball of 1–20, the first game) ended with its final draw on 27 Nov 2026. The kit no longer buys it; `lunardraw-agent tickets` still shows what your agent played and won in it.
 - **Nothing to claim.** Prizes, and refunds if a draw is cancelled, are paid to the wallet automatically.
 - **No proof server needed.** Ticket purchases are proved by Lunardraw's hosted prover (it sees the ticket being bought, never the draw), and the wallet proves its own fees on your machine.
 - **One settings page** for the owner: ask your AI *"Open my Lunardraw settings"* (or run `lunardraw-agent settings`) and a page opens in your browser, on your own computer: paste the Blockfrost key, copy the wallet's address for the faucet, watch the first sync, choose the name your agent shows on [lunardraw.io](https://lunardraw.io/agents/) (or keep it off), and set the spending limits.
@@ -48,7 +48,6 @@ lunardraw-agent syndicates                 # the syndicates taking members in th
 lunardraw-agent join --syndicate 4 --shares 2
 lunardraw-agent tickets                    # what it bought, and how each draw went
 lunardraw-agent play --style mix           # keep playing every draw, within the limits
-lunardraw-agent buy --game classic --package starter          # Starfall Classic's final draw
 ```
 
 A purchase takes 2–3 minutes. If another purchase lands at the same moment and takes its ticket number, the kit builds it again by itself.
@@ -109,9 +108,9 @@ The tools:
 |---|---|
 | `lunardraw_setup` | A setup checklist and a link to the owner's settings page (on the computer the agent runs on) |
 | `lunardraw_how_to_play` | The rules, prices, prize divisions, syndicates and the owner's limits |
-| `lunardraw_draw_on_sale` | The draw on sale, its format, the jackpot, open syndicates and the latest results; Classic's final draw while it's on (no wallet needed) |
+| `lunardraw_draw_on_sale` | The draw on sale, its format, the jackpot, open syndicates and the latest results (no wallet needed) |
 | `lunardraw_wallet` | The wallet's address, tNIGHT and DUST |
-| `lunardraw_buy_tickets` | Buys QuickPick games or a chosen entry for the draw on sale (`game: "classic"` for Classic), within the limits (answers within 45 seconds; the purchase takes 2–3 minutes) |
+| `lunardraw_buy_tickets` | Buys QuickPick games or a chosen entry for the draw on sale, within the limits (answers within 45 seconds; the purchase takes 2–3 minutes) |
 | `lunardraw_my_tickets` | Every ticket and syndicate share bought, with each draw's result and prize |
 | `lunardraw_syndicates` | The syndicates still taking members in the draw on sale (no wallet needed) |
 | `lunardraw_join_syndicate` | Buys shares in a syndicate, within the limits |
@@ -127,7 +126,7 @@ Everything lives in `~/.lunardraw-agent` (or `LUNARDRAW_AGENT_HOME`):
 | `config.json` | `network`, `remote` (the web and phone link on or off), `port` (the local address, 6338), `prover` (`hosted`, a prover's address, or `local:<port>` for your own proof server: Starfall Classic only, and it needs the contract's proving key, so run the kit from a [Lunardraw checkout](https://github.com/LearnMidnight/Lunardraw)), `limits` (`perDraw`, `perDay` in tNIGHT), optional `payTo` (where winnings go) |
 | `wallet.secret` | The wallet seed (mode 600). **Anyone with it can spend from the wallet.** Back it up. |
 | `blockfrost-preprod.secret` | The Blockfrost project id |
-| `state.json`, `state-v2.json` | What the agent bought in Starfall Classic, and in Starfall (with its syndicate shares) |
+| `state.json`, `state-v2.json` | What the agent bought in Starfall Classic (ended 27 Nov 2026), and in Starfall (with its syndicate shares) |
 | `wallet-state/` | The wallet's saved sync |
 | `agent-token.secret` | The key for the agent's local address (mode 600) |
 | `relay-link.secret` | The private address's secret, for AIs on the web or a phone (mode 600) |

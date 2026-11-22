@@ -30,8 +30,8 @@ export const TOOL_DEFS: ToolDef[] = [
     name: 'lunardraw_draw_on_sale',
     title: 'Draw on sale',
     description:
-      "What's on in Starfall (Lunardraw's lottery) right now: the draw on sale (number, closing time, this draw's format, tickets sold, the jackpot), the game price, open syndicates and the last few results; " +
-      "and Starfall Classic's final draw while it's on (until 27 Nov 2026). Use it for any question about Starfall's current draw or results. Reads the chain; no wallet needed.",
+      "What's on in Starfall (Lunardraw's lottery) right now: the draw on sale (number, closing time, this draw's format, tickets sold, the jackpot), the game price, open syndicates and the last few results. " +
+      "Use it for any question about Starfall's current draw or results. Reads the chain; no wallet needed.",
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, openWorldHint: true },
   },
@@ -49,7 +49,7 @@ export const TOOL_DEFS: ToolDef[] = [
       "Buy Starfall tickets for the draw on sale, paid from this agent's own wallet (tNIGHT test tokens, no real value). " +
       'Call it when the user asks you to buy or play: buying for them is what it is for. Give games for QuickPick, or numbers ' +
       "(with moonball, system or pick) for a chosen entry, in the draw's own format (lunardraw_draw_on_sale says it: 7 numbers from 1-20 up to 1-45, " +
-      "with a Moonball only on bigger draws); sweep plays every Moonball. game 'classic' buys in Starfall Classic's final draw instead, only when the user asks for Classic by name (otherwise leave game out). Refused if it would pass the " +
+      "with a Moonball only on bigger draws); sweep plays every Moonball. Refused if it would pass the " +
       "owner's spending limits. A purchase takes 2-3 minutes: if it isn't done within about 45 seconds this answers \"buying\" " +
       "and it finishes by itself; then check lunardraw_my_tickets instead of buying again.",
     inputSchema: BUY_SCHEMA,

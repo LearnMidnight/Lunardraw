@@ -1,8 +1,8 @@
 /**
  * Whether this kit still plays the current Starfall contract.
  *
- * The kit reads the contract's address from the deployment record packed inside
- * it (deployments/starfall-<network>.json). When Starfall is deployed again, the
+ * The kit reads the contract's address from the game record packed inside
+ * it (game-v2/<network>/record.json). When Starfall is deployed again, the
  * repository's record moves to the new contract, but an installed kit keeps the
  * old one until its owner updates it, and there it finds nothing on sale.
  * So the kit compares its record with the published one and, if they differ,
@@ -10,9 +10,13 @@
  * an address fetched from the internet must not decide where a wallet's money goes.
  */
 
-/** The published record: the repository's main branch. LUNARDRAW_DEPLOYMENT_URL overrides it (tests). */
+/**
+ * The published record: the Starfall game the kit on the repository's main branch carries
+ * (cli/game-v2/<network>/record.json; until kit 0.5.0 this watched Starfall Classic's record, which
+ * never moves again). LUNARDRAW_DEPLOYMENT_URL overrides it (tests).
+ */
 export const recordUrl = (network: string, env: NodeJS.ProcessEnv = process.env): string =>
-  env.LUNARDRAW_DEPLOYMENT_URL || `https://raw.githubusercontent.com/LearnMidnight/Lunardraw/main/deployments/starfall-${network}.json`;
+  env.LUNARDRAW_DEPLOYMENT_URL || `https://raw.githubusercontent.com/LearnMidnight/Lunardraw/main/cli/game-v2/${network}/record.json`;
 
 export type Freshness =
   | { state: 'current'; contract: string }

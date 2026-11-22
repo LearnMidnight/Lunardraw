@@ -15,7 +15,7 @@ A draw closes every day at 20:00 Brisbane time (10:00 UTC). A game is 7 numbers 
 from 7 of 1-20 with no Moonball up to 7 of 1-45 with a Moonball from 1-20 (\`status\` gives the draw on sale's format, the price, 1.3 tNIGHT, and when it closes).
 The jackpot is fixed before the draw sells. Syndicates buy many games together and share any prize by shares.
 Prizes and refunds are paid to the wallet automatically: there is nothing to claim.
-Starfall Classic (7 of 1-35 + a Moonball of 1-20) ends with its final draw on 27 Nov 2026: add \`--game classic\` (or \`"game": "classic"\`) to play it, but only when your user asks for Classic by name. "Buy games" means Starfall.
+Starfall Classic, the first Starfall, ended with its final draw on 27 Nov 2026 and can no longer be bought; \`tickets\` still shows what was played and won in it.
 
 The owner's spending limits (per draw and per day) are in their config.json or the app's settings. You can read them but can't change them,
 and a purchase over them is refused. Don't web-search Starfall: read the live game with the commands below.
@@ -34,7 +34,6 @@ Every command takes \`--json\`: standard output is then only the JSON answer.
 - A System entry (every 7 of 8-12 numbers): \`lunardraw-agent buy --system 8 --numbers "1 3 5 7 9 11 13 15" --json\`
 - Every Moonball (in a draw with one): add \`--sweep\`
 - Syndicates: \`lunardraw-agent syndicates --json\`, then \`lunardraw-agent join --syndicate 4 --shares 2 --json\`
-- Starfall Classic's final draw: \`lunardraw-agent buy --game classic --package starter --json\` (single, starter, mini, regular, super, mega, jumbo, maxi)
 - Tickets and results ("did I win?"): \`lunardraw-agent tickets --json\`
 - Wallet (tNIGHT, DUST): \`lunardraw-agent wallet --json\`
 - The limits: \`lunardraw-agent limits\`
@@ -47,7 +46,7 @@ When the agent is running (\`lunardraw-agent serve\`, or an AI app connected to 
 http://127.0.0.1:6338. Send the key in ~/.lunardraw-agent/agent-token.secret as \`Authorization: Bearer <key>\`.
 
 - \`GET /api/draw\`, \`GET /api/tickets\`, \`GET /api/wallet\`, \`GET /api/rules\`, \`GET /api/syndicates\`
-- \`POST /api/buy\` with JSON like \`{"games": 2}\` or \`{"numbers": [3, 7, 9, 12, 14, 17, 20]}\` (\`"game": "classic"\` for Classic).
+- \`POST /api/buy\` with JSON like \`{"games": 2}\` or \`{"numbers": [3, 7, 9, 12, 14, 17, 20]}\`.
 - \`POST /api/join\` with \`{"syndicate": 4, "shares": 2}\`.
   It answers within 45 seconds; \`{"status": "buying"}\` means it finishes by itself: check \`/api/tickets\`.
 - \`POST /mcp\`: the same tools over MCP (Streamable HTTP).

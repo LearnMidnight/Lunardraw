@@ -93,21 +93,27 @@ export const ledgerFormat = (l: any, drawId: bigint): V2Format | undefined => {
   return { range: Number(r.format.range), moonballs: Number(r.format.moonballs), pick5: BigInt(r.format.pick5) };
 };
 
-/** Which game a buy is for: Starfall (v2) unless `classic` is asked for, or the kit carries no v2. */
-export const gameOf = (a: Record<string, unknown>, hasV2: boolean): 'starfall' | 'classic' => {
+/** What Classic's old choice answers now. */
+export const CLASSIC_ENDED = 'Starfall Classic ended with its final draw on 27 Nov 2026: nothing was bought. Starfall is the game in play (leave game out).';
+
+/**
+ * Which game a buy is for: Starfall. `classic` (the kit's second game until 0.5.0, which ended with its final
+ * draw on 27 Nov 2026) is refused by name, so an old habit or script gets a plain answer.
+ */
+export const gameOf = (a: Record<string, unknown>, hasV2: boolean): 'starfall' => {
   const g = a.game === undefined || a.game === null || a.game === '' ? 'starfall' : String(a.game).toLowerCase();
-  if (g !== 'starfall' && g !== 'classic' && g !== 'v2' && g !== 'starfall-v2') throw new Error(`game must be 'starfall' or 'classic', not ${String(a.game)}`);
-  if (g === 'classic') return 'classic';
-  if (!hasV2) throw new Error("this kit carries only Starfall Classic: update it (npm install -g @lunardraw/agent) to play Starfall");
+  if (g === 'classic') throw new Error(CLASSIC_ENDED);
+  if (g !== 'starfall' && g !== 'v2' && g !== 'starfall-v2') throw new Error(`game must be 'starfall', not ${String(a.game)}`);
+  if (!hasV2) throw new Error('this kit carries no Starfall game for this network: update it (npm install -g @lunardraw/agent)');
   return 'starfall';
 };
 
 /** What to buy in v2, as the buy tool takes it. */
 export type V2Choice = { games?: number; numbers?: number[]; moonball?: number; pick?: boolean; sweep?: boolean };
 
-/** The buy tool's arguments as a v2 choice (`package` is Classic's). */
+/** The buy tool's arguments as a v2 choice (`package` was Classic's). */
 export const v2ChoiceOf = (a: Record<string, unknown>): V2Choice => {
-  if (a.package !== undefined) throw new Error('QuickPick packages are Starfall Classic\'s: for Starfall, give games (QuickPick games) or numbers');
+  if (a.package !== undefined) throw new Error('Starfall has no QuickPick packages: give games (QuickPick games) or numbers');
   const int = (v: unknown, what: string): number | undefined => {
     if (v === undefined || v === null || v === '') return undefined;
     const n = Number(v);

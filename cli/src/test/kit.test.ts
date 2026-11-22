@@ -205,7 +205,7 @@ describe('the agent kit', () => {
     expect(Starfall.gamesOf(buyEntries(buyArgs({ system: 9 }))[0])).toBe(36);
     expect(Starfall.gamesOf(buyEntries(buyArgs({ games: 1, sweep: true }))[0])).toBe(20);
     expect(() => buyEntries(buyArgs({ games: 2, numbers: [1, 2, 3, 4, 5, 6, 7] }))).toThrow(/not both/);
-    expect(Object.keys((BUY_SCHEMA as { properties: object }).properties)).toEqual(['game', 'games', 'package', 'numbers', 'moonball', 'system', 'pick', 'sweep']);
+    expect(Object.keys((BUY_SCHEMA as { properties: object }).properties)).toEqual(['games', 'numbers', 'moonball', 'system', 'pick', 'sweep']);
   });
 
   it('speaks MCP: initialize, list and call tools, report progress, refuse what it does not know', async () => {
@@ -549,7 +549,7 @@ describe('an old Starfall contract', () => {
     expect((await checkDeployment(OLD, 'preprod', { fetchFn: answering({}, 404) })).state).toBe('unknown');
     expect((await checkDeployment(OLD, 'preprod', { fetchFn: answering({ network: 'preprod', contractAddress: 'nope' }) })).state).toBe('unknown');
     expect((await checkDeployment(OLD, 'preprod', { fetchFn: answering({ network: 'preview', contractAddress: NEW }) })).state).toBe('unknown');
-    expect(recordUrl('preprod', {})).toBe('https://raw.githubusercontent.com/LearnMidnight/Lunardraw/main/deployments/starfall-preprod.json');
+    expect(recordUrl('preprod', {})).toBe('https://raw.githubusercontent.com/LearnMidnight/Lunardraw/main/cli/game-v2/preprod/record.json');
   });
   it('is checked at most once an hour (an unknown answer again after 5 minutes)', async () => {
     let calls = 0;
