@@ -9,7 +9,11 @@
  *     are they alive, still finishing passes, failing transactions, synced,
  *     and how much DUST and tNIGHT their wallets hold;
  *   - the site feed: draws close to a deadline (the reveal, the oracle's
- *     answer, settlement) and draws that were voided;
+ *     answer, settlement) and draws that were voided; the same for each other
+ *     game run beside it (`--game`, e.g. Starfall v2), with its own feed,
+ *     keeper and oracle;
+ *   - units that run for a window and then stop (`--runs`, the house agents):
+ *     only whether the last run failed;
  *   - free disk space.
  * It emails new problems once they've been seen on two runs in a row (so a
  * service restarting itself doesn't page anyone), reminds every few hours
@@ -25,8 +29,10 @@ import { type NightcastInput, nightcastAlerts, nightcastDigest } from './monitor
 export type Unit = { name: string; active: string; sub: string; restarts: number };
 
 export type ServiceInput = {
-  /** keeper or oracle */
+  /** keeper or oracle (Classic), or a game's `<id>-keeper` / `<id>-oracle` */
   service: string;
+  /** How alerts name it ("Starfall v2's keeper"); Classic's read "The keeper" / "The oracle". */
+  title?: string;
   unit: string;
   path: string;
   status?: ServiceStatus;
@@ -34,10 +40,29 @@ export type ServiceInput = {
   error?: string;
 };
 
+/** A game run beside Classic (`--game`): its feed and the units behind it, for its draw alerts. */
+export type GameInput = {
+  /** Short id, the prefix of its alert keys (`v2:reveal:3`). */
+  id: string;
+  /** How alerts and the summary name it ("Starfall v2"). */
+  title: string;
+  feedPath: string;
+  feed?: StarfallFeed;
+  feedError?: string;
+  /** The keeper's service id (as in `services`) and unit, and the oracle's unit. */
+  keeperService: string;
+  keeperUnit: string;
+  oracleUnit: string;
+};
+
 export type Inputs = {
   now: number;
   units: Unit[];
+  /** Units that run for a window and stop (house agents): reported only when their last run failed. */
+  runs?: Unit[];
   services: ServiceInput[];
+  /** Other games' feeds (`--game`); Classic's is `feed`. */
+  games?: GameInput[];
   feed?: StarfallFeed;
   feedPath?: string;
   feedError?: string;
@@ -120,8 +145,10 @@ export type MonitorState = {
   alerts: Record<string, { title: string; firstSeen: number; runs: number; sentAt?: number; lastSentAt?: number }>;
   /** NRestarts samples per unit, for restarts within the hour (kept a day). */
   restarts: Record<string, { at: number; n: number }[]>;
-  /** The highest void draw already reported. */
+  /** The highest void draw already reported (Classic's feed). */
   lastVoid?: number;
+  /** The same for each `--game`, by its id. */
+  lastVoids?: Record<string, number>;
   /** Local date (YYYY-MM-DD) of the last daily summary. */
   digestDate?: string;
   lastRunAt?: number;
@@ -161,6 +188,9 @@ export const dustBudget = (night: number, spentPerDay: number, margin = 1.5) => 
 
 const journal = (unit: string) => `journalctl -u ${unit} --since "30 min ago" --no-pager | tail -40`;
 
+/** A one-off notice of a void draw (`void:12`, or a game's `v2:void:12`): kept a day, never "resolved". */
+const isVoidKey = (key: string) => /(^|:)void:\d+$/.test(key);
+
 /** Restarts of `unit` within the last hour, from the samples plus the count now. */
 export const restartsInHour = (samples: { at: number; n: number }[], now: number, n: number): number => {
   const old = samples.filter((s) => s.at <= now - 60 * MIN).at(-1) ?? samples.find((s) => s.at > now - 60 * MIN);
@@ -198,6 +228,19 @@ export const evaluate = (inp: Inputs, state: MonitorState, cfg: MonitorConfig = 
     }
   }
 
+  for (const u of inp.runs ?? []) {
+    if (u.active !== 'failed') continue;
+    // A notice: emailed once, and "resolved" when the next window starts it again. A reminder every
+    // 6 hours would only repeat that one purchase was missed.
+    out.push({
+      key: `failed:${u.name}`,
+      kind: 'notice',
+      title: `${u.name}'s last run failed`,
+      detail: 'It runs for a window each day (a house agent makes its purchase then) and stopped with an error, so that purchase may not have been made. Its next window starts it again.',
+      check: [`systemctl status ${u.name} --no-pager`, `journalctl -u ${u.name} --since "3 hours ago" --no-pager | tail -40`],
+    });
+  }
+
   for (const h of inp.health ?? []) {
     if (down.has(h.name)) continue; // its unit is already reported as not running
     const why = h.error
@@ -220,7 +263,7 @@ export const evaluate = (inp: Inputs, state: MonitorState, cfg: MonitorConfig = 
 
   for (const s of inp.services) {
     if (down.has(s.unit)) continue; // already reported as not running
-    const name = s.service === 'oracle' ? 'The oracle' : s.service === 'keeper' ? 'The keeper' : s.service;
+    const name = s.title ?? (s.service === 'oracle' ? 'The oracle' : s.service === 'keeper' ? 'The keeper' : s.service);
     const st = s.status;
     if (!st) {
       out.push({
@@ -312,24 +355,8 @@ export const evaluate = (inp: Inputs, state: MonitorState, cfg: MonitorConfig = 
     }
   }
 
-  if (inp.feedPath) {
-    const keeperTrouble = out.some((a) => /:(keeper|lunardraw-starfall-keeper)$/.test(a.key));
-    if (!inp.feed) {
-      if (!keeperTrouble) out.push({ key: 'feed', kind: 'problem', title: "The site feed can't be read", detail: `${inp.feedPath}: ${inp.feedError ?? 'missing'}` });
-    } else {
-      const gen = ms(inp.feed.generated_at)!;
-      if (now - gen >= cfg.feedStaleMins * MIN && !keeperTrouble) {
-        out.push({
-          key: 'feed',
-          kind: 'problem',
-          title: `The site feed hasn't updated for ${mins((now - gen) / MIN)}`,
-          detail: 'The keeper writes it after every pass; the website shows the draws from it.',
-          check: [journal('lunardraw-starfall-keeper')],
-        });
-      }
-      out.push(...drawAlerts(inp.feed, now, state, cfg));
-    }
-  }
+  if (inp.feedPath) out.push(...feedAlerts(inp.feedPath, inp.feed, inp.feedError, out, now, state, cfg));
+  for (const g of inp.games ?? []) out.push(...feedAlerts(g.feedPath, g.feed, g.feedError, out, now, state, cfg, g));
 
   if (inp.disk) {
     const { free, total, path } = inp.disk;
@@ -349,11 +376,45 @@ export const evaluate = (inp: Inputs, state: MonitorState, cfg: MonitorConfig = 
   return out;
 };
 
+/** Which game a feed belongs to: Classic (no game; keys and titles as they always were) or a `--game`. */
+type FeedOf = Pick<GameInput, 'id' | 'title' | 'keeperService' | 'keeperUnit' | 'oracleUnit'> | undefined;
+
+/** A stale or unreadable feed (unless its keeper is already reported), then its draws. */
+const feedAlerts = (path: string, feed: StarfallFeed | undefined, error: string | undefined, sofar: Alert[], now: number, state: MonitorState, cfg: MonitorConfig, game?: FeedOf): Alert[] => {
+  const out: Alert[] = [];
+  const keeperService = game?.keeperService ?? 'keeper';
+  const keeperUnit = game?.keeperUnit ?? 'lunardraw-starfall-keeper';
+  const keeperTrouble = sofar.some((a) => a.key.endsWith(`:${keeperService}`) || a.key.endsWith(`:${keeperUnit}`));
+  const key = game ? `${game.id}:feed` : 'feed';
+  const what = game ? `${game.title}'s feed` : 'The site feed';
+  if (!feed) {
+    if (!keeperTrouble) out.push({ key, kind: 'problem', title: `${what} can't be read`, detail: `${path}: ${error ?? 'missing'}` });
+    return out;
+  }
+  const gen = ms(feed.generated_at)!;
+  if (now - gen >= cfg.feedStaleMins * MIN && !keeperTrouble) {
+    out.push({
+      key,
+      kind: 'problem',
+      title: `${what} hasn't updated for ${mins((now - gen) / MIN)}`,
+      detail: 'The keeper writes it after every pass; the website shows the draws from it.',
+      check: [journal(keeperUnit)],
+    });
+  }
+  out.push(...drawAlerts(feed, now, state, cfg, game));
+  return out;
+};
+
 /** Draws close to a deadline, and new void draws. */
-export const drawAlerts = (feed: StarfallFeed, now: number, state: MonitorState, cfg: MonitorConfig): Alert[] => {
+export const drawAlerts = (feed: StarfallFeed, now: number, state: MonitorState, cfg: MonitorConfig, game?: FeedOf): Alert[] => {
   const out: Alert[] = [];
   const g = feed.games.starfall;
   const left = (iso: string | undefined) => (iso === undefined ? undefined : (Date.parse(iso) - now) / MIN);
+  const K = (k: string) => (game ? `${game.id}:${k}` : k);
+  const T = (t: string) => (game ? `${game.title}: ${t.charAt(0).toLowerCase()}${t.slice(1)}` : t);
+  const keeperUnit = game?.keeperUnit ?? 'lunardraw-starfall-keeper';
+  const oracleUnit = game?.oracleUnit ?? 'lunardraw-starfall-oracle';
+  const lastVoid = game ? state.lastVoids?.[game.id] : state.lastVoid;
 
   // Not revealed: sales have closed and the reveal deadline is near.
   const unrevealed = [
@@ -364,11 +425,11 @@ export const drawAlerts = (feed: StarfallFeed, now: number, state: MonitorState,
     const l = left(d.reveal_deadline);
     if (Date.parse(d.sales_close) <= now && l !== undefined && l > 0 && l <= cfg.deadlineMins) {
       out.push({
-        key: `reveal:${d.num}`,
+        key: K(`reveal:${d.num}`),
         kind: 'problem',
-        title: `Draw ${d.num} isn't revealed yet: ${mins(l)} before it's cancelled`,
+        title: T(`Draw ${d.num} isn't revealed yet: ${mins(l)} before it's cancelled`),
         detail: 'The keeper reveals each draw\'s seed after sales close. If it misses the reveal deadline the draw is voided and every ticket refunded.',
-        check: [journal('lunardraw-starfall-keeper')],
+        check: [journal(keeperUnit)],
       });
     }
   }
@@ -380,11 +441,11 @@ export const drawAlerts = (feed: StarfallFeed, now: number, state: MonitorState,
       const waited = revealed === undefined ? undefined : (now - revealed) / MIN;
       if (l !== undefined && l > 0 && (l <= cfg.deadlineMins || (waited !== undefined && waited >= cfg.oracleWaitMins))) {
         out.push({
-          key: `oracle:${d.num}`,
+          key: K(`oracle:${d.num}`),
           kind: 'problem',
-          title: `The oracle hasn't answered draw ${d.num}: ${mins(l)} before it's cancelled`,
+          title: T(`The oracle hasn't answered draw ${d.num}: ${mins(l)} before it's cancelled`),
           detail: `${waited !== undefined ? `Revealed ${mins(waited)} ago. ` : ''}It usually answers within a few minutes. If it misses the deadline the draw is voided and refunded.`,
-          check: [journal('lunardraw-starfall-oracle')],
+          check: [journal(oracleUnit)],
         });
       }
     }
@@ -403,30 +464,31 @@ export const drawAlerts = (feed: StarfallFeed, now: number, state: MonitorState,
             ? ' Every batch is done: finalising waits for the draw before it to be settled or cancelled.'
             : '';
         out.push({
-          key: `settle:${d.num}`,
+          key: K(`settle:${d.num}`),
           kind: 'problem',
-          title: l <= cfg.settleMins ? `Draw ${d.num} isn't settled yet: ${mins(l)} before it's cancelled` : `Draw ${d.num} isn't settled ${mins(since!)} after its numbers`,
+          title: T(l <= cfg.settleMins ? `Draw ${d.num} isn't settled yet: ${mins(l)} before it's cancelled` : `Draw ${d.num} isn't settled ${mins(since!)} after its numbers`),
           detail: `${batches}${waiting} It usually settles within about 10 minutes; ${mins(l)} are left before it is cancelled and refunded. The draws after it can't pay out until it is settled or cancelled.`,
-          check: [journal('lunardraw-starfall-keeper')],
+          check: [journal(keeperUnit)],
         });
       }
     }
   }
 
   const voids = g.draws.filter((d) => d.status === 'void').map((d) => d.num);
-  if (state.lastVoid !== undefined) {
-    for (const d of g.draws.filter((x) => x.status === 'void' && x.num > state.lastVoid!).sort((a, b) => a.num - b.num)) {
+  if (lastVoid !== undefined) {
+    for (const d of g.draws.filter((x) => x.status === 'void' && x.num > lastVoid).sort((a, b) => a.num - b.num)) {
       const why = d.vrf_output ? 'it wasn\'t settled in time' : d.seed ? 'the oracle didn\'t answer in time' : 'it wasn\'t revealed in time';
       out.push({
-        key: `void:${d.num}`,
+        key: K(`void:${d.num}`),
         kind: 'notice',
-        title: `Draw ${d.num} was cancelled: ${why}`,
+        title: T(`Draw ${d.num} was cancelled: ${why}`),
         detail: `Its ${d.games_sold} game(s) are refunded to the buyers (${d.refunded ?? 0} so far). The keeper opens the next draw by itself.`,
       });
     }
   }
-  if (voids.length) state.lastVoid = Math.max(state.lastVoid ?? 0, ...voids);
-  else state.lastVoid ??= 0;
+  const next = voids.length ? Math.max(lastVoid ?? 0, ...voids) : (lastVoid ?? 0);
+  if (game) (state.lastVoids ??= {})[game.id] = next;
+  else state.lastVoid = next;
   return out;
 };
 
@@ -435,7 +497,7 @@ export type Email = { subject: string; text: string };
 /** Problems already emailed and not yet resolved (not one-off notices). */
 const openProblems = (state: MonitorState) =>
   Object.entries(state.alerts)
-    .filter(([k, r]) => r.sentAt !== undefined && !k.startsWith('void:'))
+    .filter(([k, r]) => r.sentAt !== undefined && !isVoidKey(k))
     .map(([, r]) => r);
 
 const localDate = (now: number, tz: string) => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
@@ -480,7 +542,7 @@ export const decide = (alerts: Alert[], state: MonitorState, now: number, cfg: M
   for (const [key, rec] of Object.entries(state.alerts)) {
     if (seen.has(key)) continue;
     // notices are kept a day so the same event isn't sent twice
-    if (key.startsWith('void:')) {
+    if (isVoidKey(key)) {
       if (now - rec.firstSeen > 24 * 60 * MIN) delete state.alerts[key];
       continue;
     }
@@ -505,7 +567,7 @@ export const decide = (alerts: Alert[], state: MonitorState, now: number, cfg: M
 };
 
 const footer = (now: number, cfg: MonitorConfig) =>
-  `-- \nSent by ./lunardraw monitor on the keeper VM at ${localTime(now, cfg.tz)} (${cfg.tz}). It checks every 5 minutes.\nEverything at once: systemctl is-active lunardraw-proof lunardraw-starfall-keeper lunardraw-starfall-oracle`;
+  `-- \nSent by ./lunardraw monitor on the keeper VM at ${localTime(now, cfg.tz)} (${cfg.tz}). It checks every 5 minutes.\nEverything at once: systemctl list-units --all --no-pager 'lunardraw*' 'nightcast*'`;
 
 /** The daily summary, once a day from `digestHour` local time (mutates the state's digestDate). */
 export const digest = (inp: Inputs, state: MonitorState, cfg: MonitorConfig = DEFAULT_CONFIG): Email | undefined => {
@@ -521,6 +583,8 @@ export const digest = (inp: Inputs, state: MonitorState, cfg: MonitorConfig = DE
   };
   lines.push('SERVICES');
   for (const u of inp.units) lines.push(`  ${u.active === 'active' ? '✓' : '✗'} ${u.name}: ${u.active}${restarts(u) ? `, ${restarts(u)} restart(s) in 24 h` : ''}`);
+  for (const u of inp.runs ?? [])
+    lines.push(`  ${u.active === 'failed' ? '✗' : '✓'} ${u.name}: ${u.active === 'failed' ? 'last run failed' : u.active === 'active' ? 'running (its window)' : 'between runs'}`);
   for (const h of inp.health ?? []) {
     const good = !h.error && h.body?.ok === true && h.body.canRequest !== false;
     lines.push(`  ${good ? '✓' : '✗'} ${h.name} health: ${h.error ? `no answer (${h.error})` : h.body?.canRequest === false ? "up, can't make requests yet" : 'ok'}`);
@@ -530,7 +594,7 @@ export const digest = (inp: Inputs, state: MonitorState, cfg: MonitorConfig = DE
     lines.push('', 'WALLETS');
     for (const s of wallets) {
       const w = s.status!.wallet!;
-      lines.push(`  ${s.service}: ${amount(dustOf(w.dust))} DUST, ${amount(nightOf(w.night))} tNIGHT${w.synced ? '' : ' (not synced)'}`);
+      lines.push(`  ${s.title ?? s.service}: ${amount(dustOf(w.dust))} DUST, ${amount(nightOf(w.night))} tNIGHT${w.synced ? '' : ' (not synced)'}`);
       const f = s.status!.fees;
       if (f && f.last_24h_txs > 0) {
         const b = dustBudget(nightOf(w.night), f.last_24h_dust);
@@ -546,12 +610,12 @@ export const digest = (inp: Inputs, state: MonitorState, cfg: MonitorConfig = DE
       }
     }
   }
-  if (inp.feed) {
-    const g = inp.feed.games.starfall;
+  const draws = (feed: StarfallFeed, heading: string) => {
+    const g = feed.games.starfall;
     const dayAgo = inp.now - 24 * 60 * MIN;
     const recent = g.draws.filter((d) => Date.parse(d.sales_close) >= dayAgo);
     const count = (st: string) => recent.filter((d) => d.status === st).length;
-    lines.push('', 'DRAWS (last 24 h)');
+    lines.push('', heading);
     lines.push(`  ${count('settled')} settled, ${count('void')} voided, ${recent.length - count('settled') - count('void')} in progress`);
     if (g.open) lines.push(`  On sale: draw ${g.open.num}, ${g.open.tickets} ticket(s), closes ${localTime(Date.parse(g.open.sales_close), cfg.tz)}`);
     const answered = recent.filter((d) => d.timeline?.revealed_at && d.timeline.answered_at);
@@ -559,12 +623,14 @@ export const digest = (inp: Inputs, state: MonitorState, cfg: MonitorConfig = DE
       const secs = answered.map((d) => (Date.parse(d.timeline!.answered_at!) - Date.parse(d.timeline!.revealed_at!)) / 1000).sort((a, b) => a - b);
       lines.push(`  Oracle: answered ${answered.length}, typical ${Math.round(secs[Math.floor(secs.length / 2)] / 60)} min, slowest ${Math.round(secs.at(-1)! / 60)} min`);
     }
-  }
+  };
+  if (inp.feed) draws(inp.feed, 'DRAWS (last 24 h)');
+  for (const g of inp.games ?? []) if (g.feed) draws(g.feed, `${g.title.toUpperCase()} DRAWS (last 24 h)`);
   if (inp.nightcast) lines.push(...nightcastDigest(inp.nightcast, inp.now));
   if (inp.disk) lines.push('', `DISK  ${(inp.disk.free / 2 ** 30).toFixed(0)} GB free of ${(inp.disk.total / 2 ** 30).toFixed(0)} GB`);
   const open = openProblems(state);
   lines.push('', open.length ? `OPEN PROBLEMS\n${open.map((r) => `  • ${r.title}`).join('\n')}` : 'No open problems.');
-  const ok = !open.length && inp.units.every((u) => u.active === 'active');
+  const ok = !open.length && inp.units.every((u) => u.active === 'active') && !(inp.runs ?? []).some((u) => u.active === 'failed');
   return { subject: `${ok ? '✅' : '🔴'} Lunardraw daily: ${ok ? 'all good' : `${open.length || 'some'} problem(s)`}`, text: `${lines.join('\n')}\n\n${footer(inp.now, cfg)}\nIf this daily email stops arriving, the monitor itself (or the VM) is down.` };
 };
 

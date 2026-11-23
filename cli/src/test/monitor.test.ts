@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { StarfallFeed, StarfallFeedDraw } from '@lunardraw/keeper';
 import { DEFAULT_CONFIG, decide, digest, emptyState, evaluate, type Inputs, noteRestarts, restartsInHour, type Unit } from '../monitor.js';
-import { parseHealth, parseShow, readHealth, sendEmail } from '../monitor-command.js';
+import { parseGame, parseHealth, parseShow, readHealth, sendEmail } from '../monitor-command.js';
 import { serviceStatus, type ServiceStatus } from '../status-file.js';
 
 const MIN = 60_000;
@@ -214,6 +214,71 @@ describe('the monitor', () => {
     // a stopped unit is reported once, as the unit
     const stopped = inputs({ units: [...UNITS, unit('nightcast-mcp', 'failed')], health: [{ name: 'nightcast-mcp', url, error: 'fetch failed' }] });
     expect(keys(stopped)).toEqual(['unit:nightcast-mcp']);
+  });
+
+  it('watches another game beside Classic: its keeper and oracle files, its feed and its draws, named after it', () => {
+    const V2 = { id: 'v2', title: 'Starfall v2', feedPath: '/f/feed-v2.json', keeperService: 'v2-keeper', keeperUnit: 'lunardraw-starfall-v2-keeper', oracleUnit: 'lunardraw-starfall-v2-oracle' };
+    const v2services = (keeper: Partial<ServiceStatus> | null = {}) => [
+      ...services(),
+      { service: 'v2-keeper', title: "Starfall v2's keeper", unit: V2.keeperUnit, path: '/s/v2-keeper.json', status: keeper ? status('v2-keeper', keeper) : undefined },
+      { service: 'v2-oracle', title: "Starfall v2's oracle", unit: V2.oracleUnit, path: '/s/v2-oracle.json', status: status('v2-oracle') },
+    ];
+    const units = [...UNITS, unit(V2.keeperUnit), unit(V2.oracleUnit)];
+    expect(keys(inputs({ units, services: v2services(), games: [{ ...V2, feed: feed([draw(3, {})]) }] }))).toEqual([]);
+
+    // its keeper's file: the same checks as Classic's, under its own key and name
+    const quiet = evaluate(inputs({ units, services: v2services({ at: iso(NOW - 15 * MIN) }), games: [{ ...V2, feed: feed([], undefined, NOW - 15 * MIN) }] }), { ...emptyState(), lastVoid: 0, lastVoids: { v2: 0 } });
+    expect(quiet.map((a) => [a.key, a.title])).toEqual([['status:v2-keeper', "Starfall v2's keeper hasn't reported for 15 min"]]); // its stale feed isn't reported again
+
+    // a draw about to miss its reveal: the same draw number as Classic's, a different alert
+    const closing = feed([], { num: 3, sales_close: iso(NOW - 30 * MIN), reveal_deadline: iso(NOW + 3 * MIN), tickets: 2 } as StarfallFeed['games']['starfall']['open']);
+    const a = evaluate(inputs({ units, services: v2services(), feed: closing, games: [{ ...V2, feed: closing }] }), { ...emptyState(), lastVoid: 0, lastVoids: { v2: 0 } });
+    expect(a.map((x) => x.key)).toEqual(['reveal:3', 'v2:reveal:3']);
+    expect(a[1].title).toBe("Starfall v2: draw 3 isn't revealed yet: 3 min before it's cancelled");
+    expect(a[1].check?.[0]).toContain('journalctl -u lunardraw-starfall-v2-keeper');
+
+    // its void draws: counted apart from Classic's, a notice once, never "resolved"
+    const state = { ...emptyState(), lastVoid: 0 };
+    expect(evaluate(inputs({ units, services: v2services(), games: [{ ...V2, feed: feed([draw(2, { status: 'void', seed: 'ab' })]) }] }), state)).toEqual([]);
+    expect(state.lastVoids).toEqual({ v2: 2 });
+    const voided = evaluate(inputs({ units, services: v2services(), games: [{ ...V2, feed: feed([draw(4, { status: 'void', seed: 'ab', refunded: 1 }), draw(2, { status: 'void' })]) }] }), state);
+    expect(voided.map((x) => [x.key, x.kind, x.title])).toEqual([['v2:void:4', 'notice', "Starfall v2: draw 4 was cancelled: the oracle didn't answer in time"]]);
+    expect(state.lastVoid).toBe(0);
+    expect(decide(voided, state, NOW)!.subject).toBe("🟡 Lunardraw: Starfall v2: draw 4 was cancelled: the oracle didn't answer in time");
+    expect(decide([], state, NOW + 5 * MIN)).toBeUndefined();
+
+    // the daily summary shows its wallets and its draws
+    const d = digest(inputs({ units, services: v2services(), games: [{ ...V2, feed: feed([draw(3, { sales_close: iso(NOW - 60 * MIN) })]) }] }), emptyState(), DEFAULT_CONFIG)!;
+    expect(d.text).toContain("Starfall v2's keeper: 50.00 DUST, 500 tNIGHT");
+    expect(d.text).toContain('STARFALL V2 DRAWS (last 24 h)\n  1 settled, 0 voided, 0 in progress');
+  });
+
+  it('reports a window-run unit only when its last run failed: once, then resolved when it runs again', () => {
+    const state = { ...emptyState(), lastVoid: 0 };
+    const idle = unit('lunardraw-agent-v2@nova', 'inactive');
+    expect(keys(inputs({ runs: [idle, unit('lunardraw-agent-v2@orbit')] }))).toEqual([]);
+    const failed = evaluate(inputs({ runs: [unit('lunardraw-agent-v2@pixel', 'failed'), idle] }), state);
+    expect(failed.map((a) => [a.key, a.kind, a.title])).toEqual([['failed:lunardraw-agent-v2@pixel', 'notice', "lunardraw-agent-v2@pixel's last run failed"]]);
+    expect(decide(failed, state, NOW)!.subject).toBe("🟡 Lunardraw: lunardraw-agent-v2@pixel's last run failed");
+    expect(decide(failed, state, NOW + 7 * 60 * MIN)).toBeUndefined(); // no reminders
+    expect(decide([], state, NOW + 20 * 60 * MIN)!.subject).toBe("✅ Lunardraw: resolved: lunardraw-agent-v2@pixel's last run failed");
+    const d = digest(inputs({ runs: [unit('lunardraw-agent-v2@pixel', 'failed'), idle] }), emptyState(), DEFAULT_CONFIG)!;
+    expect(d.text).toContain('✗ lunardraw-agent-v2@pixel: last run failed');
+    expect(d.text).toContain('✓ lunardraw-agent-v2@nova: between runs');
+    expect(d.subject).toBe('🔴 Lunardraw daily: some problem(s)');
+  });
+
+  it('reads --game', () => {
+    expect(parseGame('v2=Starfall v2,feed=/f/feed-v2.json,keeper=lunardraw-starfall-v2-keeper:/s/v2-keeper.json,oracle=lunardraw-starfall-v2-oracle:/s/v2-oracle.json')).toEqual({
+      id: 'v2',
+      title: 'Starfall v2',
+      feed: '/f/feed-v2.json',
+      keeper: { unit: 'lunardraw-starfall-v2-keeper', path: '/s/v2-keeper.json' },
+      oracle: { unit: 'lunardraw-starfall-v2-oracle', path: '/s/v2-oracle.json' },
+    });
+    expect(() => parseGame('Starfall v2,feed=/f')).toThrow(/<id>=<title>/);
+    expect(() => parseGame('v2=V2,feed=/f,keeper=k,oracle=o:/s')).toThrow(/keeper=<unit>:<absolute status file>/);
+    expect(() => parseGame('v2=V2,keeper=k:/s,oracle=o:/s')).toThrow(/feed=<absolute file>/);
   });
 
   it('reads --health and fetches an endpoint', async () => {
