@@ -1,9 +1,14 @@
-# Email alerts for Starfall: one check of the services, the keeper's and the
-# oracle's health files, the site feed and the disk, then exit. Run every 5
+# Email alerts for Starfall: one check of the services, the keepers' and the
+# oracles' health files, the site feeds and the disk, then exit. Run every 5
 # minutes by lunardraw-monitor.timer. Needs a Resend API key (sending access)
 # in /root/.lunardraw-mail and a verified sending domain. See README.md.
 # --min-dust: on Preprod (2 Nov 2026) the keeper held ~40,000 DUST and the oracle
 # ~38,000 (from ~12,000 and 10,000 tNIGHT); 5,000 warns well before fees run out.
+# It runs from the house agents' checkout of main (/root/Lunardraw-agents, updated by
+# deploy/agents-v2.sh update), not Classic's /root/Lunardraw, which stays as it is until
+# Classic's final draw has paid. When Classic has ended: --skip-classic, drop --feed and
+# Classic's three units (see the --game and --skip-classic notes in `./lunardraw monitor --help`).
+# The LunaSpin soak test was stopped (24 Nov 2026), so there's no --soak-log.
 [Unit]
 Description=Lunardraw monitor (email alerts)
 After=network-online.target
@@ -11,16 +16,17 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-WorkingDirectory=/root/Lunardraw
+WorkingDirectory=/root/Lunardraw-agents
 Environment=HOME=/root
 Environment=NODE_OPTIONS=--max-old-space-size=512
-ExecStart=/root/Lunardraw/lunardraw monitor \
+ExecStart=/root/Lunardraw-agents/lunardraw monitor \
   --feed /root/lunardraw-feed/feed.json \
   --status-dir /root/lunardraw-status \
-  --units lunardraw-proof,lunardraw-starfall-keeper,lunardraw-starfall-oracle,lunardraw-agent@nova,lunardraw-agent@orbit,lunardraw-agent@pixel,lunardraw-registry,lunardraw-relay,nightcast-oracle,nightcast-mcp \
+  --units lunardraw-proof,lunardraw-starfall-keeper,lunardraw-starfall-oracle,lunardraw-registry,lunardraw-relay,nightcast-oracle,nightcast-mcp,lunardraw-starfall-v2-keeper,lunardraw-starfall-v2-oracle,lunardraw-proof-v2 \
+  --game "v2=Starfall v2,feed=/root/lunardraw-feed/feed-v2.json,keeper=lunardraw-starfall-v2-keeper:/root/lunardraw-status/v2-keeper.json,oracle=lunardraw-starfall-v2-oracle:/root/lunardraw-status/v2-oracle.json" \
+  --runs lunardraw-agent-v2@nova,lunardraw-agent-v2@orbit,lunardraw-agent-v2@pixel \
   --health nightcast-mcp=http://127.0.0.1:6350/health \
   --nightcast-status /root/lunardraw-status/nightcast-oracle.json \
-  --soak-log /root/spin-test/soak.log \
   --from "Lunardraw alerts <alerts@lunardraw.io>" \
   --to ops@lunardraw.io \
   --mail-key /root/.lunardraw-mail \

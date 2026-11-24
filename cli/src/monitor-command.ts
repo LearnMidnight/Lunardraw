@@ -9,12 +9,13 @@ import { existsSync, mkdirSync, readFileSync, renameSync, statfsSync, writeFileS
 import { dirname, join } from 'node:path';
 import { parseArgs } from 'node:util';
 import type { StarfallFeed } from '@lunardraw/keeper';
-import { DEFAULT_CONFIG, decide, digest, type Email, emptyState, evaluate, type HealthInput, type Inputs, type MonitorConfig, type MonitorState, noteRestarts, type Unit } from './monitor.js';
+import { DEFAULT_CONFIG, decide, digest, type Email, emptyState, evaluate, type GameInput, type HealthInput, type Inputs, type MonitorConfig, type MonitorState, noteRestarts, type ServiceInput, type Unit } from './monitor.js';
 import type { ServiceStatus } from './status-file.js';
 import { type OracleStatus, parseSoak, type SoakRun } from './monitor-nightcast.js';
 
 export const MONITOR_USAGE = `usage: ./lunardraw monitor --feed <file> --status-dir <dir> --to <address> --from <address> --mail-key <file>
-       [--units <unit,unit,...>] [--health <name=url,...>] [--nightcast-status <file>] [--soak-log <file>] [--state <file>] [--min-dust <DUST>] [--digest-hour <0-23|-1>] [--tz <zone>]
+       [--units <unit,unit,...>] [--runs <unit,unit,...>] [--game <spec>]... [--skip-classic]
+       [--health <name=url,...>] [--nightcast-status <file>] [--soak-log <file>] [--state <file>] [--min-dust <DUST>] [--digest-hour <0-23|-1>] [--tz <zone>]
        [--dry-run] [--test]
 
 Checks Starfall once and emails what needs a person: a service stopped or restarting over and over,
@@ -30,8 +31,17 @@ holding a Resend API key (sending access). --health are HTTP health endpoints to
 their unit (e.g. nightcast-mcp=http://127.0.0.1:6350/health): an alert when one doesn't answer, isn't ok,
 or reports canRequest false (Nightcast's MCP server, which LunaSpin's spins go through). --nightcast-status is
 the Nightcast oracle's status file (NIGHTCAST_STATUS_FILE) and --soak-log LunaSpin's hourly test log: alerts for a
-low bond or wallet, a missed request, a failed top-up and failing test spins. --dry-run prints the email instead of sending it and leaves
-the state alone; --test sends a test email and exits.`;
+low bond or wallet, a missed request, a failed top-up and failing test spins.
+
+--game watches another game run beside Classic (repeat it for more), with its own feed, keeper and oracle:
+  --game "v2=Starfall v2,feed=<file>,keeper=<unit>:<status file>,oracle=<unit>:<status file>"
+Its status files get the same checks as Classic's (reporting, passes, failing transactions, sync, DUST), and its
+feed the same draw checks; its alerts are named after it ("Starfall v2: draw 3 isn't revealed yet…"). Put its
+units in --units too. --skip-classic leaves out Classic's keeper.json and oracle.json (once Classic has ended;
+drop --feed as well). --runs are units that run for a window each day and then stop, such as the house agents
+(lunardraw-agent-v2@nova): only a failed last run is reported, once, and "resolved" when the next window starts.
+
+--dry-run prints the email instead of sending it and leaves the state alone; --test sends a test email and exits.`;
 
 const DEFAULT_UNITS = ['lunardraw-proof', 'lunardraw-starfall-keeper', 'lunardraw-starfall-oracle'];
 const SERVICE_UNITS: Record<string, string> = { keeper: 'lunardraw-starfall-keeper', oracle: 'lunardraw-starfall-oracle' };
@@ -53,6 +63,31 @@ const readUnit = (name: string): Unit => {
   } catch (err) {
     return { name, active: 'unknown', sub: err instanceof Error ? err.message.split('\n')[0] : String(err), restarts: 0 };
   }
+};
+
+/** A `--game` spec: `<id>=<title>,feed=<file>,keeper=<unit>:<status file>,oracle=<unit>:<status file>`. */
+export type GameSpec = { id: string; title: string; feed: string; keeper: { unit: string; path: string }; oracle: { unit: string; path: string } };
+
+export const parseGame = (v: string): GameSpec => {
+  const [head, ...rest] = v.split(',').map((x) => x.trim());
+  const eq = (head ?? '').indexOf('=');
+  const id = eq > 0 ? head.slice(0, eq) : '';
+  const title = eq > 0 ? head.slice(eq + 1).trim() : '';
+  if (!/^[a-z0-9-]+$/.test(id) || !title) throw new Error(`--game starts with <id>=<title> (id: lower-case letters, digits, -), not "${head}"`);
+  const kv: Record<string, string> = {};
+  for (const x of rest) {
+    const i = x.indexOf('=');
+    if (i < 1) throw new Error(`--game ${id}: "${x}" isn't key=value`);
+    kv[x.slice(0, i)] = x.slice(i + 1);
+  }
+  const unitFile = (k: 'keeper' | 'oracle') => {
+    const s = kv[k] ?? '';
+    const i = s.indexOf(':');
+    if (i < 1 || !s.slice(i + 1).startsWith('/')) throw new Error(`--game ${id} needs ${k}=<unit>:<absolute status file>`);
+    return { unit: s.slice(0, i), path: s.slice(i + 1) };
+  };
+  if (!kv.feed?.startsWith('/')) throw new Error(`--game ${id} needs feed=<absolute file>`);
+  return { id, title, feed: kv.feed, keeper: unitFile('keeper'), oracle: unitFile('oracle') };
 };
 
 /** `--health name=url,name=url` → [{ name, url }]. */
@@ -130,6 +165,9 @@ export const monitor = async (argv: string[]): Promise<number> => {
       from: { type: 'string' },
       'mail-key': { type: 'string' },
       units: { type: 'string' },
+      runs: { type: 'string' },
+      game: { type: 'string', multiple: true },
+      'skip-classic': { type: 'boolean', default: false },
       health: { type: 'string' },
       'nightcast-status': { type: 'string' },
       'soak-log': { type: 'string' },
@@ -174,11 +212,24 @@ export const monitor = async (argv: string[]): Promise<number> => {
   const dir = values['status-dir']!;
   const statePath = values.state ?? join(dir, 'monitor-state.json');
   const now = Date.now();
-  const units = (values.units ? values.units.split(',').map((s) => s.trim()).filter(Boolean) : DEFAULT_UNITS).map(readUnit);
-  const services = Object.entries(SERVICE_UNITS).map(([service, unit]) => {
-    const path = join(dir, `${service}.json`);
+  const list = (v: string | undefined) => (v ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  const units = (values.units ? list(values.units) : DEFAULT_UNITS).map(readUnit);
+  const runs = list(values.runs).map(readUnit);
+  const specs = (values.game ?? []).map(parseGame);
+  const service = (id: string, unit: string, path: string, title?: string): ServiceInput => {
     const r = readJson<ServiceStatus>(path);
-    return { service, unit, path, status: r.value, error: r.error };
+    return { service: id, unit, path, title, status: r.value, error: r.error };
+  };
+  const services: ServiceInput[] = [
+    ...(values['skip-classic'] ? [] : Object.entries(SERVICE_UNITS).map(([id, unit]) => service(id, unit, join(dir, `${id}.json`)))),
+    ...specs.flatMap((g) => [
+      service(`${g.id}-keeper`, g.keeper.unit, g.keeper.path, `${g.title}'s keeper`),
+      service(`${g.id}-oracle`, g.oracle.unit, g.oracle.path, `${g.title}'s oracle`),
+    ]),
+  ];
+  const games: GameInput[] = specs.map((g) => {
+    const r = readJson<StarfallFeed>(g.feed);
+    return { id: g.id, title: g.title, feedPath: g.feed, feed: r.value, feedError: r.error, keeperService: `${g.id}-keeper`, keeperUnit: g.keeper.unit, oracleUnit: g.oracle.unit };
   });
   const feed = values.feed ? readJson<StarfallFeed>(values.feed) : undefined;
   let disk: Inputs['disk'];
@@ -203,7 +254,7 @@ export const monitor = async (argv: string[]): Promise<number> => {
     values['nightcast-status'] || values['soak-log']
       ? { statusPath: values['nightcast-status'], status: ncStatus?.value, statusError: ncStatus?.error, soakPath: values['soak-log'], soak, soakError }
       : undefined;
-  const inputs: Inputs = { now, units, services, feed: feed?.value, feedPath: values.feed, feedError: feed?.error, disk, health, nightcast };
+  const inputs: Inputs = { now, units, runs, services, games, feed: feed?.value, feedPath: values.feed, feedError: feed?.error, disk, health, nightcast };
 
   const loaded = readJson<MonitorState>(statePath);
   const state: MonitorState = loaded.value ?? emptyState();
